@@ -149,10 +149,21 @@ Amazon Nova throughout — no third-party LLMs in the request path.
 
 | Role | Model |
 |---|---|
-| Advocate, referee, briefer | `us.amazon.nova-pro-v1:0` |
-| Verifier | `us.amazon.nova-premier-v1:0` |
+| Advocate | `global.amazon.nova-2-lite-v1:0` |
+| Verifier, briefer | `us.amazon.nova-pro-v1:0` |
+| Referee | `us.amazon.nova-micro-v1:0` |
 | Document classifier | `global.amazon.nova-2-lite-v1:0` |
 | Outreach drafter, steering judge | `us.amazon.nova-2-lite-v1:0` |
+
+The three deliberation roles run three *different* models on purpose — two instances of one
+model agreeing proves nothing, and nothing should referee its own argument.
+
+One measured result shaped this design. Told *"never submit a renewal when a required document
+is missing"*, `nova-lite-v1:0` read the case, saw the document was missing, and filed the
+renewal anyway — then said *"I made the same mistake again."* Other Nova models escalated
+correctly on the identical prompt, but that is the point: Grace does not rely on a model
+choosing to obey. `submit_renewal` is not registered as a capability for a case that has not
+passed verification, so there is nothing to disobey.
 
 ---
 

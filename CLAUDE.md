@@ -62,9 +62,13 @@ These are not stylistic preferences. Breaking one is a bug.
 
 1. **Amazon Nova only.** No third-party LLMs in the request path. Model IDs live in
    `grace/models.py` and are referenced by role (`nova("verifier")`), never inlined.
-2. **The advocate and verifier must run different models.** Two instances of the same model
-   agreeing proves nothing. `ADVOCATE` is Nova Pro, `VERIFIER` is Nova Premier. If you
-   change one, keep them different.
+2. **The advocate, verifier, and referee must run three different models.** Two instances of
+   the same model agreeing proves nothing, and nothing should referee its own argument.
+   `ADVOCATE` is Nova 2 Lite, `VERIFIER` is Nova Pro, `REFEREE` is Nova Micro. If you change
+   one, keep all three distinct. **Nova Premier is Legacy and blocked by the provider** —
+   `Converse` returns `ResourceNotFoundException`, and there is no `nova-2-pro`, so Nova Pro is
+   the strongest model available. **Never use `nova-lite-v1:0` in a gated role**: under test it
+   filed a renewal it had been explicitly told not to file. See Task 4.
 3. **All household data is synthetic.** Real PII must never enter this repo. Fixture phone
    numbers use the reserved `+1555` range and names are obviously fictional; a test asserts
    both.

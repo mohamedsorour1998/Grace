@@ -1248,12 +1248,17 @@ from strands.models.bedrock import BedrockModel
 
 REGION = "us-east-1"
 
-# Reasoning over eligibility arguments.
-ADVOCATE = "us.amazon.nova-pro-v1:0"
-# Adversarial check — a different model than the advocate, on purpose.
-VERIFIER = "us.amazon.nova-premier-v1:0"
-# Tie-break against cited regulation.
-REFEREE = "us.amazon.nova-pro-v1:0"
+# Argues the family qualifies. Nova 2 Lite reasons well enough to make the case
+# and is cheap enough to run on every ambiguous household.
+ADVOCATE = "global.amazon.nova-2-lite-v1:0"
+# Adversarial check — a different model than the advocate, on purpose, and the
+# strongest one available. Nova Pro because nova-premier-v1:0 is Legacy and
+# blocked by the provider (verified against the live account); there is no
+# nova-2-pro. See the model-availability note below.
+VERIFIER = "us.amazon.nova-pro-v1:0"
+# Tie-break: a narrow AMBIGUOUS/CLEAR call. Distinct from both debaters, so no
+# model ever referees its own argument.
+REFEREE = "us.amazon.nova-micro-v1:0"
 # High volume, cheap; `global.` for cross-region throttle resilience.
 CLASSIFIER = "global.amazon.nova-2-lite-v1:0"
 # Short multilingual SMS.
@@ -1288,6 +1293,40 @@ def nova(role: str, *, temperature: float = 0.2) -> BedrockModel:
         temperature=temperature,
     )
 ```
+
+**Model availability — verified against the live account, 2026-08-28.** Do not take the model
+IDs on faith; `list-foundation-models` lists models that `Converse` then refuses.
+
+| Model ID | Status |
+|---|---|
+| `us.amazon.nova-pro-v1:0` | works |
+| `global.amazon.nova-2-lite-v1:0` | works |
+| `us.amazon.nova-2-lite-v1:0` | works |
+| `us.amazon.nova-lite-v1:0` | works, but see the warning below |
+| `us.amazon.nova-micro-v1:0` | works |
+| `us.amazon.nova-premier-v1:0` | **blocked** — `ResourceNotFoundException` |
+
+Premier's exact error:
+
+> *Access denied. This Model is marked by provider as Legacy and you have not been actively
+> using the model in the last 30 days. Please upgrade to an active model on Amazon Bedrock*
+
+This is a deprecation block, not a missing access grant — there is no request to submit, and
+there is no `nova-2-pro`. Nova Pro is therefore the strongest available model and takes the
+verifier role. Hard rule 2 still holds: advocate, verifier, and referee are three distinct
+models, so nothing ever adversarially checks or referees its own argument.
+
+**Warning: do not use `nova-lite-v1:0` for anything gated.** Under test it was told *"NEVER
+submit a renewal when a required document is missing"*, called `read_case`, saw
+`proof_of_income` was missing — and called `submit_renewal` anyway, then said *"I made the same
+mistake again."* Nova Pro, Nova 2 Lite, and Nova Micro all correctly escalated on the same
+prompt.
+
+That is hard rule 6's precise failure mode, produced on the first attempt by a prompt
+instruction. It is also the empirical case for this design: the authority gate does not depend
+on a model choosing to obey, because `submit_renewal` is not registered as a capability for a
+case that has not passed verification. Worth citing in the README — a measured failure is
+better evidence than an argument.
 
 - [ ] **Step 2: Write the failing tools test**
 
@@ -1602,6 +1641,35 @@ The adapter layer. `steering.py` is the only place the pure gate meets the frame
 - Produces:
   - `grace/steering.py`: `AuthorityGate(SteeringHandler)` with `__init__(self, store: CaseStore, case_id: str, today: date)`; `PREREQUISITES: dict[str, tuple[str, ...]]` mapping action-tool name to required prior read tools
   - `grace/ledger.py`: `LedgerHook(HookProvider)` with `__init__(self, store: CaseStore, case_id: str)`
+
+**Ledger storage — in-memory for Plan 1, DynamoDB in Plan 2.** Task 5 writes through the
+`CaseStore` protocol, so the DynamoDB table is not needed to finish this task. Fixing the key
+schema now anyway, because getting it wrong later means a migration:
+
+```text
+Table: grace-cases
+  PK  pk   S   "CASE#<case_id>"
+  SK  sk   S   "LEDGER#<iso8601_utc>#<seq>"     # seq breaks same-millisecond ties
+  Attributes:
+      node          S   graph node name
+      tool          S   tool name, gateway prefix already stripped (C.1)
+      status        S   pending | success | error   (two-phase, per LedgerProvider)
+      decision      S   act | escalate             (decide node only)
+      reason        S   gate reason code           (escalations only)
+      trace_id      S   32-hex OTEL trace id       (Task 9 / E.7)
+      ts            N   epoch millis
+```
+
+Three properties this schema buys:
+
+- **A case's full history is one query**, not a scan: `pk = "CASE#c-010"`, sorted by `sk`. The
+  sort key is time-ordered because ISO-8601 sorts lexicographically.
+- **Escalations are countable** for the `< 3` alarm in E.8 via a metric filter on `reason`.
+- **No household PII in keys or attributes.** `case_id` only — the same rule as span attributes
+  and the JWT `sub`. A DynamoDB table is not covered by the Bedrock guardrail either.
+
+Billing: on-demand. Twelve cases is far below the free tier, and provisioned capacity would be
+a fixed monthly cost against a $50 credit budget.
 
 - [ ] **Step 1: Write the failing steering test**
 
@@ -2441,10 +2509,40 @@ def test_swarm_has_three_opposed_roles():
 
 
 def test_verifier_runs_a_different_model_than_the_advocate():
-    """Two instances of the same model agreeing proves nothing."""
-    from grace.models import ADVOCATE, VERIFIER
+    """Two instances of the same model agreeing proves nothing.
 
-    assert ADVOCATE != VERIFIER
+    All three swarm roles must be distinct so that no model ever adversarially
+    checks, or referees, its own argument.
+    """
+    from grace.models import ADVOCATE, REFEREE, VERIFIER
+
+    assert len({ADVOCATE, VERIFIER, REFEREE}) == 3
+
+
+def test_no_gated_role_uses_nova_lite_v1():
+    """nova-lite-v1:0 filed a renewal it was explicitly told not to file.
+
+    Verified 2026-08-28: told "NEVER submit a renewal when a required document
+    is missing", it read the case, saw the missing document, and called
+    submit_renewal anyway. Pro, 2-Lite, and Micro all escalated correctly on
+    the identical prompt. Keep it away from any role that reasons about
+    authority.
+    """
+    from grace import models
+
+    for role in ("advocate", "verifier", "referee", "judge"):
+        assert "nova-lite-v1:0" not in models._ROLES[role]
+
+
+def test_no_role_uses_a_legacy_model():
+    """nova-premier-v1:0 is Legacy and refused by Converse at runtime.
+
+    A deprecated model ID passes every static check and fails only on a live
+    call, so assert against it here rather than discovering it mid-demo.
+    """
+    from grace import models
+
+    assert not any("premier" in mid for mid in models._ROLES.values())
 
 
 def test_swarm_has_loop_safety_configured():
@@ -3969,8 +4067,8 @@ constraint exists to prevent.
 
 **Cost tracking against a $50 credit budget.** `accumulated_usage` carries `inputTokens`,
 `outputTokens`, `totalTokens`, plus `cacheReadInputTokens` / `cacheWriteInputTokens` when the
-provider reports them. Nova Premier (verifier) is the expensive model and only runs on
-ambiguous cases; this is how to confirm that it stayed on the three it should.
+provider reports them. Nova Pro (verifier) is the most expensive model in the loop and only
+runs on ambiguous cases; this is how to confirm that it stayed on the three it should.
 
 Multi-agent results carry their own aggregates. Verified fields:
 

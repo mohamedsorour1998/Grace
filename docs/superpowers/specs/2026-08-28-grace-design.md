@@ -173,9 +173,9 @@ safely, whereas `.result.message["content"][0]["text"]` breaks when the node ret
 
 | Agent | Job | Model |
 |---|---|---|
-| Advocate | Argues the family still qualifies | `us.amazon.nova-pro-v1:0` |
-| Verifier | Adversarially checks each claim; must cite a rule line | `us.amazon.nova-premier-v1:0` |
-| Rules referee | Breaks ties, or declares genuine ambiguity → escalate | `us.amazon.nova-pro-v1:0` |
+| Advocate | Argues the family still qualifies | `global.amazon.nova-2-lite-v1:0` |
+| Verifier | Adversarially checks each claim; must cite a rule line | `us.amazon.nova-pro-v1:0` |
+| Rules referee | Breaks ties, or declares genuine ambiguity → escalate | `us.amazon.nova-micro-v1:0` |
 
 **The verifier runs on a different model than the advocate**, deliberately: the course's
 model-provider guidance notes a different model for verification avoids same-model bias. Two
@@ -283,9 +283,9 @@ profile below verified `ACTIVE` in account <AWS_ACCOUNT_ID> / us-east-1.
 
 | Role | Model | Why |
 |---|---|---|
-| Advocate | `us.amazon.nova-pro-v1:0` | Reasoning for the eligibility argument |
-| **Verifier** | `us.amazon.nova-premier-v1:0` | **Different model than the advocate** — preserves the anti-bias property |
-| Rules referee | `us.amazon.nova-pro-v1:0` | Tie-break against cited regulation |
+| Advocate | `global.amazon.nova-2-lite-v1:0` | Argues the eligibility case; cheap enough to run on every ambiguous household |
+| **Verifier** | `us.amazon.nova-pro-v1:0` | **Different model than the advocate** — preserves the anti-bias property. Strongest available: `nova-premier-v1:0` is Legacy and blocked, and there is no `nova-2-pro` |
+| Rules referee | `us.amazon.nova-micro-v1:0` | Narrow AMBIGUOUS/CLEAR call, distinct from both debaters |
 | Document classifier | `global.amazon.nova-2-lite-v1:0` | High volume; `global.` for throttle resilience |
 | Outreach drafter | `us.amazon.nova-2-lite-v1:0` | Short multilingual SMS |
 | Caseworker briefer | `us.amazon.nova-pro-v1:0` | Must be genuinely clear to a human |
