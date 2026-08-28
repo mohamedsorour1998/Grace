@@ -149,6 +149,16 @@ authority gate must strip that prefix before matching against `ACTION_TOOLS`, or
 gateway-provided action tool silently bypasses the gate — the exact failure this design
 exists to prevent. See Appendix C.1.
 
+**Never use `GetWorkloadAccessTokenForUserId`.** It treats the user ID as an opaque string
+with no verification, so an authenticated caseworker could pass any household ID and receive
+a token scoped to that household. Use `GetWorkloadAccessTokenForJWT` (validates issuer,
+signature, expiry) and explicitly `Deny` the `...ForUserId` action in the execution role.
+This also rules out the `BedrockAgentCoreFullAccess` managed policy, which grants it.
+See Appendix D.1.
+
+**The JWT `sub` claim must be an opaque ID, never a name or email** — inbound JWT claims are
+logged to CloudTrail, which is outside the guardrail's PII redaction. See Appendix D.4.
+
 ### Framework wiring cheat sheet
 
 | Thing | Attaches via |

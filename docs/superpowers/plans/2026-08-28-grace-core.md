@@ -3410,3 +3410,253 @@ creation time.
 - **Resource URIs** — the docs warn Gateway does **not** sanitize resource URIs from
   downstream MCP servers (SSRF, `file:///etc/passwd`). Grace exposes no resources; if that
   changes, allowlist the URI scheme.
+
+---
+
+## Appendix D: AgentCore Identity (READ BEFORE PLAN 2)
+
+Verified against the Identity developer guide, the Python SDK reference, the CLI reference
+(`@aws/agentcore` v0.24.2), and live `list-workload-identities` output in this account.
+D.1 is a security finding that changes Grace's identity model.
+
+### D.1 SECURITY: use `GetWorkloadAccessTokenForJWT`, never `...ForUserId`
+
+Three ways exist to obtain a workload access token. Only one is safe for Grace:
+
+| API | Verification | Use for Grace |
+|---|---|---|
+| `GetWorkloadAccessTokenForJWT` | Validates issuer, **signature**, and expiry | **Yes** — the only production path |
+| `GetWorkloadAccessTokenForUserId` | **None** — treats `userId` as an opaque string | **No** — explicitly denied |
+| `GetWorkloadAccessToken` | Base form | Not used directly |
+
+The docs are unambiguous: `...ForUserId` *"treats the userId as an opaque string without
+verifying it against an authenticated end-user identity."* For Grace that means **an
+authenticated caseworker could pass any household ID and receive a token scoped to that
+household.** That is precisely the cross-family data access the whole design forbids.
+
+Grace's caseworkers authenticate via JWT, so a token always exists. Deny the unsafe path
+outright in the execution role — the docs provide this exact policy shape:
+
+```json
+{
+  "Sid": "DenyUnverifiedUserIdPath",
+  "Effect": "Deny",
+  "Action": "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
+  "Resource": "arn:aws:bedrock-agentcore:us-east-1:<AWS_ACCOUNT_ID>:workload-identity-directory/default"
+}
+```
+
+An explicit `Deny` beats any `Allow`, including the broad `BedrockAgentCoreFullAccess`
+managed policy — which the docs warn grants `...ForUserId` and is *"suitable for development
+and testing"* only. **Grace must not use that managed policy.**
+
+Also relevant: the docs' user-ID partitioning guidance (`provider_id+user_id`) exists to stop
+collisions across identity providers. With one caseworker IdP and the JWT path, Grace avoids
+the problem entirely rather than mitigating it.
+
+### D.2 Runtime already creates the workload identity — do not create one
+
+Verified live in this account:
+
+```text
+arn:aws:bedrock-agentcore:us-east-1:<AWS_ACCOUNT_ID>:workload-identity-directory/default/workload-identity/theagentorg_planner-td4Fou4YjY
+```
+
+The name is `<runtime_name>-<suffix>`, auto-generated. Two consequences:
+
+1. **Grace does not call `CreateWorkloadIdentity`.** Runtime does it at deploy time. Manual
+   creation is only for self-hosted agents.
+2. **Runtime-managed identities cannot retrieve workload access tokens directly** — a
+   deliberate security boundary that stops an agent extracting and reusing its own token.
+   If you see *"WorkloadIdentity is linked to a service and cannot retrieve an access token
+   by the caller,"* that is the boundary working, not a misconfiguration.
+
+Runtime also delivers the token to the agent automatically as an invocation payload header
+after validating the inbound JWT — so `@requires_access_token` works with no manual token
+plumbing inside the agent.
+
+There is exactly **one directory per account** (`.../workload-identity-directory/default`),
+created implicitly with the first identity. The correct ARN path is
+`workload-identity-directory/default/workload-identity/<name>` — my earlier draft policy in
+Appendix C used a malformed variant.
+
+### D.3 `@requires_access_token` is for *outbound* credentials, not the Gateway
+
+This resolves a question I had open. The decorator fetches a credential **from the token
+vault** for an outbound third-party service. It is not how the agent authenticates *to*
+Grace's own Gateway — that is Gateway-side outbound auth (`GATEWAY_IAM_ROLE`), configured on
+the target, per Appendix C.
+
+Verified signature (SDK v1.18.1):
+
+```python
+requires_access_token(*, provider_name, into="access_token", scopes,
+    resources=None, audiences=None, on_auth_url=None,
+    auth_flow: Literal["M2M", "USER_FEDERATION", "ON_BEHALF_OF_TOKEN_EXCHANGE"],
+    callback_url=None, force_authentication=False, token_poller=None,
+    custom_state=None, custom_parameters=None)
+```
+
+**Grace's Plan 1 and Plan 2 do not need this decorator.** Grace's tools reach its own rule
+packs and document store through Gateway; there is no third-party OAuth service in the path.
+Recorded here so a future integration (a real state benefits API, an SMS provider requiring
+OAuth) has the verified surface. `auth_flow="M2M"` would be the mode — machine-to-machine, no
+user consent.
+
+**One caveat worth knowing if that changes:** *"Access tokens returned by AgentCore are not
+guaranteed to be valid"* — a provider can revoke a token without AgentCore detecting it. The
+documented recovery is retrying with `force_authentication=True`.
+
+### D.4 Inbound JWT authorizer: the caseworker gate
+
+Same configuration shape for Runtime and Gateway. **At least one** of `allowedAudience`,
+`allowedClients`, `allowedScopes`, or `customClaims` is required; when several are present,
+*all* are verified.
+
+For Grace, the interesting field is `customClaims` — it enforces a claim rule in the
+authorizer rather than in agent code:
+
+```json
+{
+  "customJWTAuthorizer": {
+    "discoveryUrl": "https://<idp>/.well-known/openid-configuration",
+    "allowedAudience": ["grace-runtime"],
+    "allowedClients": ["<dashboard-client-id>"],
+    "customClaims": [
+      {
+        "inboundTokenClaimName": "role",
+        "inboundTokenClaimValueType": "STRING",
+        "authorizingClaimMatchValue": {
+          "claimMatchOperator": "EQUALS",
+          "claimMatchValue": { "matchValueString": "caseworker" }
+        }
+      }
+    ]
+  }
+}
+```
+
+A token without `role=caseworker` never reaches Grace. That is a deterministic gate at the
+edge, consistent with the design's preference for enforcement in code over instruction.
+
+**PII warning, and it matters here:** *"Using inbound authorization based on JWT tokens will
+result in logging of some claims of the JWT token in CloudTrail. The entry includes the
+Subject."* The docs recommend a GUID or pairwise identifier rather than PII. For Grace the
+`sub` must be an opaque caseworker ID — **never a name or email** — because CloudTrail is
+outside the guardrail's PII redaction (§B.9).
+
+Scope advertisement is a bonus: a 401 returns `WWW-Authenticate` with the required scopes and
+a `resource_metadata` pointer, so the dashboard can discover what it needs rather than
+hardcoding it.
+
+### D.5 OBO token exchange — resolved, and not needed for Grace
+
+The Gateway docs called OBO the recommended production pattern over token passthrough; the
+Identity docs specify the wiring. Two grant types:
+
+| `grantType` | Standard | Inbound token sent as | Actor token |
+|---|---|---|---|
+| `TOKEN_EXCHANGE` | RFC 8693 | `subject_token` | `M2M`, `AWS_IAM_ID_TOKEN_JWT`, or `NONE` |
+| `JWT_AUTHORIZATION_GRANT` | RFC 7523 §2.1 | `assertion` | not applicable |
+
+Runtime usage: `GetWorkloadAccessTokenForJWT` → then `GetResourceOauth2Token` with
+`--oauth2-flow ON_BEHALF_OF_TOKEN_EXCHANGE`.
+
+**Grace does not need OBO.** The documented use case is propagating a user identity to a
+downstream service that enforces *its own* per-user authorization. Grace's rule packs and
+document store enforce nothing themselves — the authority gate is the enforcement point, and
+household identity arrives via the Gateway interceptor (§C.3). Adding OBO would be
+architecture for its own sake.
+
+Recorded because it is the right answer if Grace ever integrates a real state benefits portal
+that authorizes per-caseworker.
+
+### D.6 Scope the credential-provider policy, and know its limits
+
+Two things the docs are refreshingly blunt about:
+
+> *"The IAM role you assign to an agent controls which credential providers the agent can
+> call. The service does not enforce additional binding between workload identities and
+> credential providers in the same account."*
+
+So IAM `Resource` scoping is the *only* boundary — wildcards are a real exposure, not a style
+issue. And:
+
+> *"A successful call to a credential provider does not mean credentials are automatically
+> returned."*
+
+Credentials are scoped to the user identity inside the workload access token. Combined with
+D.1, that is why the JWT path matters: the token's identity determines what comes back.
+
+Correct resource ARN forms (my Appendix C draft had these wrong):
+
+```text
+arn:aws:bedrock-agentcore:<region>:<acct>:token-vault/default/api-key/<provider-name>
+arn:aws:bedrock-agentcore:<region>:<acct>:token-vault/default/oauth2-credential-provider/<provider-name>
+```
+
+Note these differ from the *management*-side ARNs (`.../apikeycredentialprovider/...`,
+`.../oauth2credentialprovider/...`) used for tagging and TBAC. Two different shapes for the
+same logical resource; do not mix them.
+
+### D.7 Encrypt the token vault with a customer-managed key
+
+Default is an AWS-owned key. For benefits data, use a CMK — one `SetTokenVaultCMK` call:
+
+```json
+{
+  "KmsConfiguration": {
+    "KeyType": "CUSTOMER_MANAGED_KEY",
+    "KmsKeyArn": "arn:aws:kms:us-east-1:<AWS_ACCOUNT_ID>:key/<key-id>"
+  }
+}
+```
+
+Constraints: **single-region symmetric keys only** — no multi-Region, no asymmetric — and the
+key must be given by ARN, not alias. `GetTokenVault` omitting `KmsConfiguration` means the
+vault is still on the AWS-owned key.
+
+Cheap to do, and it is the kind of control a benefits-domain reviewer looks for.
+
+### D.8 Tag every identity resource at creation
+
+Tag-on-create is supported for workload identities and both credential provider types (not
+for the directory or vault, which are tagged after the fact). All five support **TBAC** —
+tags usable in IAM policy conditions.
+
+Grace tags: `Project=Grace`, `Environment=<env>`, `Component=identity`. Enables the
+attribute-based pattern the docs show:
+
+```json
+"Condition": {
+  "StringEquals": {
+    "bedrock-agentcore:ResourceTag/Owner": "${aws:PrincipalTag/Team}"
+  }
+}
+```
+
+Also makes Grace's identity spend separable in Cost Explorer, which matters against a $50
+credit budget.
+
+### D.9 Deferred with reasons
+
+- **Private identity providers** (VPC Lattice, managed or self-managed) — Grace's caseworker
+  IdP is a public Cognito pool. Real, but no VPC-hosted IdP to reach.
+- **Private Key JWT / `AWS_IAM_ID_TOKEN_JWT` client auth** — eliminates the shared client
+  secret by signing assertions with a KMS key. Genuinely better than `CLIENT_SECRET_BASIC`,
+  but Grace has no outbound OAuth provider yet, so there is no secret to eliminate.
+  `AWS_IAM_ID_TOKEN_JWT` additionally requires
+  `iam:EnableOutboundWebIdentityFederation` on the account.
+- **Session binding / `CompleteResourceTokenAuth`** — needed only for 3LO
+  (`USER_FEDERATION`) flows, where a user consents in a browser. Grace has no third-party
+  consent step. Noted: `agentcore dev` hosts the callback locally, but a deployed runtime
+  must host its own public HTTPS callback and register it via
+  `UpdateWorkloadIdentity --allowed-resource-oauth2-return-urls`. Authorization URLs and
+  their session URIs expire in **10 minutes**.
+- **Built-in providers** (Google, GitHub, Slack, Salesforce, Microsoft, …) — 23 pre-wired
+  vendors. Nothing Grace integrates with.
+- **Secrets Manager-backed credentials** (`clientSecretSource: EXTERNAL`) — the bring-your-
+  own-secret path. Worth using if Grace ever adds an outbound provider. Caveat from the docs:
+  *"You cannot switch between providing a client secret directly and referencing one stored
+  in AWS Secrets Manager"* — the choice is permanent per provider; changing it means delete
+  and recreate.
