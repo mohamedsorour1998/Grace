@@ -25,6 +25,33 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ---
 
+## Current state
+
+**Plan 1, Task 1 in progress.** Nothing under `grace/` exists yet — the repo holds docs,
+scaffold, and configuration only.
+
+| Task | State |
+|---|---|
+| 1 — rule packs + deadline math | in progress |
+| 2 — case types, store, 12 fixtures | not started |
+| 3 — the authority gate (20 tests) | not started |
+| 4 — Nova model registry + tools | not started |
+| 5 — `AuthorityGate` + `LedgerHook` | not started |
+| 6 — Graph spine + `grace sweep` CLI | not started |
+| 7 — deliberation swarm | not started |
+| 8 — trajectory evals | not started |
+| 9 — ledger/trace correlation | not started |
+
+`pyproject.toml`, `LICENSE`, `.gitignore`, `.env.example`, `README.md` all exist and are
+committed — **do not recreate them.** Dependencies are installed in `.venv`; no install step is
+needed to run tests.
+
+**Capability absence is not implemented yet.** It arrives in Task 4 (tool construction) and
+Task 5 (the steering gate). Until then, nothing enforces the boundary — do not write code that
+assumes it is already there.
+
+---
+
 ## The one idea that matters
 
 Grace's defining property is an **escalation boundary**: it acts alone on the routine and

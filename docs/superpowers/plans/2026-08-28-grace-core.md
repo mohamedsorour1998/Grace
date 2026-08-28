@@ -78,7 +78,7 @@ Boundaries that matter: `authority.py` imports nothing from `strands` and does n
 **Files:**
 - Create: `grace/rules/pack.py`, `grace/rules/clock.py`, `grace/rules/packs/medicaid-ny.yaml`, `grace/rules/packs/snap-ny.yaml`, `grace/rules/__init__.py`, `grace/__init__.py`
 - Create: `tests/test_clock.py`, `tests/test_pack.py`
-- Create: `pyproject.toml`, `LICENSE`, `.gitignore`
+- **Already exist — do not recreate:** `pyproject.toml`, `LICENSE`, `.gitignore`, `.env.example`, `README.md`, `CLAUDE.md`
 
 **Interfaces:**
 - Consumes: nothing (first task).
@@ -87,46 +87,27 @@ Boundaries that matter: `authority.py` imports nothing from `strands` and does n
   - `RequiredDocument` frozen dataclass: `doc_id: str`, `max_age_days: int`
   - `load_pack(program: str, state: str) -> RulePack`
   - `Window` frozen dataclass: `opens: date`, `due: date`, `grace_ends: date`
-  - `renewal_window(cert_end: date, pack: RulePack) -> Window`
   - `WindowStatus = Literal["not_open", "open", "overdue", "in_grace", "closed"]`
   - `window_status(today: date, window: Window) -> WindowStatus`
 
-- [ ] **Step 1: Scaffold the project**
+- [ ] **Step 1: Create the package directories**
+
+The repo scaffold already exists and is committed. Only the Python package tree is missing:
 
 ```bash
 cd /Users/sorour/sorour/AgentsforHumansHackathon
 mkdir -p grace/rules/packs grace/cases grace/tools tests fixtures
 touch grace/__init__.py grace/rules/__init__.py grace/cases/__init__.py grace/tools/__init__.py
-printf '__pycache__/\n.venv/\n*.pyc\n.pytest_cache/\n.env\n.DS_Store\n' > .gitignore
-curl -sL https://raw.githubusercontent.com/licenses/license-templates/master/templates/mit.txt -o /dev/null || true
 ```
 
-Write `LICENSE` (MIT, copyright 2026 Mohamed Sorour) and `pyproject.toml`:
+**Do not write `pyproject.toml`.** It exists and is correct. An earlier draft of this plan
+listed `strands-agents-tools` as a dependency; that is now explicitly forbidden — it pulls
+`slack-bolt`, `pillow`, `beautifulsoup4`, and `sympy`, 30 packages Grace never imports. The
+committed file declares `strands-agents[otel]==1.54.0`, `boto3`, `pyyaml`, and a `dev` extra of
+pytest + pytest-asyncio. Everything is already installed in `.venv`; no install step is needed.
 
-```toml
-[project]
-name = "grace"
-version = "0.1.0"
-description = "An agent that keeps families from losing benefits over paperwork"
-requires-python = ">=3.12"
-dependencies = [
-    "strands-agents==1.54.0",
-    "strands-agents-tools",
-    "boto3>=1.35.0",
-    "pyyaml>=6.0",
-]
-
-[project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-asyncio_mode = "auto"
-```
-
-```bash
-.venv/bin/python -m pip install -q pyyaml pytest pytest-asyncio
-```
+`[tool.pytest.ini_options]` sets `testpaths = ["tests"]`, so `pytest` finds these tests with no
+arguments.
 
 - [ ] **Step 2: Write the failing deadline-math tests**
 
