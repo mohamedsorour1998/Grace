@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+config.json
+*.pem
+*.key
+credentials
+
+# AgentCore local state
+.bedrock_agentcore.yaml
+agentcore/
+
+# Eval output
+eval/results/
+evals/results/
+offloaded/
+sessions/
+
+# OS / editor
+.DS_Store
+.idea/
+*.swp
