@@ -1,0 +1,133 @@
+# 100% SYNTHETIC DATA. No real people. Phone numbers use the reserved
+# +1555 fictional range. Do not add real household data to this file.
+#
+# This file is the demo: twelve households, nine clean renewals Grace files
+# alone, three that must escalate for three distinct reasons. Every date is
+# evaluated against the pinned TODAY = 2026-10-01 (tests/conftest.py), so all
+# nine clean cases sit in an actionable window state (`open`, or `overdue` for
+# c-002) and none of the nine trips a document, income, size, or source-conflict
+# condition. `reported_income_cents` and `reported_size` are omitted wherever
+# the family reported no change; the loader defaults them to the on-file values
+# so an absent field can never read as a discrepancy against the household's
+# own record.
+#
+# Note on c-002: its SNAP grace period ends 2026-10-30, so the case is `overdue`
+# on the pinned date and `closed` from 2026-10-31. That is the intended demo of a
+# late-but-still-savable renewal — and the reason a stray `date.today()` anywhere
+# in the sweep turns 9-act/3-escalate into 8/4.
+cases:
+  - case_id: "c-001"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-10-15"
+    household: {household_id: "h-001", display_name: "The Rivera Household", language: "es", phone: "+15550000001", monthly_income_cents: 210000, size: 3}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-20"}
+      - {id: "proof_of_residency", received: "2026-03-01"}
+  - case_id: "c-002"
+    program: "snap"
+    state: "NY"
+    cert_end: "2026-09-30"
+    household: {household_id: "h-002", display_name: "The Okonkwo Household", language: "en", phone: "+15550000002", monthly_income_cents: 148000, size: 4}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-15"}
+      - {id: "proof_of_identity", received: "2024-05-10"}
+      - {id: "proof_of_expenses", received: "2026-08-20"}
+  - case_id: "c-003"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-10-31"
+    household: {household_id: "h-003", display_name: "The Nguyen Household", language: "vi", phone: "+15550000003", monthly_income_cents: 302000, size: 5}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-25"}
+      - {id: "proof_of_residency", received: "2026-01-15"}
+  - case_id: "c-004"
+    program: "snap"
+    state: "NY"
+    cert_end: "2026-10-05"
+    household: {household_id: "h-004", display_name: "The Haddad Household", language: "ar", phone: "+15550000004", monthly_income_cents: 96000, size: 2}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-22"}
+      - {id: "proof_of_identity", received: "2025-02-01"}
+      - {id: "proof_of_expenses", received: "2026-09-01"}
+  - case_id: "c-005"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-11-15"
+    household: {household_id: "h-005", display_name: "The Delacroix Household", language: "fr", phone: "+15550000005", monthly_income_cents: 175000, size: 3}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-28"}
+      - {id: "proof_of_residency", received: "2026-02-10"}
+  - case_id: "c-006"
+    program: "snap"
+    state: "NY"
+    cert_end: "2026-10-20"
+    household: {household_id: "h-006", display_name: "The Torres Household", language: "es", phone: "+15550000006", monthly_income_cents: 122000, size: 4}
+    documents:
+      - {id: "proof_of_income", received: "2026-10-01"}
+      - {id: "proof_of_identity", received: "2024-11-20"}
+      - {id: "proof_of_expenses", received: "2026-09-10"}
+  - case_id: "c-007"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-10-25"
+    household: {household_id: "h-007", display_name: "The Abebe Household", language: "am", phone: "+15550000007", monthly_income_cents: 188000, size: 6}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-30"}
+      - {id: "proof_of_residency", received: "2026-04-05"}
+  - case_id: "c-008"
+    program: "snap"
+    state: "NY"
+    cert_end: "2026-10-10"
+    household: {household_id: "h-008", display_name: "The Silva Household", language: "pt", phone: "+15550000008", monthly_income_cents: 134000, size: 3}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-26"}
+      - {id: "proof_of_identity", received: "2025-06-15"}
+      - {id: "proof_of_expenses", received: "2026-09-05"}
+  - case_id: "c-009"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-11-01"
+    household: {household_id: "h-009", display_name: "The Kowalski Household", language: "pl", phone: "+15550000009", monthly_income_cents: 240000, size: 4}
+    documents:
+      # Received 2026-09-29, not 2026-10-02: a document dated after the sweep
+      # date has a negative age, which no freshness check is written to expect.
+      - {id: "proof_of_income", received: "2026-09-29"}
+      - {id: "proof_of_residency", received: "2026-05-20"}
+  # --- must escalate: missing a required document ---
+  # medicaid-ny requires proof_of_residency; this household has never filed one.
+  - case_id: "c-010"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-10-18"
+    household: {household_id: "h-010", display_name: "The Fitzgerald Household", language: "en", phone: "+15550000010", monthly_income_cents: 165000, size: 2}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-24"}
+  # --- must escalate: material income change ---
+  # 200000 -> 260000 is +30%, well past medicaid-ny's 5% immaterial threshold.
+  # Documents are complete and fresh so this case escalates for the income
+  # change and nothing else.
+  - case_id: "c-011"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-10-22"
+    household: {household_id: "h-011", display_name: "The Yamamoto Household", language: "ja", phone: "+15550000011", monthly_income_cents: 200000, size: 3}
+    reported_income_cents: 260000
+    documents:
+      - {id: "proof_of_income", received: "2026-09-29"}
+      - {id: "proof_of_residency", received: "2026-03-15"}
+  # --- must escalate: conflicting sources ---
+  # Any non-empty source_conflicts escalates, regardless of content. The
+  # structured reported_size deliberately still matches the household record, so
+  # this case trips the conflict condition alone.
+  - case_id: "c-012"
+    program: "snap"
+    state: "NY"
+    cert_end: "2026-10-12"
+    household: {household_id: "h-012", display_name: "The Mensah Household", language: "en", phone: "+15550000012", monthly_income_cents: 110000, size: 5}
+    source_conflicts:
+      - "household size 5 on application, 3 on most recent wage record"
+    documents:
+      - {id: "proof_of_income", received: "2026-09-27"}
+      - {id: "proof_of_identity", received: "2025-01-08"}
+      - {id: "proof_of_expenses", received: "2026-09-12"}

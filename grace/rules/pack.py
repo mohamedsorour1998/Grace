@@ -132,8 +132,9 @@ def _pack_path(program: str, state: str) -> Path:
     would load an attacker-placed YAML that could forge a deadline or declare no
     required documents.
     """
-    if not program or not state:
-        raise InvalidRulePack(f"program and state are required, got {program!r}/{state!r}")
+    if not isinstance(program, str) or not isinstance(state, str) or not program or not state:
+        raise InvalidRulePack(f"program and state must be non-empty strings, got {program!r}/{state!r}")
+
     filename = f"{program.lower()}-{state.lower()}.yaml"
     candidate = (PACKS_DIR / filename).resolve()
     if candidate.parent != PACKS_DIR.resolve():

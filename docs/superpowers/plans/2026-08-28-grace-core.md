@@ -432,7 +432,7 @@ default.
   - `InMemoryCaseStore(cases: list[Case])` implementing `CaseStore`
   - `load_fixture_cases(path: Path | None = None) -> list[Case]`
 
-- [ ] **Step 1: Write the failing store test**
+- [x] **Step 1: Write the failing store test**
 
 `tests/test_store.py`:
 
@@ -502,12 +502,12 @@ def test_fixtures_load_and_are_obviously_synthetic():
 
 The last test is a guard, not a formality: it fails the build if real-looking PII ever lands in fixtures.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_store.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.cases.models'`
 
-- [ ] **Step 3: Write `grace/cases/models.py`**
+- [x] **Step 3: Write `grace/cases/models.py`**
 
 ```python
 """Case data types. All frozen — a case is a snapshot the gate reasons over."""
@@ -556,7 +556,7 @@ class LedgerEntry:
     detail: dict = field(default_factory=dict)
 ```
 
-- [ ] **Step 4: Write `grace/cases/store.py`**
+- [x] **Step 4: Write `grace/cases/store.py`**
 
 ```python
 """Case storage. In-memory for local runs; DynamoDB lands in Plan 2."""
@@ -639,7 +639,7 @@ def load_fixture_cases(path: Path | None = None) -> list[Case]:
     return cases
 ```
 
-- [ ] **Step 5: Write `fixtures/households.yaml`**
+- [x] **Step 5: Write `fixtures/households.yaml`**
 
 Twelve synthetic households. Nine are clean renewals; three must escalate — one missing document, one material income change, one source conflict. That 9-to-3 split is the demo.
 
@@ -755,7 +755,7 @@ cases:
       - {id: proof_of_expenses, received: "2026-09-12"}
 ```
 
-- [ ] **Step 6: Write `tests/conftest.py`**
+- [x] **Step 6: Write `tests/conftest.py`**
 
 ```python
 from datetime import date
@@ -784,12 +784,70 @@ def store(fixture_cases) -> InMemoryCaseStore:
     return InMemoryCaseStore(fixture_cases)
 ```
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
-Run: `.venv/bin/python -m pytest tests/test_store.py -v`
-Expected: PASS — 5 tests
+Run: `.venv/bin/python -m pytest`
+Expected: PASS — **60 tests**, not 5. The plan's original 7 (store) plus 53 already
+established (Task 1) plus the regression locks review added:
 
-- [ ] **Step 8: Commit**
+- `get()` on an unknown case id — untested originally; a mutant that returned `None` on
+  a miss survived the full suite unchanged. A `None` flowing into Task 3's `evaluate` would
+  fail somewhere downstream instead of at the lookup.
+- `append_ledger` for a case the store has never heard of — must raise, not silently open a
+  ledger bucket for a phantom case that `ledger()` then reports as an innocent empty list.
+- The ledger snapshot cannot be used to rewrite the audit trail — mutating a returned
+  `LedgerEntry.detail` must not change what the store recorded. Task 8's evals read the
+  ledger as ground truth.
+- `CaseStore` is `@runtime_checkable`, and a test actually asserts `isinstance(store,
+  CaseStore)` — previously the Protocol was structurally satisfied but nothing checked it,
+  so Plan 2's DynamoDB store could drift with no test catching it.
+- The synthetic-data guard checks every string field of every case against exact NANP-phone
+  and household-name patterns, not two fields with substring/prefix checks. The original
+  guard passed `+15550001` (well short of a real number, but a valid `+1555` prefix) and
+  would have passed `"Householder Corp"` or failed `"the rivera household"`.
+- `test_fixtures_are_consistent_with_the_rule_packs` loads the real YAML packs and checks
+  every clean case's window status and document freshness. Without it, mutating a pack's
+  `max_age_days`, moving a `cert_end` into `not_open`/`closed`, or dropping a document from
+  a clean case all passed the rest of the suite silently — the 9-act/3-escalate split would
+  change with no test failure anywhere.
+
+**Two contract bugs review found in the loader, both closed with a new `InvalidFixtureData`
+exception** (parallel to Task 1's `InvalidRulePack`):
+
+- `program: 42` in the YAML loaded as an int, and `load_pack` crashed with an unrelated
+  `AttributeError` on `.lower()` deep inside a later task — not the `InvalidRulePack` that
+  CLAUDE.md promises "and nothing else." `pack.py`'s `_pack_path` now checks `isinstance`
+  before calling `.lower()`.
+- `source_conflicts: "one conflict"` (a bare string, not a list) iterated character-by-character
+  into twelve single-letter conflicts. It happened to still escalate — non-empty is non-empty
+  — but the caseworker brief would render `('o', 'n', 'e', ...)`. Now rejected at load.
+
+**The `reported_income_cents`/`reported_size` defaults changed from the plan's own text.**
+The plan defaults absent fields to the household's on-file value. Review's objection: `0` is
+not a safe "absent" sentinel — a family whose income genuinely dropped to zero is the most
+eligibility-relevant case Grace will see, so `0` must remain available as a real reported
+value, and defaulting to the on-file value has the same collision one level up (a family that
+reports *no change* and a family whose on-file value happens to be exactly right are
+indistinguishable from the on-file default alone). Both fields are now `int | None`, and
+`None` means "not reported this cycle." Task 3's `evaluate` compares against the household's
+value **only when a figure is present** — treat `None` as "no income check applies," not as a
+0% or 100% change.
+
+**`LedgerEntry.detail` is now an immutable, type-checked mapping**, not a plain `dict`. Three
+reasons: a plain dict let a caller holding a `ledger()` result rewrite what the audit trail
+recorded (the outer list was copied; the dicts inside were not); a `date` or dataclass value
+in `detail` would fail at the DynamoDB boundary in Plan 2 instead of at construction, and
+CLAUDE.md's ledger schema (Task 5) lists exactly this kind of value; and `at` now requires a
+timezone-aware `datetime` for the same reason a sort by `at` must not silently mix naive and
+aware values.
+
+**A quiet fixture data-quality note.** All twelve fixture string scalars are now YAML-quoted.
+Unquoted `language: no` would have parsed as the boolean `False`, and an unquoted phone as an
+integer — neither is a live bug in the shipped file (no current value collides), but the
+pattern invited it for the next contributor who adds a language code. `_require_str` in
+`store.py` is the real guard now; quoting is defense-in-depth on top of it.
+
+- [x] **Step 8: Commit**
 
 ```bash
 git add grace/cases/ fixtures/ tests/test_store.py tests/conftest.py
@@ -803,6 +861,17 @@ git commit -m "feat: case types, in-memory store, and synthetic household fixtur
 This is the task that matters most. A bug here means a family loses coverage or a renewal
 is filed that should have had human eyes on it. It is pure logic — no model, no I/O, no
 `strands` import — precisely so it can be exhaustively table-tested.
+
+**Read before Step 1 — Task 2 changed a type this task's own text below still assumes.**
+`Case.reported_income_cents` and `.reported_size` are `int | None`, not `int` defaulting to
+the household's on-file value as the plan below writes them. `None` means "not reported this
+cycle." The income and size checks (around what is now line ~1210 and ~1224 below) must
+short-circuit to "no discrepancy" when the corresponding field is `None`, rather than compute
+a percentage change or `!=` against it directly — `_pct_change(x, None)` and `None != y` are
+both wrong in ways Python will not raise on, so this will not fail loudly if missed. The test
+fixtures below that pass `reported_income_cents=200_000` as a *baseline "no change"* value
+(matching the household's own income) should instead omit the field, i.e. leave it at its
+`None` default, since that is what "no change reported" actually means now.
 
 **Files:**
 - Create: `grace/authority.py`

@@ -27,13 +27,15 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 1 complete.** 48 tests passing (`.venv/bin/python -m pytest`). Task 2 is next.
+**Plan 1, Task 2 complete.** 60 tests passing (`.venv/bin/python -m pytest`, or `.venv/bin/pytest`
+directly — the editable install is fixed). Task 3, the authority gate, is next and is the task
+that matters most.
 
 | Task | State |
 |---|---|
 | 1 — rule packs + deadline math | **done** — `grace/rules/{pack,clock}.py`, 48 tests |
-| 2 — case types, store, 12 fixtures | next |
-| 3 — the authority gate (20 tests) | not started |
+| 2 — case types, store, 12 fixtures | **done** — `grace/cases/{models,store}.py`, `fixtures/households.yaml`, 60 tests |
+| 3 — the authority gate (20 tests) | next — **read the note at the top of Task 3 in the plan before starting** |
 | 4 — Nova model registry + tools | not started |
 | 5 — `AuthorityGate` + `LedgerHook` | not started |
 | 6 — Graph spine + `grace sweep` CLI | not started |
@@ -55,6 +57,7 @@ assumes it is already there.
 unreadable, malformed, mislabelled, and out-of-range packs, so a caller fails closed with a
 single `except InvalidRulePack`. Task 4's `check_window` must wrap it; Task 3's `evaluate` must
 not rely on `pack is None` alone, because a *partially* corrupt pack never reaches that check.
+This also covers a non-string `program`/`state` now — see Task 2 below.
 
 **Rule-pack input is untrusted.** `program`/`state` reach `load_pack` from case records and, in
 Plan 2, from a Gateway payload. Path containment, a non-empty `required_documents`, and finite
@@ -70,6 +73,28 @@ gate.
 **Pin the date.** Every test module uses `TODAY = date(2026, 10, 1)`. Fixture `c-002` goes
 `closed` on 2026-10-31, so a `date.today()` anywhere in the sweep turns the 9-act/3-escalate
 demo into 8/4 on that date. Task 6's CLI takes `--today` defaulting to the pinned value.
+
+### What Task 2 established — follow these
+
+**`reported_income_cents`/`reported_size` are `int | None`, and `None` means "not reported."**
+Not the household's on-file value, and never `0` — `0` is a real income a family can report
+(a genuine loss of all income is the single most eligibility-relevant case Grace will see), so
+it cannot double as an absence marker. **Task 3's `evaluate` must treat `None` as "no income or
+size check applies" and short-circuit before comparing** — do not compute a percentage change
+or an inequality against `None`. See the note at the top of Task 3 in the plan.
+
+**`LedgerEntry.detail` is an immutable, type-checked mapping, not a plain `dict`.** Values are
+restricted to JSON-safe scalars (`str | int | float | bool | None`) and the mapping itself is
+frozen at construction. A caller holding a `ledger()` result cannot rewrite an audit entry —
+Task 8's evals read the ledger as ground truth, so a mutable `detail` would let something
+retroactively change what the eval sees. `LedgerEntry.at` must be a timezone-aware `datetime`;
+a naive one raises at construction, before it can end up unsortable next to an aware one.
+
+**Fixture and fail-closed loader conventions carry forward.** `load_fixture_cases` raises
+`InvalidFixtureData` (parallel to `InvalidRulePack`) for a non-string field or a malformed
+`source_conflicts`, rather than silently coercing. Quote every YAML scalar in new fixtures —
+an unquoted `no`/`yes`/`on`/`off` parses as a boolean, and an unquoted phone number as an int.
+
 
 ---
 
