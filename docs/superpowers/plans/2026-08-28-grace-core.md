@@ -90,7 +90,7 @@ Boundaries that matter: `authority.py` imports nothing from `strands` and does n
   - `WindowStatus = Literal["not_open", "open", "overdue", "in_grace", "closed"]`
   - `window_status(today: date, window: Window) -> WindowStatus`
 
-- [ ] **Step 1: Create the package directories**
+- [x] **Step 1: Create the package directories**
 
 The repo scaffold already exists and is committed. Only the Python package tree is missing:
 
@@ -109,7 +109,7 @@ pytest + pytest-asyncio. Everything is already installed in `.venv`; no install 
 `[tool.pytest.ini_options]` sets `testpaths = ["tests"]`, so `pytest` finds these tests with no
 arguments.
 
-- [ ] **Step 2: Write the failing deadline-math tests**
+- [x] **Step 2: Write the failing deadline-math tests**
 
 `tests/test_clock.py`:
 
@@ -159,73 +159,38 @@ def test_window_status_transitions(today: date, expected: WindowStatus):
 
 The boundary dates are the point of this test. Off-by-one here means a family loses coverage.
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `.venv/bin/python -m pytest tests/test_clock.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.rules.clock'`
 
-- [ ] **Step 4: Write `grace/rules/pack.py`**
+- [x] **Step 4: Write `grace/rules/pack.py`**
 
-```python
-"""Rule packs: the authoritative source for every date and threshold.
+The loader validates aggressively and raises a single `InvalidRulePack` for every failure mode.
+This is not defensive boilerplate — four of the checks close holes found in review, and each one
+maps to a way a family could lose coverage:
 
-Grace never lets a model infer a deadline. Windows come from these packs.
-"""
+| Check | What it prevents |
+|---|---|
+| Path containment via `resolve()` | `load_pack("../../evil", "NY")` loading an attacker-placed YAML. `program` arrives from a case record, and in Plan 2 from a Gateway payload |
+| `required_documents` non-empty | An empty list makes the `missing_document` gate condition unreachable, so every case passes document verification |
+| `math.isfinite` on the income pct | Every comparison against `NaN` is `False`, so `change > threshold` never fires — a 1000% income rise would not escalate |
+| Reject negative day counts | A negative grace period puts `grace_ends` before `due`, which `window_status` cannot detect |
+| `version` must be a real string | Unquoted `version: 2026.10` parses as the float `2026.1`; `str()` would silently collapse two rule versions into one in the audit ledger |
+| Declared program/state must match the request | A mislabelled pack attributes one program's thresholds to another |
 
-from __future__ import annotations
+One exception type matters because of how callers behave: Task 5's handler catches bare
+`Exception` and fails closed, but Task 4's `check_window` tool calls `load_pack` with no
+`try`/`except`, and Task 3's `evaluate` fails closed only on `pack is None`. A *partially*
+corrupt pack that loads without raising is caught by neither. Raising `InvalidRulePack` on
+anything unverifiable is what makes those call sites safe.
 
-from dataclasses import dataclass
-from pathlib import Path
-
-import yaml
-
-PACKS_DIR = Path(__file__).parent / "packs"
-
-
-@dataclass(frozen=True)
-class RequiredDocument:
-    doc_id: str
-    max_age_days: int
-
-
-@dataclass(frozen=True)
-class RulePack:
-    program: str
-    state: str
-    version: str
-    certification_period_months: int
-    window_opens_days_before_end: int
-    grace_period_days_after_end: int
-    required_documents: tuple[RequiredDocument, ...]
-    income_change_immaterial_pct: float
+Write the module as implemented — see `grace/rules/pack.py` in the repo, which is the source of
+truth. Structure: `InvalidRulePack`, the two frozen dataclasses, four `_require_*` validators,
+`_pack_path` for containment, then `load_pack`.
 
 
-def load_pack(program: str, state: str) -> RulePack:
-    """Load the rule pack for a program/state, or raise if it is missing.
-
-    Raises rather than returning a default: a missing pack must never be
-    silently treated as "no deadline".
-    """
-    path = PACKS_DIR / f"{program.lower()}-{state.lower()}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"No rule pack for {program}/{state} at {path}")
-    raw = yaml.safe_load(path.read_text())
-    return RulePack(
-        program=raw["program"],
-        state=raw["state"],
-        version=str(raw["version"]),
-        certification_period_months=int(raw["certification_period_months"]),
-        window_opens_days_before_end=int(raw["window_opens_days_before_end"]),
-        grace_period_days_after_end=int(raw["grace_period_days_after_end"]),
-        required_documents=tuple(
-            RequiredDocument(doc_id=d["id"], max_age_days=int(d["max_age_days"]))
-            for d in raw["required_documents"]
-        ),
-        income_change_immaterial_pct=float(raw["income_change_immaterial_pct"]),
-    )
-```
-
-- [ ] **Step 5: Write `grace/rules/clock.py`**
+- [x] **Step 5: Write `grace/rules/clock.py`**
 
 ```python
 """Deadline math. Pure functions over dates — no model, no I/O.
@@ -277,7 +242,7 @@ def window_status(today: date, window: Window) -> WindowStatus:
 
 Note: the `overdue` vs `in_grace` split needs care — see Step 7.
 
-- [ ] **Step 6: Write the rule pack YAML files**
+- [x] **Step 6: Write the rule pack YAML files**
 
 `grace/rules/packs/medicaid-ny.yaml`:
 
@@ -315,13 +280,15 @@ required_documents:
     max_age_days: 60
 ```
 
-- [ ] **Step 7: Run the tests and fix the `overdue`/`in_grace` boundary**
+- [x] **Step 7: Run the tests and fix the `overdue`/`in_grace` boundary**
 
 Run: `.venv/bin/python -m pytest tests/test_clock.py -v`
 
 The parametrized case `(date(2027, 1, 1), "overdue")` will fail, because the first branch after `due` returns `in_grace`. The test encodes the intended semantics: the day after the due date is `overdue` (still actionable, caseworker should know), and `in_grace` begins later. Replace `window_status` with an explicit overdue band:
 
 ```python
+# How long after the due date a renewal is still merely late rather than in the
+# formal grace period. Capped by the pack's own grace period below.
 OVERDUE_BAND_DAYS = 30
 
 
@@ -330,19 +297,45 @@ def window_status(today: date, window: Window) -> WindowStatus:
 
     Boundaries are inclusive on the near side: the day the window opens is
     already `open`, and the last day of grace is still `in_grace`.
+
+    `closed` is checked before the overdue band, so a program whose grace period
+    is shorter than `OVERDUE_BAND_DAYS` reports a lapsed window as `closed`
+    rather than as still-actionable `overdue`. Getting that order wrong tells a
+    caseworker a dead case can still be filed.
+
+    Note that both `overdue` and `in_grace` are still actionable — the renewal
+    can be filed. They are distinguished so the caseworker briefing can say
+    whether a case is merely late or inside the formal grace period.
     """
     if today < window.opens:
         return "not_open"
     if today <= window.due:
         return "open"
-    if today <= window.due + timedelta(days=OVERDUE_BAND_DAYS):
+    if today > window.grace_ends:
+        return "closed"
+    overdue_ends = min(window.due + timedelta(days=OVERDUE_BAND_DAYS), window.grace_ends)
+    if today <= overdue_ends:
         return "overdue"
-    if today <= window.grace_ends:
-        return "in_grace"
-    return "closed"
+    return "in_grace"
 ```
 
-- [ ] **Step 8: Write the rule-pack loader test**
+**Why the ordering matters — this was a bug caught in review.** The obvious version checks the
+overdue band before `grace_ends`. `snap-ny.yaml` has `grace_period_days_after_end: 30`, exactly
+`OVERDUE_BAND_DAYS`, so under that ordering:
+
+- `in_grace` is unreachable for SNAP — the band consumes the entire grace period; and
+- for any pack with grace **< 30**, dates *past* `grace_ends` return `overdue`, reporting a
+  dead case as still actionable. Wrong direction for a fail-closed system.
+
+Capping the band at `grace_ends` and checking `closed` first fixes both. SNAP still never
+returns `in_grace`, which is now correct rather than accidental: its whole grace period is the
+overdue band.
+
+`renewal_window` also asserts `opens <= due <= grace_ends` and raises `ValueError` otherwise.
+`load_pack` rejects negative day counts, so this cannot trip for a validated pack — but
+`Window` is constructible directly, and an inverted window is invisible to `window_status`.
+
+- [x] **Step 8: Write the rule-pack loader test**
 
 `tests/test_pack.py`:
 
@@ -376,17 +369,48 @@ def test_missing_pack_raises_rather_than_defaulting():
 
 The third test is the important one: a missing pack must never read as "no deadline".
 
-- [ ] **Step 9: Run the full suite**
+- [x] **Step 9: Run the full suite**
 
-Run: `.venv/bin/python -m pytest tests/ -v`
-Expected: PASS — 10 tests (7 clock + 3 pack)
+Run: `.venv/bin/python -m pytest`
+Expected: PASS — **48 tests**. The plan's original 10 (7 clock + 3 pack) plus the regression
+locks added in review:
 
-- [ ] **Step 10: Commit**
+- the overdue-band edge (`due+30` → `overdue`, `due+31` → `in_grace`). Without this, **any band
+  value from 1 to 89 kept the original suite green** — the constant was unconstrained.
+- `window_status(grace_ends + 1 day) == "closed"` parametrized over *both shipped packs*. The
+  original clock tests used only a hardcoded 90-day pack defined in the test file, which is the
+  one pack shape where the band bug is invisible; they never touched `snap-ny.yaml`.
+- status monotonicity across the full span for both packs.
+- a leap-day `cert_end`, and a directly-constructed `Window`.
+- path-traversal rejection, and one case per validation rule in `load_pack`.
+
+**Task 1 closed two decisions that Task 3 depends on. Read these before writing the gate.**
+
+**`overdue` and `in_grace` are both actionable.** Task 3's `evaluate` appends a reason only for
+`not_open` and `closed`; the other two fall through, which means Grace *files* a renewal that is
+past its due date. That is intended — filing late inside the grace period is exactly the
+procedural save Grace exists to make, and refusing would abandon the family the system is for.
+It was previously unstated, which is worse than either answer. The two statuses stay distinct so
+the caseworker briefing can say which it was.
+
+**`certification_period_months` is dead config.** Loaded, validated, asserted in two tests, and
+read by nothing in any of the nine tasks — `renewal_window` derives everything from `cert_end`.
+Kept because a rule pack should describe the program completely and Plan 2's rule-pack Gateway
+target will surface it. Do not build logic that assumes it constrains anything: nothing enforces
+that `window + grace` fits inside the certification period.
+
+- [x] **Step 10: Commit**
 
 ```bash
-git add pyproject.toml LICENSE .gitignore grace/ tests/
+git add grace/ tests/
 git commit -m "feat: rule packs and deterministic deadline math"
 ```
+
+**One time bomb for the demo.** Fixture `c-002` (snap, `cert_end: 2026-09-30`) goes `closed` on
+2026-10-31 under `snap-ny.yaml`. Every test module pins `TODAY = date(2026, 10, 1)`; if the sweep
+CLI in Task 6 ever uses `date.today()` instead, the 9-act/3-escalate split silently becomes
+8-act/4-escalate on that date with no code change. Task 6 must take `--today` with the pinned
+default.
 
 ---
 

@@ -1,0 +1,12 @@
+program: medicaid
+state: NY
+version: "2026.1"
+certification_period_months: 12
+window_opens_days_before_end: 60
+grace_period_days_after_end: 90
+income_change_immaterial_pct: 5.0
+required_documents:
+  - id: proof_of_income
+    max_age_days: 60
+  - id: proof_of_residency
+    max_age_days: 365

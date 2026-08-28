@@ -1,0 +1,14 @@
+program: snap
+state: NY
+version: "2026.1"
+certification_period_months: 6
+window_opens_days_before_end: 30
+grace_period_days_after_end: 30
+income_change_immaterial_pct: 10.0
+required_documents:
+  - id: proof_of_income
+    max_age_days: 30
+  - id: proof_of_identity
+    max_age_days: 1095
+  - id: proof_of_expenses
+    max_age_days: 60

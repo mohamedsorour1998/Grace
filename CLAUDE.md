@@ -27,13 +27,12 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 1 in progress.** Nothing under `grace/` exists yet — the repo holds docs,
-scaffold, and configuration only.
+**Plan 1, Task 1 complete.** 48 tests passing (`.venv/bin/python -m pytest`). Task 2 is next.
 
 | Task | State |
 |---|---|
-| 1 — rule packs + deadline math | in progress |
-| 2 — case types, store, 12 fixtures | not started |
+| 1 — rule packs + deadline math | **done** — `grace/rules/{pack,clock}.py`, 48 tests |
+| 2 — case types, store, 12 fixtures | next |
 | 3 — the authority gate (20 tests) | not started |
 | 4 — Nova model registry + tools | not started |
 | 5 — `AuthorityGate` + `LedgerHook` | not started |
@@ -49,6 +48,28 @@ needed to run tests.
 **Capability absence is not implemented yet.** It arrives in Task 4 (tool construction) and
 Task 5 (the steering gate). Until then, nothing enforces the boundary — do not write code that
 assumes it is already there.
+
+### What Task 1 established — follow these
+
+**`load_pack` raises `InvalidRulePack` and nothing else.** One exception type for missing,
+unreadable, malformed, mislabelled, and out-of-range packs, so a caller fails closed with a
+single `except InvalidRulePack`. Task 4's `check_window` must wrap it; Task 3's `evaluate` must
+not rely on `pack is None` alone, because a *partially* corrupt pack never reaches that check.
+
+**Rule-pack input is untrusted.** `program`/`state` reach `load_pack` from case records and, in
+Plan 2, from a Gateway payload. Path containment, a non-empty `required_documents`, and finite
+numeric thresholds are all enforced there — an empty document list would make
+`missing_document` unreachable, and a `NaN` threshold disables the income check silently because
+every comparison against `NaN` is `False`. Do not relax these.
+
+**`overdue` and `in_grace` are both actionable.** Grace *does* file a late renewal inside the
+grace period — that is the procedural save it exists to make. Only `not_open` and `closed`
+escalate on window grounds. The two are distinguished for the caseworker briefing, not for the
+gate.
+
+**Pin the date.** Every test module uses `TODAY = date(2026, 10, 1)`. Fixture `c-002` goes
+`closed` on 2026-10-31, so a `date.today()` anywhere in the sweep turns the 9-act/3-escalate
+demo into 8/4 on that date. Task 6's CLI takes `--today` defaulting to the pinned value.
 
 ---
 
