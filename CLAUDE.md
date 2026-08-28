@@ -27,17 +27,17 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 2 complete.** 60 tests passing (`.venv/bin/python -m pytest`, or `.venv/bin/pytest`
-directly — the editable install is fixed). Task 3, the authority gate, is next and is the task
-that matters most.
+**Plan 1, Task 3 complete.** 121 tests passing (`.venv/bin/python -m pytest`, or
+`.venv/bin/pytest` directly). Task 4 — the Nova model registry and session-bound tools — is
+next; this is where capability absence starts to become real.
 
 | Task | State |
 |---|---|
 | 1 — rule packs + deadline math | **done** — `grace/rules/{pack,clock}.py`, 48 tests |
 | 2 — case types, store, 12 fixtures | **done** — `grace/cases/{models,store}.py`, `fixtures/households.yaml`, 60 tests |
-| 3 — the authority gate (20 tests) | next — **read the note at the top of Task 3 in the plan before starting** |
-| 4 — Nova model registry + tools | not started |
-| 5 — `AuthorityGate` + `LedgerHook` | not started |
+| 3 — the authority gate | **done** — `grace/authority.py`, 121 tests total. The task that matters most. |
+| 4 — Nova model registry + tools | next |
+| 5 — `AuthorityGate` + `LedgerHook` | not started — **read "What Task 3 established" below first: `evaluate` can raise `ValueError` or `TypeError`, and the steering handler must catch `Exception`, not `ValueError`** |
 | 6 — Graph spine + `grace sweep` CLI | not started |
 | 7 — deliberation swarm | not started |
 | 8 — trajectory evals | not started |
@@ -95,8 +95,46 @@ a naive one raises at construction, before it can end up unsortable next to an a
 `source_conflicts`, rather than silently coercing. Quote every YAML scalar in new fixtures —
 an unquoted `no`/`yes`/`on`/`off` parses as a boolean, and an unquoted phone number as an int.
 
+### What Task 3 established — follow these
 
----
+**Never select "the" document for a `doc_id` by record order.** A household can have multiple
+copies of the same document on file (a re-submission leaving the old one in place). Selecting
+by position — including a naive `{d.doc_id: d for d in documents}` dict comprehension, which
+is last-wins by *order*, not by which copy is actually newest — makes the verdict depend on how
+the record happened to load. This was a real, confirmed bug: two documents with an identical
+`received` date and different `expires` produced opposite verdicts purely from tuple order.
+Selection must be a deterministic function of the data (see `_most_recent` in
+`grace/authority.py`), and a duplicate may only make a verdict *stricter*, never looser.
+
+**Every failing condition gets its own reason — never `elif` between independent checks.** A
+document can be both stale-by-age and past its own `expires` at the same time; both facts must
+reach the caseworker brief. If you add a new condition to the gate, ask whether it can co-occur
+with an existing one and use `if`, not `elif`, unless the conditions are genuinely mutually
+exclusive.
+
+**`evaluate` can still raise `ValueError` or `TypeError`, and that is correct — the caller must
+catch broadly.** A structurally invalid `RulePack` (bypassing `load_pack`'s own validation via
+direct construction) makes `renewal_window` raise, or a missing threshold raises a different
+type from the same underlying cause. Converting either to a `GateResult` would be worse: a
+`verification_error` result is indistinguishable from a normal escalation at the call site, so
+a caller that logs and moves on would silently treat pack corruption as routine. **Task 5's
+`steer_before_tool` and Task 6's sweep must wrap the `evaluate` call in `except Exception`, not
+`except ValueError`** — catching only one exception type leaves the other to escape the
+steering handler into the agent loop.
+
+**`GateReason.detail` carries untrusted free text and is deliberately unescaped.**
+`source_conflicts` is case-record text surfaced verbatim, including as a potential
+prompt-injection vector into whatever agent eventually reads it (the caseworker briefer is
+agents-as-tools, per the architecture). `authority.py` has no rendering context to know the
+right escaping strategy — HTML for a UI, parameterization for DynamoDB, something else again
+for a model prompt — so it does not escape at all. Whichever surface renders `detail` is
+responsible for escaping it there. Do not add escaping logic to `authority.py`.
+
+**Reason order is not a contract.** `GateResult.reasons` follows check order, which has already
+changed once. Do not surface `reasons[0]` as "the" reason for a case (e.g. in a span attribute
+or a briefing) without picking deliberately — compare on `.code`, or treat `reasons` as a set.
+
+
 
 ## The one idea that matters
 
