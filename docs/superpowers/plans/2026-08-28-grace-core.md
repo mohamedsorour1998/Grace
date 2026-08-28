@@ -3010,3 +3010,226 @@ needs (and brings `boto3` + `pyyaml` transitively, though both are declared expl
 because Grace imports them directly). The `graph`, `swarm`, and `workflow` *tools* live in
 that package; Grace uses the `GraphBuilder`/`Swarm` **classes** from the core SDK instead,
 which is the right call — Grace's topology is fixed at build time, not chosen by a model.
+
+---
+
+## Appendix B: Corrections from the official docs (READ BEFORE TASK 6)
+
+Verified against installed 1.54.0. Two of these are bugs in Tasks 5–6 as written above;
+apply the corrections rather than the original text.
+
+### B.1 BUG: multi-agent interrupts use `result.status`, not `result.stop_reason`
+
+**Task 6 Step 5 as written would never detect an escalation.** Single-agent invocations
+signal an interrupt with `result.stop_reason == "interrupt"`; **Graph and Swarm signal it
+with `result.status == Status.INTERRUPTED`.** Verified: `GraphResult` has fields `status`
+and `interrupts` — there is no `stop_reason` on it at all.
+
+Corrected loop for `sweep()`:
+
+```python
+from strands.multiagent.base import Status
+
+result = graph(task)
+while result.status == Status.INTERRUPTED:
+    responses = []
+    for interrupt in result.interrupts:
+        decision = caseworker_decision(interrupt.reason)   # dashboard or prompt
+        responses.append({
+            "interruptResponse": {
+                "interruptId": interrupt.id,
+                "response": decision,
+            }
+        })
+    result = graph(responses)
+```
+
+Each `interrupt` carries `name`, `reason` (whatever JSON-serialisable value was passed),
+and `id`. **`id` is distinct from `name`** — respond with `id`, filter on `name`.
+
+The `interruptResponse` payload must be JSON-serialisable and **must not be `null`** — the
+server refuses a null answer because it would leave the interrupt unsatisfied and re-raise
+it. `False` and `0` are fine.
+
+### B.2 Better: escalate at the node boundary with `BeforeNodeCallEvent`
+
+`AuthorityGate` on `steer_before_tool` still works, but the docs show a cleaner Grace fit:
+interrupt **before the `decide` node runs at all**, via `BeforeNodeCallEvent`. Verified
+attributes: `cancel_node`, `interrupt`, `invocation_state`.
+
+```python
+from strands.hooks import BeforeNodeCallEvent, HookProvider, HookRegistry
+
+
+class CaseworkerApproval(HookProvider):
+    """Escalate an ambiguous case before the acting node runs."""
+
+    def __init__(self, store, case_id: str, today) -> None:
+        self._store, self._case_id, self._today = store, case_id, today
+
+    def register_hooks(self, registry: HookRegistry) -> None:
+        registry.add_callback(BeforeNodeCallEvent, self.gate)
+
+    def gate(self, event: BeforeNodeCallEvent) -> None:
+        if event.node_id != "decide":
+            return
+        case = self._store.get(self._case_id)
+        result = evaluate(case, self._today, load_pack(case.program, case.state))
+        if result.decision == "act":
+            return
+        detail = "; ".join(f"{r.code}: {r.detail}" for r in result.reasons)
+        decision = event.interrupt(
+            "grace-caseworker-approval",
+            reason={"case_id": self._case_id, "question": detail},
+        )
+        if str(decision).lower() not in ("approve", "y", "yes"):
+            event.cancel_node = f"Caseworker declined: {detail}"
+```
+
+Attach with `builder.set_hook_providers([CaseworkerApproval(store, case_id, today)])`.
+
+**Namespace the interrupt name** (`grace-caseworker-approval`, not `approval`): the name
+must be unique across all interrupt calls on the event, and namespacing makes responses
+easy to route in the dashboard.
+
+**Keep both layers.** The node hook escalates the whole decision early and cheaply; the
+`AuthorityGate` steering handler remains the last line of defence on individual action
+tools. Defence in depth — a bug in one does not open the other.
+
+### B.3 Interrupts survive a process restart via `session_manager`
+
+The docs' server/client split is exactly Grace's dashboard architecture: interrupt state
+persists through a `session_manager`, so a caseworker can answer hours later in a different
+process. Combine with `agent.state` to avoid re-asking:
+
+```python
+if event.agent.state.get("grace-approval") == "trust":
+    return   # caseworker already blanket-approved this pattern this session
+```
+
+For Plan 2 this becomes `S3SessionManager(session_id=..., bucket=..., prefix=...)`. Note
+`bucket` + `region_name`, **not** `bucket_name` + `region` — the docs are wrong, the code is
+right.
+
+**Multi-agent caution, verified in the docs:** agents *inside* a Graph or Swarm must not
+have their own `session_manager` — only the orchestrator may. Python raises `ValueError`
+otherwise. Multi-agent session managers persist only orchestrator state, not each agent's
+conversation.
+
+### B.4 `interrupt()` fires again on resume — guard side effects
+
+Documented rule: when an interrupt fires from `BeforeToolCallEvent`, `AfterToolCallEvent`
+does **not** fire for that tool, but `AfterToolsEvent` still fires — **once on the interrupt
+cycle and again on resume.** A hook with side effects there can run twice for one assistant
+message.
+
+`LedgerHook` (Task 5) uses `Before/AfterToolCallEvent` only, so it is unaffected. If a
+future ledger hook moves to `AfterToolsEvent`, make the write idempotent on `tool_use_id`.
+
+### B.5 `Interrupt` steering action vs `event.interrupt()`
+
+Two different mechanisms, both valid:
+
+- `Interrupt(reason=...)` returned from `steer_before_tool` — the steering action (Task 5).
+- `event.interrupt(name, reason)` called inside a hook — the hook API (B.2).
+
+Both surface as `result.status == Status.INTERRUPTED` on a Graph. The steering action is
+declarative; the hook call is imperative and lets you branch on the answer inline.
+
+### B.6 Consider `HumanInTheLoop` instead of hand-rolling (evaluate first)
+
+1.54.0 ships `Agent(interventions=[...])` — verified as
+`list[strands.interventions.handler.InterventionHandler] | None` — and a vended
+`HumanInTheLoop` handler with `allowed_tools`, `enable_trust`, `evaluate`, and `ask`.
+
+**Evaluate it in Task 5, but the default remains the custom `AuthorityGate`.** Reason:
+`HumanInTheLoop` gates on *tool identity* (this tool needs approval), whereas Grace must gate
+on *case state* (this tool is fine for household A and must escalate for household B). The
+five gate conditions are Grace's actual product. Its `classifier` option is an LLM deciding
+risk — the opposite of the deterministic, non-model gate the spec requires.
+
+Worth borrowing: the `enable_trust` pattern (a caseworker can approve a pattern for the
+session) as a Plan 3 dashboard feature.
+
+### B.7 Memory: prefer `MemoryManager` over hand-rolled recall (Plan 2)
+
+Verified: `Agent(memory_manager=...)` exists, and
+`MemoryManager(stores, search_tool_config=True, add_tool_config=False, injection=True)`.
+Recall and injection are **on by default**; writes are opt-in.
+
+This is a better fit for Grace's per-household facts than raw `AgentCoreMemorySessionManager`:
+
+- `BedrockKnowledgeBaseStore(name=..., scope="household-<id>", ...)` — **`scope` is the
+  tenant isolation boundary**, stamped on every write and applied as a search filter. One
+  store per household over a single knowledge base is explicitly the documented cheap path.
+- `TestMemoryStore(name="notes", persist=False)` for local tests — zero setup, no cloud.
+- `extraction=True` distills facts from conversations every 5 turns. **Extraction is
+  at-least-once**, so a store must tolerate duplicate writes.
+- Injection **fails open**: a search failure logs and proceeds uninjected. Acceptable for
+  advisory facts; it must never be load-bearing for a gate condition.
+- `flush()` is required before shutdown when using `invoke_async`/`stream_async`, or the last
+  turn's writes are lost. The sync `agent(...)` path flushes automatically.
+
+Required IAM for a writable CUSTOM store: `bedrock:Retrieve`,
+`bedrock:GetKnowledgeBase`, `bedrock:IngestKnowledgeBaseDocuments`. `GetKnowledgeBase` can be
+skipped by passing `knowledge_base_type` explicitly.
+
+**Session vs conversation vs memory** — three distinct things, per the docs:
+
+| Concern | Mechanism |
+|---|---|
+| Resume a conversation after restart | `session_manager` |
+| Stay inside the context window | `context_manager="auto"` |
+| Durable knowledge across sessions | `memory_manager` |
+
+Grace needs all three: sessions for interrupt persistence, context for long deliberations,
+memory for facts that must survive the eleven months between recerts.
+
+### B.8 Guardrails: `guardrail_redact_input` defaults matter
+
+`BedrockModel` accepts `guardrail_id`, `guardrail_version`, `guardrail_trace`, plus
+`guardrail_redact_input` (**default on**) and `guardrail_redact_output` (**default off**).
+When a guardrail trips, Strands overwrites the user's input in history so follow-ups are not
+blocked by the same content.
+
+For Grace, **enable output redaction too** — a benefits agent must not persist blocked model
+output into a family's case history.
+
+Detect it: `response.stop_reason == "guardrail_intervened"` (already in the terminal-problem
+set from A.6).
+
+The docs also show a **shadow mode** pattern: a `HookProvider` calling
+`bedrock.apply_guardrail` directly to log what *would* be blocked without blocking. Worth
+running for a day before enforcement, to see what a guardrail would do to real cases.
+
+### B.9 PII: Strands does no redaction natively
+
+Confirmed: the SDK does **not** redact PII in telemetry. Since traces go to CloudWatch, and
+Grace handles benefits records, Plan 2 must either (a) keep SSNs out of tool inputs and
+outputs entirely — the preferred route, since Grace never needs a full SSN to decide a
+deadline — or (b) add an OTEL collector attribute processor to drop the fields.
+
+Bedrock Guardrails' PII `ANONYMIZE` action covers model input/output. It does **not** cover
+what a tool writes to the ledger or to logs. Those are separate paths and need separate care.
+
+### B.10 Chaos and red-team APIs (Plan 2 evals)
+
+Real, and both fit Grace's threat model:
+
+```python
+from strands_evals.chaos import ChaosCase, ChaosExperiment, ChaosPlugin, NetworkError, Timeout
+from strands_evals.experimental.redteam import (
+    AdversarialCaseGenerator, AttackSuccessEvaluator, CrescendoStrategy, RedTeamExperiment,
+)
+```
+
+- **Chaos:** `ChaosPlugin()` in `plugins=`, effects keyed by tool name. One effect per tool
+  per case — a second raises `ValueError`. `ChaosCase.expand(cases, effect_maps,
+  include_no_effect_baseline=True)` gives the baseline comparison. The evaluator to use is
+  `PartialCompletionEvaluator` plus `FailureCommunicationEvaluator`: for Grace the correct
+  behaviour under a document-store timeout is **escalate**, not guess.
+- **Red team:** `system_prompt_leak` and `data_exfiltration` are the two categories that
+  matter — can an attacker make Grace reveal another household's case? Because Grace's tools
+  take **no household argument**, the expected result is a clean defence, and that is a
+  demonstrable security claim rather than an assertion. Use `agent_factory=` (not `agent=`)
+  for parallel runs. `redteam` is an experimental namespace and git-unpinned; expect drift.

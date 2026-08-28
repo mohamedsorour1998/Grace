@@ -128,12 +128,21 @@ future move is a one-file change.
 
 ### Two SDK behaviours that will surprise you
 
+**Multi-agent interrupts use `result.status`, not `result.stop_reason`.** A Graph or Swarm
+signals an escalation with `result.status == Status.INTERRUPTED` and carries
+`result.interrupts`; only single-agent invocations use `stop_reason == "interrupt"`.
+`GraphResult` has no `stop_reason` field at all. Respond with `interrupt.id` (distinct from
+`interrupt.name`), and never send a null response — the server refuses it. See Appendix B.1.
+
 **Python Graph uses OR semantics.** A node fires when *any* incoming edge is satisfied
 (TypeScript uses AND). `decide` has three incoming edges and firing on the first satisfied
 one is intended — do not "fix" it. See Appendix A.1 of the plan.
 
 **Python accumulates node state on revisit** unless `reset_on_revisit` is enabled. Grace
 builds a fresh graph per case, so it does not bite today.
+
+**Agents inside a Graph or Swarm must not have their own `session_manager`** — only the
+orchestrator may. Python raises `ValueError` otherwise.
 
 ### Framework wiring cheat sheet
 
