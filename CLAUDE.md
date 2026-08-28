@@ -144,6 +144,11 @@ builds a fresh graph per case, so it does not bite today.
 **Agents inside a Graph or Swarm must not have their own `session_manager`** — only the
 orchestrator may. Python raises `ValueError` otherwise.
 
+**AgentCore Gateway renames every tool to `<target>___<tool>`** (three underscores). The
+authority gate must strip that prefix before matching against `ACTION_TOOLS`, or every
+gateway-provided action tool silently bypasses the gate — the exact failure this design
+exists to prevent. See Appendix C.1.
+
 ### Framework wiring cheat sheet
 
 | Thing | Attaches via |

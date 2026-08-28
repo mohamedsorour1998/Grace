@@ -3233,3 +3233,180 @@ from strands_evals.experimental.redteam import (
   take **no household argument**, the expected result is a clean defence, and that is a
   demonstrable security claim rather than an assertion. Use `agent_factory=` (not `agent=`)
   for parallel runs. `redteam` is an experimental namespace and git-unpinned; expect drift.
+
+---
+
+## Appendix C: AgentCore Gateway (READ BEFORE PLAN 2)
+
+From the official AgentCore Gateway developer guide. C.1 is a bug that would silently
+disable the authority gate for every Gateway-provided tool.
+
+### C.1 BUG: Gateway prefixes every tool name with `<target>___<tool>`
+
+Tool names visible over MCP are constructed as:
+
+```text
+${target_name}___${tool_name}
+```
+
+Three underscores. So a tool `submit_renewal` on a target named `grace-actions` appears to
+the agent as `grace-actions___submit_renewal`.
+
+**This breaks `AuthorityGate`.** Task 5 checks `tool_use["name"] not in ACTION_TOOLS`, and
+`"grace-actions___submit_renewal" not in ACTION_TOOLS` is `True` — so the gate would classify
+every gateway action tool as read-only and let it through unchecked. The exact failure this
+whole design exists to prevent.
+
+Fix: strip the prefix before matching, in `grace/steering.py`:
+
+```python
+TARGET_PREFIX_SEPARATOR = "___"
+
+
+def _bare_tool_name(name: str) -> str:
+    """Strip the Gateway target prefix from an MCP tool name.
+
+    AgentCore Gateway exposes tools as `${target_name}___${tool_name}`. The gate
+    matches on the bare name so a gateway-provided action tool is still gated.
+    """
+    _, _, bare = name.rpartition(TARGET_PREFIX_SEPARATOR)
+    return bare or name
+```
+
+Then use `name = _bare_tool_name(tool_use.get("name", ""))` in `steer_before_tool`.
+
+Add this test to `tests/test_steering.py` in Task 5 — it fails without the fix:
+
+```python
+async def test_gateway_prefixed_action_tool_is_still_gated():
+    """AgentCore Gateway exposes tools as `target___tool`. The gate must still
+    recognise the action, or every gateway tool bypasses it."""
+    gate = _gate("c-010")  # a case that must escalate
+    gate._seen = {"read_case", "check_window", "list_documents"}
+    action = await gate.steer_before_tool(
+        agent=None,
+        tool_use={"name": "grace-actions___submit_renewal", "input": {}},
+    )
+    assert isinstance(action, Interrupt)
+```
+
+Also note: when semantic search is enabled, `x_amz_bedrock_agentcore_search` is listed
+**first** in `tools/list`. It is a read tool; no gate change needed, but it will appear in
+the ledger.
+
+### C.2 `parameterOverrides` — the identity-hiding pattern, natively
+
+The Managed Knowledge Bases connector documents exactly the property Grace needs, as a
+first-class Gateway feature:
+
+- **`parameterValues`** — administrator-set values sent to the backend on every call. The
+  agent never sees them.
+- **`parameterOverrides`** — a list controlling which request fields the agent can see and
+  set, each with `path`, `description`, and `visible: true | false`.
+
+So the household identifier is bound in `parameterValues` and simply **not listed** in
+`parameterOverrides`. The agent cannot set it because it is not in the tool's input schema.
+This is the documented pattern ("Bind `knowledgeBaseId` in `parameterValues` and do not
+expose it"), not a workaround.
+
+For a Lambda target the equivalent is the explicit `--tool-schema-file`: Grace's schema
+declares `properties: {}` for household-scoped reads, and the interceptor supplies identity.
+
+### C.3 Interceptor Lambda: where verified identity is injected
+
+`interceptorConfigurations` on the gateway runs custom code per request. This is the
+documented home for the pattern the reference repo used: decode the caseworker's JWT, then
+inject the verified household ID into the tool arguments server-side.
+
+Combined with C.2, a prompt injection has nothing to attack — the parameter is absent from
+the schema and the value arrives from the token.
+
+**Caution from the docs:** interceptors are supported in **buffered mode only** for
+AgentCore Runtime and passthrough targets — *not* in streaming mode. Grace's sweep is
+buffered, so this is fine, but a future streaming dashboard could not rely on it.
+
+### C.4 Policy engine has a shadow mode — use it first
+
+`--policy-engine-mode LOG_ONLY` evaluates policies and logs decisions **without enforcing**;
+`ENFORCE` enforces them. Start in `LOG_ONLY` for a day, confirm no legitimate caseworker
+action would have been blocked, then flip to `ENFORCE`. Same discipline as the guardrail
+shadow-mode pattern in B.8.
+
+### C.5 `InvokeGateway` is the caller's permission, not the execution role's
+
+Explicit in the docs and easy to get backwards:
+
+| Permission | Belongs to |
+|---|---|
+| `bedrock-agentcore:InvokeGateway` | The **caller** — the dashboard API or agent invoking the gateway |
+| `bedrock-agentcore:GetConfigurationBundleVersion` | The gateway **execution role** (only for MCP `tools/list` with config bundles) |
+| Backend access (e.g. `lambda:InvokeFunction`) | The gateway **execution role** |
+
+**Security warning worth heeding:** the execution role is *shared across every target* using
+`GATEWAY_IAM_ROLE`, and its permissions are the upper bound on what any authorized caller can
+exercise. For Grace that means one gateway, narrowly scoped, and no unrelated targets sharing
+it.
+
+Trust policy for the execution role:
+
+```json
+{
+  "Effect": "Allow",
+  "Principal": { "Service": "bedrock-agentcore.amazonaws.com" },
+  "Action": "sts:AssumeRole",
+  "Condition": {
+    "StringEquals": { "aws:SourceAccount": "<AWS_ACCOUNT_ID>" },
+    "ArnLike": { "aws:SourceArn": "arn:aws:bedrock-agentcore:us-east-1:<AWS_ACCOUNT_ID>:gateway/grace-*" }
+  }
+}
+```
+
+The gateway ARN is unknown before creation, so omit `Condition` on the first pass and add it
+back immediately after — the docs recommend exactly this, and leaving it off is a standing
+confused-deputy exposure.
+
+### C.6 Lock the runtime behind the gateway
+
+Otherwise the gateway's guardrails, interceptors, and policy engine are all optional from an
+attacker's point of view. For an IAM runtime, attach a resource-based policy restricting
+`InvokeAgentRuntime` to the gateway's execution role. For a JWT runtime, set
+`allowedWorkloadConfiguration` on the runtime's `customJWTAuthorizer`.
+
+Grace's runtime must not be directly invocable.
+
+### C.7 Target and auth choices for Grace
+
+**Targets** — Lambda functions with an explicit tool schema. Rule-pack lookups and document
+queries are Grace's own code, not third-party APIs, and Lambda is the only target type where
+Grace fully controls the tool schema (which C.2 depends on). No OpenAPI or Smithy target
+needed.
+
+**Inbound auth** — `CUSTOM_JWT` with the caseworker identity provider. Not `NONE`: the docs
+are blunt that with `NONE` or `AUTHENTICATE_ONLY` the gateway enforces nothing and *"any
+caller can reach your target"*.
+
+**Outbound auth** — `GATEWAY_IAM_ROLE`. For **Lambda, API Gateway, Smithy, and Connector**
+targets, pass `credentialProviderType` only. For **MCP server and OpenAPI** targets you must
+also supply `iamCredentialProvider` with a `service` name (`bedrock-agentcore` for
+AgentCore-hosted, `execute-api` behind API Gateway). Getting this wrong is a target-creation
+failure, not a runtime one.
+
+**Semantic search** — enable it at creation. It cannot be added later, and it is available in
+`us-east-1`. Grace has few enough tools that it is not required, but the option closes at
+creation time.
+
+### C.8 Deferred and not needed
+
+- **Gateway rules** (priority conditions, weighted traffic splits, A/B testing) — real and
+  useful for canarying a new rule-pack version, but out of scope for 17 days.
+- **Web Search Tool connector** — Grace's policy retriever reads versioned rule packs, not
+  the open web. A benefits deadline must come from a pinned rule pack, never a search result.
+- **Elicitation / sampling / MCP sessions** — Grace escalates at the graph node boundary
+  (B.2), not through gateway elicitation.
+- **`userContext`** — if Grace ever uses a Knowledge Base store with access-control
+  filtering, note the docs' warning: *"The Gateway does not populate `userContext` from the
+  caller's IAM identity — your application must supply it explicitly."* An unset `userContext`
+  is not a safe default.
+- **Resource URIs** — the docs warn Gateway does **not** sanitize resource URIs from
+  downstream MCP servers (SSRF, `file:///etc/passwd`). Grace exposes no resources; if that
+  changes, allowlist the URI scheme.
