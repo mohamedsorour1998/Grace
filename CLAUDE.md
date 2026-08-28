@@ -76,6 +76,13 @@ These are not stylistic preferences. Breaking one is a bug.
    family their renewal was filed unless `submit_renewal` returned successfully. This is the
    specific failure this system must not have.
 7. **Escalating is always allowed.** `escalate_to_caseworker` is never gated.
+8. **Never remove the span-redaction token.** `OTEL_SEMCONV_STABILITY_OPT_IN` must keep the
+   `gen_ai_unredacted_attributes=` suffix. Its value lists what to leave *unredacted*, so the
+   empty value means "redact everything"; **absence of the token disables redaction entirely**
+   and exports the full household record to CloudWatch. The trailing `=` is load-bearing.
+9. **Never put household identity in a span attribute.** `trace_attributes` are exported
+   verbatim — the rule-8 policy covers only the five `gen_ai.*` content attributes, not custom
+   ones. `grace.case_id` yes; name, phone, or address never. Same rule as the JWT `sub`.
 
 ---
 
@@ -92,7 +99,13 @@ Python 3.12 via `uv`. AWS: account `<AWS_ACCOUNT_ID>`, `us-east-1`, Bedrock Nova
 
 ### Dependencies — deliberately minimal
 
-`strands-agents==1.54.0`, `boto3`, `pyyaml`, plus pytest for dev. That is all.
+`strands-agents[otel]==1.54.0`, `boto3`, `pyyaml`, plus pytest for dev. That is all.
+
+The `[otel]` extra declares exactly **one** package
+(`opentelemetry-exporter-otlp-proto-http`), which costs 10 transitively — all first-party OTEL
+or protobuf, 52 → 62 on the clean venv. **Do not add `aws-opentelemetry-distro`** — the AWS
+docs call for it and for running under `opentelemetry-instrument`, but only for agents hosted
+*outside* AgentCore Runtime. Runtime instruments itself.
 
 **Do not install `strands-agents-tools`.** It pulls `slack-bolt`, `slack-sdk`,
 `beautifulsoup4`, `pillow`, `sympy`, and `watchdog` — 30 packages Grace never imports. The
@@ -121,6 +134,7 @@ Known doc errors, verified against 1.54.0:
 | `/users/{actorId}/facts` memory namespace | Working code uses `/facts/{actorId}` — must match the `namespaceTemplates` set at memory creation |
 | `agentcore configure` / `launch` | Current CLI is `agentcore create` → `add` → `deploy` |
 | `Interrupt` usable in `steer_after_model` | Type-invalid. `ModelSteeringAction = Proceed \| Guide`. Gate in `steer_before_tool` |
+| Enabling `gen_ai_latest_experimental` protects span content | It does **not**. Redaction needs the separate `gen_ai_unredacted_attributes=` token; without it every prompt and tool result exports verbatim |
 
 Also: `strands.experimental.steering` is the **old** import path. Use
 `strands.vended_plugins.steering`, re-exported through `grace/vendored_actions.py` so a
@@ -158,6 +172,17 @@ See Appendix D.1.
 
 **The JWT `sub` claim must be an opaque ID, never a name or email** — inbound JWT claims are
 logged to CloudTrail, which is outside the guardrail's PII redaction. See Appendix D.4.
+
+**`StrandsTelemetry()` hijacks the global tracer provider** — constructing it calls
+`trace_api.set_tracer_provider(...)` as a side effect. On AgentCore Runtime that replaces a
+working provider with a second one, so skip it there; gate on `AGENT_OBSERVABILITY_ENABLED`,
+which Runtime sets. Also: exporters are opt-in, so traces are created and silently dropped
+until `setup_console_exporter()` or `setup_otlp_exporter()` is called, and failed exporter
+setup is logged rather than raised. See Appendix E.3.
+
+**CloudWatch Transaction Search is a prerequisite, not an optimization** — without it AgentCore
+spans are not searchable at all. One-time per account, up to ten minutes to take effect. Do it
+well before recording the demo, not on the day. See Appendix E.5.
 
 ### Framework wiring cheat sheet
 
@@ -218,6 +243,27 @@ the demo: nine cases handled alone, three escalated, each with a reason.
 The ledger is the ground truth for what executed. Trajectory evals read from it rather than
 the model transcript, because a transcript-based eval would miss a tool that ran but was not
 logged.
+
+### Observability — traces complement the ledger, they do not replace it
+
+The ledger records *what Grace decided and did*, durably, in DynamoDB. Traces record *how long
+it took and in what order*, sampled, in CloudWatch. A trace can be dropped by sampling; a
+ledger entry cannot. **Never move an eval assertion from the ledger to a span.**
+
+Every ledger entry carries the active OTEL trace ID (32 lowercase hex) so a DynamoDB row joins
+to its CloudWatch trace. The interesting test is that the two agree: a tool in
+`GraphResult.execution_order` with no ledger entry means a tool ran without being logged.
+
+Attach `grace.case_id`, `grace.program`, `grace.window_status`, `grace.gate_decision`, and
+`grace.gate_reason` via `trace_attributes=`. Filtering Transaction Search on
+`grace.gate_decision = "escalate"` should return exactly three traces — that query is the
+demo's central claim, executed rather than narrated. Note `Agent.__init__` silently drops
+non-scalar values, so pass `gate.reason or ""`, never `None`.
+
+Alarm on **escalation count `< 3`**, not on error rate. Acting when Grace should have escalated
+produces no error, no throttle, and no latency spike — it looks like success.
+
+See Appendix E of the plan for the full detail.
 
 ---
 
