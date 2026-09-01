@@ -27,17 +27,17 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 3 complete.** 121 tests passing (`.venv/bin/python -m pytest`, or
-`.venv/bin/pytest` directly). Task 4 — the Nova model registry and session-bound tools — is
-next; this is where capability absence starts to become real.
+**Plan 1, Task 4 complete.** 157 tests passing (`.venv/bin/python -m pytest`, or
+`.venv/bin/pytest` directly). Task 5 — wiring `evaluate` into a real `SteeringHandler` — is
+next; this is where capability absence and the gate actually start enforcing anything.
 
 | Task | State |
 |---|---|
 | 1 — rule packs + deadline math | **done** — `grace/rules/{pack,clock}.py`, 48 tests |
 | 2 — case types, store, 12 fixtures | **done** — `grace/cases/{models,store}.py`, `fixtures/households.yaml`, 60 tests |
 | 3 — the authority gate | **done** — `grace/authority.py`, 121 tests total. The task that matters most. |
-| 4 — Nova model registry + tools | next |
-| 5 — `AuthorityGate` + `LedgerHook` | not started — **read "What Task 3 established" below first: `evaluate` can raise `ValueError` or `TypeError`, and the steering handler must catch `Exception`, not `ValueError`** |
+| 4 — Nova model registry + tools | **done** — `grace/models.py`, `grace/tools/{read,action}.py`, 157 tests total |
+| 5 — `AuthorityGate` + `LedgerHook` | next — **read "What Task 3/4 established" below first: `evaluate` can raise, and until this task lands, nothing calls it — the read tools' `_UNVERIFIABLE` string is not enforcement** |
 | 6 — Graph spine + `grace sweep` CLI | not started |
 | 7 — deliberation swarm | not started |
 | 8 — trajectory evals | not started |
@@ -47,9 +47,12 @@ next; this is where capability absence starts to become real.
 committed — **do not recreate them.** Dependencies are installed in `.venv`; no install step is
 needed to run tests.
 
-**Capability absence is not implemented yet.** It arrives in Task 4 (tool construction) and
-Task 5 (the steering gate). Until then, nothing enforces the boundary — do not write code that
-assumes it is already there.
+**Capability absence is half-implemented.** Task 4 built the tool *shape* — read tools take
+zero arguments, so a model has no parameter to redirect toward another family's data (verified
+against the real `tool.stream()` invocation path, not just a direct call). But nothing calls
+`evaluate` yet outside its own tests, and no action tool is gated by anything. Task 5 is what
+makes the gate actually run before a state-changing tool executes. Until then, do not write
+code that assumes an action tool's execution is conditional on anything.
 
 ### What Task 1 established — follow these
 
@@ -134,6 +137,60 @@ responsible for escaping it there. Do not add escaping logic to `authority.py`.
 changed once. Do not surface `reasons[0]` as "the" reason for a case (e.g. in a span attribute
 or a briefing) without picking deliberately — compare on `.code`, or treat `reasons` as a set.
 
+### What Task 4 established — follow these
+
+**Read tools share `_most_recent` with the gate — never a second dict comprehension.**
+`grace/tools/read.py`'s `list_documents` imports `_most_recent` from `grace.authority` directly,
+rather than reimplementing document selection. `list_documents` is what a model reads before
+deciding whether to call `submit_renewal`; `evaluate` is what actually permits it. If the two
+selected different copies of the same `doc_id`, the model would reason from facts the gate does
+not share, and the disagreement would be invisible — no error, tool says "current," gate says
+"stale." A duplicated implementation can drift out of sync; an import cannot.
+
+**A read tool that catches only `(InvalidRulePack, ValueError)` still fails open.** `load_pack`
+can return a pack whose values are individually valid but whose date arithmetic overflows —
+`grace_period_days_after_end: 999999999` loads cleanly, then `renewal_window` raises
+`OverflowError`, a third exception type from the same underlying cause Task 3 already warned
+about. `check_window` now catches `Exception` broadly, matching the discipline Task 3 already
+mandates for `evaluate`'s callers. If you add a new read tool that calls `renewal_window`,
+catch broadly there too — narrowing to "the exceptions I've seen so far" is how this bug
+happened the first time.
+
+**A `Channel`'s `send()` return value must be coerced to `str` before it reaches the ledger.**
+`Channel` is a plain `Protocol`, not `@runtime_checkable`, so its `-> str` annotation is
+enforced by nothing. Plan 2's real SNS implementation will naturally return a boto3 response
+shape (a dict), which `LedgerEntry`'s scalar-only contract rejects — *after* the message has
+already been sent. That is hard rule 6 inverted: the family was contacted and the audit trail
+says nothing happened. `send_family_message` wraps the call in `str(...)` for exactly this
+reason; any new action tool that logs a channel's return value must do the same.
+
+**A no-argument tool spec is not enforced by rejection — it is enforced by absence.** Verified
+against the real invocation path (`tool.stream()`, not a direct Python call): an injected
+`{"case_id": "c-002"}` argument on a zero-argument tool is *silently discarded*, and the call
+succeeds against the bound case. There is no error, no signal that an injection was attempted —
+it looks identical to a normal call. CLAUDE.md's "no parameter to poison" phrasing is correct
+about the outcome and imprecise about the mechanism: nothing validates and rejects an
+injected argument, because the parameter simply does not exist for `strands` to bind it to.
+
+**Closure-cell mutation is a real gap, and deliberately not defended against.** `case_id` and
+`store` are ordinary Python closure variables; rewriting `read_case.__closure__[i].cell_contents`
+redirects the tool (confirmed). This requires arbitrary code execution in the agent's own
+process, which is a different threat class than prompt injection — an attacker who can rewrite
+closure cells can equally reach `store` and `evaluate` directly, so no binding strategy in
+`read.py` would close this. Do not attempt to harden the closure; the boundary that matters is
+the process boundary, not the variable-binding strategy inside it.
+
+**`_UNVERIFIABLE` is a courtesy string, not enforcement, and there is currently nothing behind
+it.** Until Task 5 lands, no code outside `test_authority.py` calls `evaluate` at all — a read
+tool returning `_UNVERIFIABLE` does not, today, force anything. Do not mistake the string's
+presence for capability absence being wired end-to-end; it becomes enforcement only once Task
+5's steering handler actually gates action-tool execution on the gate's verdict.
+
+**Model-ID guards must scan the whole package, not a list of modules someone remembered.**
+`pkgutil.walk_packages` over `grace/`, not a hardcoded tuple — confirmed a real Claude
+inference-profile ID inlined into `read.py` passed all 157 tests before this fix, because the
+non-Nova-vendor check ran against `models.py` only. Any new module (Task 5's `steering.py` is
+next) is covered automatically only because the test discovers modules from disk.
 
 
 ## The one idea that matters

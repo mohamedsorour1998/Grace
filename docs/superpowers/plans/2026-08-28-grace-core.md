@@ -1356,7 +1356,7 @@ git commit -m "feat: deterministic authority gate with typed escalation reasons"
   - `grace/tools/action.py`: `make_action_tools(store: CaseStore, case_id: str, channel) -> list` returning `submit_renewal`, `send_family_message`, `escalate_to_caseworker`
   - `Channel` Protocol: `send(phone: str, body: str) -> str`; `TranscriptChannel` implementing it
 
-- [ ] **Step 1: Write `grace/models.py`**
+- [x] **Step 1: Write `grace/models.py`**
 
 Every model ID lives here. Call sites reference the role, never the string — so switching a
 model is one edit, and the "Nova only" constraint is checkable in one file.
@@ -1458,7 +1458,7 @@ on a model choosing to obey, because `submit_renewal` is not registered as a cap
 case that has not passed verification. Worth citing in the README — a measured failure is
 better evidence than an argument.
 
-- [ ] **Step 2: Write the failing tools test**
+- [x] **Step 2: Write the failing tools test**
 
 `tests/test_tools.py`:
 
@@ -1536,12 +1536,12 @@ def test_escalate_records_the_reason(store):
     assert "30%" in entries[0].detail["question"]
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_tools.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.tools.read'`
 
-- [ ] **Step 4: Write `grace/tools/read.py`**
+- [x] **Step 4: Write `grace/tools/read.py`**
 
 ```python
 """Read tools. Free to call — they change nothing.
@@ -1623,7 +1623,7 @@ def make_read_tools(store: CaseStore, case_id: str, today: date) -> list:
     return [read_case, check_window, list_documents]
 ```
 
-- [ ] **Step 5: Write `grace/tools/action.py`**
+- [x] **Step 5: Write `grace/tools/action.py`**
 
 ```python
 """Action tools. Every one of these changes state and is reachable only
@@ -1715,14 +1715,17 @@ def make_action_tools(store: CaseStore, case_id: str, channel: Channel) -> list:
     return [submit_renewal, send_family_message, escalate_to_caseworker]
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
-Run: `.venv/bin/python -m pytest tests/test_tools.py -v`
-Expected: PASS — 7 tests
+Run: `.venv/bin/python -m pytest`
+Expected: PASS — **157 tests, not 128.** Prior 121 plus **36** in `test_tools.py`, not the
+plan's estimated 7 — the extras cover fail-closed paths and the model registry the plan's
+draft never tested.
 
 If `test_read_tools_take_no_case_id_argument` fails on the `tool_spec` shape, print one
 spec to see the real structure and adjust the assertion — the *property* being tested
-(no arguments) is what matters, not the exact access path:
+(no arguments) is what matters, not the exact access path. It did not fail; the plan's
+assumed shape matched exactly:
 
 ```bash
 .venv/bin/python -c "
@@ -1734,7 +1737,49 @@ import json; print(json.dumps(t.tool_spec, indent=2))
 "
 ```
 
-- [ ] **Step 7: Verify the Nova-only constraint holds**
+**Three real defects review found in the implementation, all fixed — read these before Task 5
+touches these tools:**
+
+1. **`list_documents` must not select "the" document for a `doc_id` by record order.** The
+   plan's `{d.doc_id: d for d in c.documents}` is the same bug Task 3 found and fixed in
+   `authority.py`. Fixed here by importing `_most_recent` from `grace.authority` directly,
+   rather than duplicating the logic: `list_documents` is what a model reads before deciding
+   whether to call `submit_renewal`, and `evaluate` is what actually permits it — if the two
+   selected different copies of the same document, the model would reason from facts the gate
+   does not share, and the disagreement would be invisible.
+2. **`check_window` failed *open* on `OverflowError`.** A pack with an absurd
+   `grace_period_days_after_end` (e.g. `999999999`) loads cleanly through `load_pack`'s own
+   validation — nothing there enforces an upper bound — and then `cert_end + timedelta(days=…)`
+   overflows `date`. The original `except (InvalidRulePack, ValueError)` let that escape as a
+   raw exception, both via a direct call and, via `tool.stream()`, as a bare error tool-result
+   the model would have to guess how to handle instead of the escalate instruction. Widened to
+   `except Exception`, matching the discipline CLAUDE.md already mandates for `evaluate`'s own
+   callers (Task 3) — this is the same bug shape one layer up.
+3. **`send_family_message` could send a message and lose the ledger row that proves it.**
+   `Channel` is a plain `Protocol`, not `@runtime_checkable`, so its `-> str` return annotation
+   on `send()` is enforced by nothing. A plausible real SNS implementation naturally returns a
+   boto3 response shape (a dict with `MessageId`), which `LedgerEntry`'s scalar-only contract
+   then rejects — *after* the message was already sent. The family gets contacted; the audit
+   trail says nothing happened. That is the exact inverse of hard rule 6, and it defeats the
+   send-then-log ordering that exists specifically to prevent a false success claim. Fixed with
+   `ref = str(channel.send(...))` at the boundary.
+
+**Model-ID guard scope — fixed.** The original tests checked three hardcoded modules for a
+Nova-shaped ID (`"amazon.nova"`) and checked `models.py` alone for a non-Nova vendor literal.
+Confirmed: inlining a real Claude inference-profile ID directly into `read.py` passed all 157
+tests, because the check that would have caught a third-party vendor never ran against that
+module. Both guards now walk every module under `grace/` from disk via `pkgutil.walk_packages`,
+so a new module (Task 5's `steering.py`, landing next) is covered automatically rather than by
+whoever remembers to add it to a list.
+
+- [x] **Step 7: Verify the Nova-only constraint holds**
+
+**The shell grep below is broken under zsh and should be treated as advisory, not the real
+check.** `--include=*.py` is glob-expanded by zsh before `grep` ever sees it
+(`no matches found: --include=*.py`), and `-i` would match "CLAUDE.md" in this repo's own
+coments (`claude` is a substring). The real check is `test_no_module_declares_a_non_nova_
+provider` in `test_tools.py` — AST-parsed string literals, not grepped source — for the same
+reason `test_authority.py`'s purity test parses rather than greps.
 
 ```bash
 grep -rnE "claude|gpt-|gemini|llama|mistral" grace/ --include=*.py || echo "CLEAN: Nova only"
@@ -1748,7 +1793,7 @@ print('all models are Amazon Nova')
 
 Expected: `CLEAN: Nova only` and `all models are Amazon Nova`
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add grace/models.py grace/tools/ tests/test_tools.py
