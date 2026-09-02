@@ -3174,12 +3174,14 @@ Expected: PASS — **351 tests, not 63.** Prior total was 285; the plan's estima
 stale before this task's own swarm-collapse and timeout/verdict-ordering fixes changed the
 count further.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add grace/swarm.py grace/graph.py tests/test_swarm.py tests/test_graph.py
 git commit -m "feat: three-agent deliberation swarm behind a conditional edge"
 ```
+
+Committed as `1771015`.
 
 ---
 
@@ -3385,7 +3387,7 @@ assumed:**
    appear in the ledger; that would fail on a correctly-running graph and contradict what
    Task 8 already established and tested.
 
-- [ ] **Step 1: Write the failing trace-correlation test**
+- [x] **Step 1: Write the failing trace-correlation test**
 
 `tests/test_ledger_trace_correlation.py`:
 
@@ -3480,7 +3482,7 @@ def test_decides_tool_metrics_agree_with_its_ledger_tool_calls():
     )
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_ledger_trace_correlation.py -v`
 Expected: FAIL on `test_every_ledger_entry_carries_a_trace_id_key` and
@@ -3488,7 +3490,7 @@ Expected: FAIL on `test_every_ledger_entry_carries_a_trace_id_key` and
 `_current_trace_id` does not exist yet, and no entry carries `trace_id` yet. The first two
 tests (no tracer / tracer configured) exercise `_current_trace_id` directly and cost nothing.
 
-- [ ] **Step 3: Write `_current_trace_id` and wire it into `LedgerHook`**
+- [x] **Step 3: Write `_current_trace_id` and wire it into `LedgerHook`**
 
 In `grace/ledger.py`, add:
 
@@ -3529,7 +3531,7 @@ Then change `LedgerHook._append` to include it:
 (Task 2), so `detail={"trace_id": None, ...}` passes `LedgerEntry`'s own type check without
 special-casing.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `.venv/bin/python -m pytest tests/test_ledger_trace_correlation.py -v`
 Expected: PASS — 4 tests. If `test_decides_tool_metrics_agree_with_its_ledger_tool_calls` fails
@@ -3538,13 +3540,13 @@ adjust — the *property* being tested (decide's own tool-call tally matches its
 rows) is what matters, not the exact attribute chain, and this is exactly the kind of SDK
 surface every prior task has found drifts from what a first read suggests.
 
-- [ ] **Step 5: Run the whole suite**
+- [x] **Step 5: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS. Prior total was 351; report the real number, since every prior task's estimate
 in this plan has proven stale once written.
 
-- [ ] **Step 6: Confirm no household identity reached a span**
+- [x] **Step 6: Confirm no household identity reached a span**
 
 `_current_trace_id` reads only the trace ID — it never touches span attributes, and this task
 adds no new `trace_attributes=` anywhere. Confirm this stays true:
@@ -3557,12 +3559,18 @@ Expected: no new occurrences beyond what already exists (if any). Appendix E.4/C
 rule 9 govern what may go into `trace_attributes=` if a future task adds it — `grace.case_id`
 only, never a household's name, phone, or address.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
-git add grace/ledger.py tests/test_ledger_trace_correlation.py
+git add grace/ledger.py grace/tools/action.py tests/test_ledger_trace_correlation.py
 git commit -m "feat: correlate ledger entries with their OTEL trace ID"
 ```
+
+Widened to include `grace/tools/action.py`: the plan's own draft above wires the trace ID
+into `LedgerHook` alone, but there are two ledger writers, not one — see the finding recorded
+after Step 3 and CLAUDE.md's "What Task 9 established". Committing only `ledger.py` would
+leave `renewal_submitted`/`family_message_sent`/`escalated` — the rows `sweep` actually
+classifies cases from — without a trace ID.
 
 ---
 

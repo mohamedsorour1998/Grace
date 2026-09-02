@@ -27,12 +27,13 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 8 complete.** 351 unit tests passing (`.venv/bin/python -m pytest`), plus 23
-trajectory evals passing separately against real Bedrock (`.venv/bin/python -m pytest evals/`
-— not part of the fast suite; `testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs
-end to end and reports **9 acted / 3 escalated**, and the evals now prove the gate ordering
-holds against five real graph invocations, not just the unit tests of `evaluate()` in
-isolation. Task 9 — ledger/trace correlation — is next.
+**Plan 1 is complete — all 9 tasks done.** 360 unit tests passing
+(`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against real
+Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
+`testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs end to end and reports
+**9 acted / 3 escalated**, the evals prove the gate ordering holds against five real graph
+invocations, and every ledger row now carries the OTEL trace ID that joins it to its
+CloudWatch trace. Plan 2 (AgentCore deploy) is next.
 
 | Task | State |
 |---|---|
@@ -44,7 +45,7 @@ isolation. Task 9 — ledger/trace correlation — is next.
 | 6 — Graph spine + `grace sweep` CLI | **done** — `grace/{graph,run}.py`, 285 tests total. The first runnable end-to-end path. **Read "What Task 6 established" below before touching the sweep or the swarm** |
 | 7 — deliberation swarm | **done** — `grace/swarm.py`, 351 tests total. **Read "What Task 7 established" — a swarm ends when a node does not hand off, two separate defects made it collapse to one model silently, and two more (a timeout margin, a verdict-extraction order dependency) were found in review of the first two fixes** |
 | 8 — trajectory evals | **done** — `evals/{test_gate_trajectory.py,README.md}`, 23 evals against real Bedrock. **Read "What Task 8 established" — `strands-agents-evals` is never installed, and the headline test was vacuous on the two most important cases until review caught it** |
-| 9 — ledger/trace correlation | next |
+| 9 — ledger/trace correlation | **done** — `grace/ledger.py`, `tests/test_ledger_trace_correlation.py`, 360 tests total. **Read "What Task 9 established" — there are two ledger writers, not one, and this is the one place fail-closed is the wrong instinct** |
 
 `pyproject.toml`, `LICENSE`, `.gitignore`, `.env.example`, `README.md` all exist and are
 committed — **do not recreate them.** Dependencies are installed in `.venv`; no install step is
@@ -492,6 +493,52 @@ escalation, or a refused attempt) sounds like a safety property, but the gate ne
 a tool call — a model that reads everything and answers only in prose passes the gate's own
 checks while failing this test. Label by what can make an assertion fail on a correctly-behaving
 system, not by how important the property feels.
+
+### What Task 9 established — follow these
+
+**There are two ledger writers, not one, and the plan only wired the trace ID into one of
+them.** `LedgerHook._append` (`grace/ledger.py`) writes `tool_call`/`tool_result`; but
+`make_action_tools`'s own `_log` (`grace/tools/action.py`) independently writes
+`renewal_submitted`, `family_message_sent`, and `escalated` — the rows that record what Grace
+actually *did* rather than which tools it invoked, and the ones `sweep` classifies a case from
+(it looks for `renewal_submitted`, per Task 6). Wiring only the hook left exactly those rows
+with no `trace_id`, unjoinable to their CloudWatch trace, while every test that inspected hook
+rows still passed. Both now share `_current_trace_id`. `test_every_ledger_writer_in_grace_records_a_trace_id`
+walks `grace/` with `pkgutil` and fails on any *new* module that calls `append_ledger` without
+it — the same discovery-from-disk discipline Task 4's model-ID guard established, for the same
+reason: a hardcoded list of writers someone remembered is how this was missed the first time.
+**Before adding a field to "every ledger entry", grep for `append_ledger` and count the call
+sites.**
+
+**`_current_trace_id` is the one place in this codebase where fail-closed is the wrong
+instinct — and a `HookProvider`'s exception is *not* swallowed the way a `SteeringHandler`'s
+is.** Verified directly against the SDK: `HookRegistry.invoke_callbacks` re-raises anything
+that is not an `InterruptException` (its own docstring says so), and `ToolExecutor._stream`
+catches it and substitutes a `status: "error"` tool result. Confirmed empirically with a
+raising hook on a real tool call. So an exception escaping `_current_trace_id` would convert a
+tool that had *already passed the gate* into a failed call — `submit_renewal` reporting an
+error on a clean case, and a renewal that never gets filed. That is the inverse of Task 5's
+finding about `steer_before_tool`, where an exception is swallowed and the tool runs *ungated*.
+**The distinction is what the code is deciding, not which class it lives in:** failing closed
+on a *verification* question protects the family; failing closed on an *observability* question
+harms them, because nothing relies on the trace ID to decide anything. `get_span_context()` is
+a method on an arbitrary `Span` implementation and a misconfigured or partially shut-down
+provider can raise from it, so the `try` is real, not boilerplate. Lose the trace ID; keep the
+ledger row.
+
+**Never assert a fixed tool-call count against a real model run.** Measured across three real
+`c-001` invocations, `submit_renewal`'s `call_count` was `1`, `2`, `2` — the `2` when the gate
+`Guide`s a first attempt and the model retries, both correct behaviour. The plan's own draft
+cited `submit_renewal: 2` as the observed value, and a test asserting that number would have
+failed one run in three with nothing wrong. The correlation test compares `decide`'s
+`tool_metrics` **against its own ledger rows** as two `Counter`s, which is a property of the
+wiring rather than of the model's choices, plus an explicit `assert from_ledger` so an empty-vs-
+empty comparison cannot pass vacuously (the Task 8 lesson).
+
+**`is_valid` bounds-checks the trace ID, so `format(..., "032x")` cannot overflow 32
+characters.** `SpanContext.is_valid` is precomputed at construction and already rejects a
+trace ID outside the 128-bit range — verified: `2**128` gives `is_valid == False`, `2**128 - 1`
+formats to exactly 32 hex chars. No separate length guard is needed.
 
 
 ## The one idea that matters
