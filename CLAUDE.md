@@ -27,12 +27,12 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 7 complete.** 351 tests passing (`.venv/bin/python -m pytest`, or
-`.venv/bin/pytest` directly). `grace sweep` runs end to end against real Bedrock and reports
-**9 acted / 3 escalated**, stable across consecutive runs, with `c-011` and `c-012` now
-carrying a referee's conclusion alongside the gate's typed reason — including a real run where
-the referee argued `CLEAR:` on a case the gate still correctly escalated. Task 8 — trajectory
-evals — is next.
+**Plan 1, Task 8 complete.** 351 unit tests passing (`.venv/bin/python -m pytest`), plus 23
+trajectory evals passing separately against real Bedrock (`.venv/bin/python -m pytest evals/`
+— not part of the fast suite; `testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs
+end to end and reports **9 acted / 3 escalated**, and the evals now prove the gate ordering
+holds against five real graph invocations, not just the unit tests of `evaluate()` in
+isolation. Task 9 — ledger/trace correlation — is next.
 
 | Task | State |
 |---|---|
@@ -43,8 +43,8 @@ evals — is next.
 | 5 — `AuthorityGate` + `LedgerHook` | **done** — `grace/{steering,ledger,vendored_actions}.py`, 212 tests total. Capability absence is now real enforcement, not shape. |
 | 6 — Graph spine + `grace sweep` CLI | **done** — `grace/{graph,run}.py`, 285 tests total. The first runnable end-to-end path. **Read "What Task 6 established" below before touching the sweep or the swarm** |
 | 7 — deliberation swarm | **done** — `grace/swarm.py`, 351 tests total. **Read "What Task 7 established" — a swarm ends when a node does not hand off, two separate defects made it collapse to one model silently, and two more (a timeout margin, a verdict-extraction order dependency) were found in review of the first two fixes** |
-| 8 — trajectory evals | next |
-| 9 — ledger/trace correlation | not started |
+| 8 — trajectory evals | **done** — `evals/{test_gate_trajectory.py,README.md}`, 23 evals against real Bedrock. **Read "What Task 8 established" — `strands-agents-evals` is never installed, and the headline test was vacuous on the two most important cases until review caught it** |
+| 9 — ledger/trace correlation | next |
 
 `pyproject.toml`, `LICENSE`, `.gitignore`, `.env.example`, `README.md` all exist and are
 committed — **do not recreate them.** Dependencies are installed in `.venv`; no install step is
@@ -439,6 +439,59 @@ conclusion" rather than guessing — the case still escalates on the gate's own 
 since this function only supplies wording. **Never search a model's output for a set of
 mutually-exclusive markers by iterating a collection and returning the first match — the
 collection's order is not a property of the model's answer.**
+
+### What Task 8 established — follow these
+
+**`strands-agents-evals` is never installed, and this decision predates Task 8.** It depends
+on `strands-agents-tools` — the same package Task 1's dependency rule already forbids, 25
+packages including `slack-bolt` and `pillow`. Trajectory evals are ordinary pytest functions in
+`evals/test_gate_trajectory.py`, run explicitly via `.venv/bin/python -m pytest evals/`.
+`pyproject.toml`'s `testpaths = ["tests"]` already excludes `evals/` from a bare
+`.venv/bin/python -m pytest`, so this costs nothing in the fast suite. **Never add
+`strands-agents-evals` to any dependency list, and never import `strands_evals`.**
+
+**A parametrized test that never reaches its own assertion body still passes.** An early
+version of the suite's headline ordering test ran on all three escalating fixtures — but
+`c-011`/`c-012` never execute a gated action at all (escalating is the point), so the loop
+that does the checking never ran for them, and the test passed having asserted nothing while
+still paying for ~37 of the suite's ~65 Bedrock invocations. **When a test's `for`/`if`
+structure can be skipped entirely for a given input, add an explicit assertion that it wasn't**
+(`assert ran_something`) — a parametrized case that silently checks nothing is worse than one
+that fails, because it looks identical to a passing check in every report.
+
+**A per-invocation cache must cache failures too, or a flaky run costs 4× and can silently mix
+results from different invocations.** `_RUNS[case_id] = _Run(case_id)` never completes the
+assignment if construction raises — confirmed live when `decide` hit `set_node_timeout(420.0)`
+on Bedrock latency (512.92s against a typical ~75s). Every other test touching the same
+`case_id` then retried the full graph invocation from scratch, and different tests for the
+same nominal case could end up asserting against genuinely different runs. Cache the exception
+and re-raise it on every subsequent lookup for that key.
+
+**A raising operation should still leave partial, real evidence readable.** The evals'
+`_Run.__init__` used to set `self.ledger` only after `graph(...)` returned — so a timeout
+mid-run discarded a ledger that `LedgerHook` had already partially written and that `store`
+(constructed before the `graph()` call) still held. A safety claim that could have been
+checked from that partial data instead read as an unrelated infrastructure failure. Read
+whatever state is available in a `finally`, regardless of whether the operation that populates
+it raised.
+
+**`decide`'s ledger cannot, by itself, distinguish "the swarm deliberated and `decide` trusted
+it" from "`decide` escalated blind."** Only `decide` is built with `hooks=[ledger]` (see Task
+6/7) — the swarm's own reads on `c-011`/`c-012` never reach the case ledger, so both scenarios
+produce the identical shape on `decide`'s rows. `SwarmResult.node_history` closes this at zero
+extra cost: it is already returned inside the `GraphResult` a graph invocation produces, and
+asserting it names all three roles (not just "non-empty") is a genuine regression guard against
+the exact collapse `grace/swarm.py`'s own docstring documents from a real run. **Before
+concluding a ledger-based test can't observe something about a nested multi-agent node, check
+whether the in-process result object already carries it — a hook is not the only way to see
+what happened.**
+
+**A test's classification as "safety" vs. "liveness" must match what could make it fail, not
+what it is trying to catch.** A test asserting an escalating case does *something* (outreach,
+escalation, or a refused attempt) sounds like a safety property, but the gate never *forces*
+a tool call — a model that reads everything and answers only in prose passes the gate's own
+checks while failing this test. Label by what can make an assertion fail on a correctly-behaving
+system, not by how important the property feels.
 
 
 ## The one idea that matters
