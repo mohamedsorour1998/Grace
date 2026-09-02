@@ -27,9 +27,9 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 4 complete.** 157 tests passing (`.venv/bin/python -m pytest`, or
-`.venv/bin/pytest` directly). Task 5 — wiring `evaluate` into a real `SteeringHandler` — is
-next; this is where capability absence and the gate actually start enforcing anything.
+**Plan 1, Task 5 complete.** 212 tests passing (`.venv/bin/python -m pytest`, or
+`.venv/bin/pytest` directly). Task 6 — the graph spine and `grace sweep` CLI — is next; this is
+the first task that produces a runnable end-to-end path.
 
 | Task | State |
 |---|---|
@@ -37,8 +37,8 @@ next; this is where capability absence and the gate actually start enforcing any
 | 2 — case types, store, 12 fixtures | **done** — `grace/cases/{models,store}.py`, `fixtures/households.yaml`, 60 tests |
 | 3 — the authority gate | **done** — `grace/authority.py`, 121 tests total. The task that matters most. |
 | 4 — Nova model registry + tools | **done** — `grace/models.py`, `grace/tools/{read,action}.py`, 157 tests total |
-| 5 — `AuthorityGate` + `LedgerHook` | next — **read "What Task 3/4 established" below first: `evaluate` can raise, and until this task lands, nothing calls it — the read tools' `_UNVERIFIABLE` string is not enforcement** |
-| 6 — Graph spine + `grace sweep` CLI | not started |
+| 5 — `AuthorityGate` + `LedgerHook` | **done** — `grace/{steering,ledger,vendored_actions}.py`, 212 tests total. Capability absence is now real enforcement, not shape. |
+| 6 — Graph spine + `grace sweep` CLI | next — **read "What Task 5 established" below first: wiring an `AuthorityGate` must go through `plugins=[...]`, and the SDK swallows any exception the handler raises** |
 | 7 — deliberation swarm | not started |
 | 8 — trajectory evals | not started |
 | 9 — ledger/trace correlation | not started |
@@ -46,13 +46,6 @@ next; this is where capability absence and the gate actually start enforcing any
 `pyproject.toml`, `LICENSE`, `.gitignore`, `.env.example`, `README.md` all exist and are
 committed — **do not recreate them.** Dependencies are installed in `.venv`; no install step is
 needed to run tests.
-
-**Capability absence is half-implemented.** Task 4 built the tool *shape* — read tools take
-zero arguments, so a model has no parameter to redirect toward another family's data (verified
-against the real `tool.stream()` invocation path, not just a direct call). But nothing calls
-`evaluate` yet outside its own tests, and no action tool is gated by anything. Task 5 is what
-makes the gate actually run before a state-changing tool executes. Until then, do not write
-code that assumes an action tool's execution is conditional on anything.
 
 ### What Task 1 established — follow these
 
@@ -180,17 +173,63 @@ closure cells can equally reach `store` and `evaluate` directly, so no binding s
 `read.py` would close this. Do not attempt to harden the closure; the boundary that matters is
 the process boundary, not the variable-binding strategy inside it.
 
-**`_UNVERIFIABLE` is a courtesy string, not enforcement, and there is currently nothing behind
-it.** Until Task 5 lands, no code outside `test_authority.py` calls `evaluate` at all — a read
-tool returning `_UNVERIFIABLE` does not, today, force anything. Do not mistake the string's
-presence for capability absence being wired end-to-end; it becomes enforcement only once Task
-5's steering handler actually gates action-tool execution on the gate's verdict.
+**`_UNVERIFIABLE` was a courtesy string with nothing behind it, until Task 5.** Before Task 5,
+no code outside `test_authority.py` called `evaluate` at all — a read tool returning
+`_UNVERIFIABLE` did not, by itself, force anything. Task 5's `AuthorityGate` is what turns it
+into enforcement: it evaluates independently on the same case before every action tool, so the
+string is now a hint to the model, not the mechanism.
 
 **Model-ID guards must scan the whole package, not a list of modules someone remembered.**
 `pkgutil.walk_packages` over `grace/`, not a hardcoded tuple — confirmed a real Claude
 inference-profile ID inlined into `read.py` passed all 157 tests before this fix, because the
-non-Nova-vendor check ran against `models.py` only. Any new module (Task 5's `steering.py` is
-next) is covered automatically only because the test discovers modules from disk.
+non-Nova-vendor check ran against `models.py` only. Any new module (`grace/steering.py`,
+`grace/ledger.py` from Task 5) is covered automatically because the test discovers modules from
+disk, not because anyone remembered to add them.
+
+### What Task 5 established — follow these
+
+**A `SteeringHandler`'s exception is swallowed, not propagated — verify this before touching
+`steer_before_tool` again.** `SteeringHandler.provide_tool_steering_guidance` (the SDK's own
+dispatcher — read its source, do not take this on faith) wraps the call to `steer_before_tool`
+in `except Exception: return`, logs at debug level, and leaves `cancel_tool` unset. Confirmed
+empirically: a handler that raises produces `cancel_tool == False`, and the tool executes
+*ungated*. This is why every fallible call inside `steer_before_tool` — including `evaluate`
+itself, which can raise `ValueError`, `TypeError`, or `OverflowError` from a pack that loaded
+cleanly — sits inside one `except Exception` that returns an `Interrupt`. A narrower `except`
+here is not merely incomplete; it is silent fail-open on the one method whose entire purpose is
+failing closed, and nothing in the agent loop will tell you it happened.
+
+**`submit_renewal` and `send_family_message` are gated on different questions.** Filing needs a
+fully clean `evaluate()` verdict. Outreach needs only that every reason is `missing_document` or
+`stale_document` (`DOCUMENT_ONLY_CODES` in `grace/steering.py`) — a case that is *also* off on
+income, size, or a source conflict must still escalate, because texting the family does not
+resolve an eligibility question. If you add a new action tool, decide explicitly which of these
+two questions it answers; do not assume "gated" means "needs the same verdict as filing."
+
+**Two different `Interrupt` classes exist — do not confuse them.**
+`strands.vended_plugins.steering.Interrupt` (what `steer_before_tool` returns; `type`/`reason`
+only, no `.id`) is unrelated to `strands.interrupt.Interrupt` (the multi-agent resume type from
+Appendix B.1, with `id`/`name`/`reason`/`response`, used to resume a paused `Graph`/`Swarm`).
+They share a name and nothing else.
+
+**The ledger is asymmetric between `Guide` and `Interrupt` — Task 8's evals must account for
+this, not discover it.** On `Guide`, the SDK builds a synthetic error `ToolResult` and fires
+`AfterToolCallEvent`, pairing `tool_call` with `tool_result` in the ledger. On `Interrupt`, the
+SDK yields a `ToolInterruptEvent` and returns *before* the after-hook, so the ledger gets
+`tool_call` with **no paired result**. An eval that reads an unpaired `tool_call` as "a tool ran
+and was not logged" is backwards for an escalated case: it means the tool did not run. This is
+SDK behavior, not a choice made here, and it is pinned in `tests/test_steering.py` rather than
+worked around.
+
+**`AuthorityGate._seen` is per-instance, in-memory, and does not survive a fresh process.** It
+cannot drift from the ledger on the read path — both are driven off the same
+`BeforeToolCallEvent` — but Grace builds one graph per case today, so this has never been tested
+against a resumed run. The moment a `Graph`/`Swarm` interrupt is resumed in a new process (Task
+6/7), a freshly-constructed gate's `_seen` starts empty while the ledger already shows the prior
+reads, and the gate will `Guide` for reads that already happened. Decide then whether `_seen`
+needs reconstructing from the ledger on resume, or whether resume always re-runs the read nodes
+regardless.
+
 
 
 ## The one idea that matters

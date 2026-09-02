@@ -1846,7 +1846,7 @@ Three properties this schema buys:
 Billing: on-demand. Twelve cases is far below the free tier, and provisioned capacity would be
 a fixed monthly cost against a $50 credit budget.
 
-- [ ] **Step 1: Write the failing steering test**
+- [x] **Step 1: Write the failing steering test**
 
 `tests/test_steering.py`:
 
@@ -1966,12 +1966,12 @@ async def test_unknown_action_tool_fails_closed():
     assert isinstance(action, (Guide, Interrupt))
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_steering.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.steering'`
 
-- [ ] **Step 3: Write `grace/vendored_actions.py`**
+- [x] **Step 3: Write `grace/vendored_actions.py`**
 
 A one-line re-export so tests and application code import the steering action types from a
 single place. If the SDK moves them again (it went from `strands.experimental.steering` to
@@ -2004,7 +2004,7 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 4: Write `grace/steering.py`**
+- [x] **Step 4: Write `grace/steering.py`**
 
 ```python
 """The authority gate, wired into the Strands agent loop.
@@ -2119,12 +2119,56 @@ class AuthorityGate(SteeringHandler):
         )
 ```
 
-- [ ] **Step 5: Run the steering tests**
+- [x] **Step 5: Run the steering tests**
 
 Run: `.venv/bin/python -m pytest tests/test_steering.py -v`
-Expected: PASS — 10 tests
+Expected: PASS — **41 tests, not 10.** The plan's own draft code has a real gap the
+opening note below explains; the extras are mutation-verified regression locks, not padding.
 
-- [ ] **Step 6: Write the failing ledger test**
+**The single most important finding in this task: the plan's Step 4 code above wraps only
+`store.get`/`load_pack` in `try`, and calls `evaluate` *outside* that block.** Confirmed by
+reverting to that exact indentation and running the suite: a `cert_end` near `date.max` passes
+`load_pack`'s validation cleanly, then overflows inside `evaluate` with `OverflowError` — a
+fourth exception type from the same underlying cause Task 4 already documented for
+`check_window`. `evaluate` must be **inside** the same `try` as the load, and the `except` must
+be `Exception`, not a narrower type.
+
+**Why this is worse than a crash — read this before writing any `SteeringHandler` subclass.**
+`SteeringHandler.provide_tool_steering_guidance` — the SDK's own dispatcher, verified by reading
+its source directly — wraps the call to `steer_before_tool` in `except Exception: return`, logs
+at *debug* level, and leaves `cancel_tool` unset. Confirmed empirically: a handler that raises
+produces `cancel_tool == False`, and **the tool executes ungated**. An exception escaping
+`steer_before_tool` is not a loud failure that halts the run — it is silently swallowed, and the
+gate's absence looks identical to `Proceed`. This is fail-open on the exact code path whose only
+purpose is failing closed. Pinned in `test_a_raising_handler_would_let_the_tool_execute`, which
+drives the real SDK method with a real `BeforeToolCallEvent`, so an SDK upgrade that changes
+this behavior is noticed rather than silently trusted.
+
+**A design decision surfaced by this task, resolved before Task 6: `submit_renewal` and
+`send_family_message` are gated on two different questions, not the same verdict.**
+`submit_renewal` needs a clean `evaluate()` — every condition must pass, because filing commits
+the family to the figures on record. Task 6's own `decide` prompt (below) tells the model to
+call `send_family_message` specifically *when a document is missing* — which is exactly the case
+`submit_renewal`'s gate blocks. Gating outreach on the same clean verdict would block the one
+thing Grace exists to do automatically (fixture `c-010` would escalate instead of being chased);
+gating it on nothing but "a document problem exists somewhere" would let outreach fire alongside
+an unrelated income or source-conflict problem a human should see first. The resolution:
+`send_family_message` is gated on a narrower predicate — every `GateReason` on the case must be
+`missing_document` or `stale_document` (`DOCUMENT_ONLY_CODES` in `grace/steering.py`). A case
+that is *also* off on income, size, or a source conflict still escalates. Verified against the
+real fixtures: `c-010` (missing document only) now proceeds to outreach; `c-011` (income) and
+`c-012` (source conflict) still interrupt on outreach; a hand-built case combining a missing
+document with a material income change still interrupts.
+
+**A second, subtler gap this task's own drafted `Interrupt` type invites — do not confuse two
+different `Interrupt` classes.** `strands.vended_plugins.steering.Interrupt` (what
+`steer_before_tool` returns, `type`/`reason` fields only, no `.id`) is a completely different
+class from `strands.interrupt.Interrupt` (the multi-agent resume type from Appendix B.1, with
+`id`/`name`/`reason`/`response`, used to resume a paused `Graph`/`Swarm` in Task 6/7). They are
+not aliases. Nothing in this task's code confuses them, but the names collide and a reader who
+has Appendix B.1 in mind will expect an `.id` that does not exist here.
+
+- [x] **Step 6: Write the failing ledger test**
 
 `tests/test_ledger.py`:
 
@@ -2173,7 +2217,7 @@ def test_ledger_never_crosses_cases():
     assert store.ledger("c-002") == []
 ```
 
-- [ ] **Step 7: Write `grace/ledger.py`**
+- [x] **Step 7: Write `grace/ledger.py`**
 
 ```python
 """Case ledger.
@@ -2232,24 +2276,52 @@ class LedgerHook(HookProvider):
         )
 ```
 
-- [ ] **Step 8: Run the ledger tests**
+- [x] **Step 8: Run the ledger tests**
 
 Run: `.venv/bin/python -m pytest tests/test_ledger.py -v`
-Expected: PASS — 3 tests
+Expected: PASS — **14 tests, not 3.**
 
 If `register_hooks` fails because `AfterToolCallEvent` is not importable under that name,
-list the real names and use the closest match:
+list the real names and use the closest match — it did not fail; both `BeforeToolCallEvent` and
+`AfterToolCallEvent` exist exactly as this task's Step 7 code writes them, verified against the
+installed SDK before this task was dispatched:
 
 ```bash
 .venv/bin/python -c "import strands.hooks as h; print([n for n in dir(h) if 'Tool' in n])"
 ```
 
-- [ ] **Step 9: Run the whole suite**
+**The ledger is asymmetric between `Guide` and `Interrupt`, and Task 8's evals must know this
+before they are written, not after.** Verified end-to-end against a real `Agent` and the real
+tool executor, not inferred: on the `Guide` path the SDK builds a synthetic error `ToolResult`
+and fires `AfterToolCallEvent`, so the ledger gets a `tool_call` row **and** a `tool_result` row.
+On the `Interrupt` path the SDK yields a `ToolInterruptEvent` and returns *before* the
+after-hook fires, so the ledger gets `tool_call` with **no paired result at all**. CLAUDE.md
+says "a tool in `execution_order` with no ledger entry means a tool ran without being logged" —
+the inverse trap here is that an unpaired `tool_call` on an escalated case does **not** mean a
+tool ran unlogged. It means the tool did not run. An eval that applies the execution-order
+heuristic naively to an interrupted case reads every one of the three escalating fixtures as a
+logging failure. This is SDK behavior, not a choice made in this codebase, so it is pinned
+(`test_interrupt_path_leaves_an_unpaired_tool_call_in_the_ledger`,
+`test_guide_path_pairs_its_ledger_rows`) rather than worked around.
 
-Run: `.venv/bin/python -m pytest tests/ -v`
-Expected: PASS — 55 tests
+- [x] **Step 9: Run the whole suite**
 
-- [ ] **Step 10: Commit**
+Run: `.venv/bin/python -m pytest`
+Expected: PASS — **212 tests**, not 55 — that estimate was stale even against Task 4's actual
+total of 157, let alone the 51 new tests this task added (37 steering + 14 ledger).
+
+**One real gap flagged for Task 6/7, not closed here because it is not reachable today.**
+`AuthorityGate._seen` is in-memory and per-instance, tracking reads independently of the
+`CaseStore` ledger. On the read path the two cannot drift — both are driven off the same
+`BeforeToolCallEvent` — but `_seen` does not survive a fresh process. Grace builds one graph per
+case today, so this never bites. It will the moment Task 6 or 7 resumes an interrupted
+`Graph`/`Swarm` in a new process: the ledger will correctly show the prior reads, but a
+freshly-constructed `AuthorityGate` for the resumed case starts with an empty `_seen` and will
+`Guide` for reads the audit trail already confirms happened. Decide in Task 6 whether `_seen`
+needs to be reconstructed from the ledger on resume, or whether resume always re-runs the read
+nodes anyway (in which case this is moot).
+
+- [x] **Step 10: Commit**
 
 ```bash
 git add grace/steering.py grace/ledger.py grace/vendored_actions.py tests/test_steering.py tests/test_ledger.py

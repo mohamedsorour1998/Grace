@@ -31,6 +31,13 @@ Decision = Literal["act", "escalate"]
 
 # The tools that change state in the world. Everything not in this set is a
 # read and may be called freely.
+#
+# Never add `escalate_to_caseworker` here. `steering.py`'s ALWAYS_ALLOWED
+# check runs first and would still let it through, but only because that
+# check exists specifically to guarantee this — adding it to ACTION_TOOLS
+# means it also needs a PREREQUISITES entry (grace/steering.py), and until
+# someone adds one it would fail closed on the "no gate policy" path, which
+# blocks escalation exactly when a human is most needed (hard rule 7).
 ACTION_TOOLS: frozenset[str] = frozenset(
     {"submit_renewal", "send_family_message", "close_case"}
 )
