@@ -27,6 +27,7 @@ from strands import tool
 
 from grace.cases.models import LedgerDetailValue, LedgerEntry
 from grace.cases.store import CaseStore
+from grace.ledger import _current_trace_id
 
 
 class Channel(Protocol):
@@ -71,12 +72,19 @@ def make_action_tools(store: CaseStore, case_id: str, channel: Channel) -> list:
         # *that* a family was contacted and with what text; the number lives on
         # the household record and does not need duplicating into an audit row
         # that a dashboard and Task 8's evals both read.
+        #
+        # `trace_id` matches what `LedgerHook._append` writes (Task 9). These
+        # are the rows that record what Grace actually *did* rather than which
+        # tools it called — `sweep` classifies a case by looking for
+        # `renewal_submitted` — so they are the ones a caseworker most needs to
+        # join back to a CloudWatch trace. Wiring the trace ID into the hook
+        # alone would leave exactly these rows unjoinable.
         store.append_ledger(
             LedgerEntry(
                 case_id=case_id,
                 at=datetime.now(timezone.utc),
                 kind=kind,
-                detail=detail,
+                detail={**detail, "trace_id": _current_trace_id()},
             )
         )
 

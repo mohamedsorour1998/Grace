@@ -18,6 +18,12 @@ Two things this hook deliberately does not record:
 
 The ledger, not the model transcript, is the ground truth for what executed:
 a transcript-based eval would miss a tool that ran but was not logged.
+
+Every entry also carries the active OTEL trace ID, so a DynamoDB row joins to
+its CloudWatch trace. The two are complements, not substitutes: the ledger says
+*what* Grace decided and did, durably; the trace says *how long it took and in
+what order*, sampled. A trace can be dropped by sampling; a ledger entry
+cannot — which is why an eval assertion never moves from the ledger to a span.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from opentelemetry import trace
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent, HookRegistry
 
 from grace.cases.models import LedgerDetailValue, LedgerEntry
@@ -35,6 +42,44 @@ from grace.steering import _bare_tool_name
 # call is the last thing an audit trail should drop, so it is recorded under a
 # placeholder rather than skipped.
 _UNNAMED_TOOL = "<unnamed>"
+
+
+def _current_trace_id() -> str | None:
+    """Return the active W3C trace ID, or None when tracing is not configured.
+
+    Recorded on every ledger entry so a DynamoDB row can be joined to its
+    CloudWatch trace (Plan 2). The `032x` format matches the `traceparent`
+    header and CloudWatch's own rendering, so the value pastes straight into
+    Transaction Search.
+
+    Returns None rather than raising when no exporter is attached, which is the
+    normal case for unit tests: `trace.get_current_span()` yields `INVALID_SPAN`
+    whose `SpanContext.is_valid` is False. This function must never be the
+    reason a test needs a tracer configured.
+
+    **The `try` is not defensive boilerplate — it is the opposite of the usual
+    fail-closed rule, and deliberately so.** A `HookProvider`'s exception is
+    *not* swallowed the way a `SteeringHandler`'s is (Task 5):
+    `HookRegistry.invoke_callbacks` re-raises anything that is not an
+    `InterruptException`, and `ToolExecutor._stream` catches it and substitutes
+    a `status: "error"` tool result. So an exception raised here would turn a
+    tool that had already passed the gate into a failed call — `submit_renewal`
+    reporting an error on a clean case, and a renewal that does not get filed.
+    Failing closed on a *verification* question protects the family; failing
+    closed on an *observability* question harms them, because the trace ID is
+    not evidence anything relies on to decide. `is_valid` is a precomputed
+    bounds check, so `format` cannot overflow — but `get_span_context()` is a
+    method on an arbitrary `Span` implementation and a misconfigured or
+    partially shut-down provider can raise from it. Lose the trace ID; keep the
+    ledger row.
+    """
+    try:
+        ctx = trace.get_current_span().get_span_context()
+        if not ctx.is_valid:
+            return None
+        return format(ctx.trace_id, "032x")
+    except Exception:  # noqa: BLE001 — observability must not break the tool call
+        return None
 
 
 class LedgerHook:
@@ -67,12 +112,17 @@ class LedgerHook:
         # naive datetime, both because Plan 2 writes this straight to DynamoDB.
         # Hence `timezone.utc` here rather than a bare `datetime.now()`, which
         # would raise on the first tool call of a run.
+        #
+        # `trace_id` is always present as a key, even when its value is None:
+        # a reader must not have to guess whether tracing was configured for a
+        # given run. `LedgerDetailValue` already includes None (Task 2), so no
+        # special-casing is needed to satisfy the type check.
         self._store.append_ledger(
             LedgerEntry(
                 case_id=self._case_id,
                 at=datetime.now(timezone.utc),
                 kind=kind,
-                detail=detail,
+                detail={**detail, "trace_id": _current_trace_id()},
             )
         )
 
