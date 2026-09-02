@@ -62,6 +62,16 @@ So each case is classified from two sources that cannot be argued with:
 
 An interrupt still forces an escalation and supplies the caseworker's reason,
 but it is no longer the only thing that can produce one.
+
+**The referee's conclusion is appended, never substituted.** A case that routed
+through the deliberation swarm carries the referee's `AMBIGUOUS:` question into
+its escalation row alongside the gate's typed reason. `_deliberation_note`
+searches a model's prose for that marker, which Task 6 established is wrong for
+an *edge condition* — there, prose chose whether the expensive swarm ran. Here
+the classification is already final before the note is read: the case escalated
+because `evaluate()` said so, and the note only supplies wording. So it fails
+soft, returning `None` rather than raising, because losing a sentence of context
+must never cost a family their row in the report.
 """
 
 from __future__ import annotations
@@ -115,6 +125,135 @@ MAX_RESUME_ROUNDS = 3
 _UNEXPLAINED_INTERRUPT = (
     "The run paused without saying why. A caseworker must review this case."
 )
+
+# Where the deliberation swarm sits in the graph, and which role inside it
+# concludes. Both are looked up **by key**, never by position and never as
+# `node_history[-1]`: `SwarmResult.results` is a dict, `node_history` records
+# whoever happened to run last, and Task 3's standing rule is that selecting
+# "the" record by order makes the output depend on how the data loaded. The
+# referee is the role defined as concluding (see grace/swarm.py), so the
+# referee is the role read here.
+_DELIBERATE_NODE = "deliberate"
+_REFEREE_ROLE = "referee"
+
+# The two forms the referee is instructed to answer in. Searched for so the
+# caseworker reads the conclusion rather than the whole three-agent argument.
+_REFEREE_VERDICTS = ("AMBIGUOUS:", "CLEAR:")
+
+# A briefing line, not a transcript. The referee's conclusion is meant to be
+# one question; this bounds a model that ignores that.
+_DELIBERATION_MAX_CHARS = 400
+
+
+def _strip_thinking(text: str) -> str:
+    """Drop `<thinking>...</thinking>` blocks from a model's output.
+
+    Nova emits them, and they contain the referee's *reasoning* toward a
+    verdict — including, sometimes, the word AMBIGUOUS in a sentence that is
+    not the verdict. Removing them before searching means the marker found is
+    the conclusion, not a step on the way to it, without needing to reason
+    about which occurrence to prefer.
+    """
+    out = []
+    rest = text
+    while True:
+        start = rest.find("<thinking>")
+        if start == -1:
+            out.append(rest)
+            return "".join(out)
+        out.append(rest[:start])
+        end = rest.find("</thinking>", start)
+        if end == -1:
+            # An unclosed tag: keep everything after the marker rather than
+            # discarding the rest of the output, which could be the verdict.
+            out.append(rest[start + len("<thinking>") :])
+            return "".join(out)
+        rest = rest[end + len("</thinking>") :]
+
+
+def _deliberation_note(result: object) -> str | None:
+    """The referee's conclusion, if this case went through the swarm.
+
+    Briefing text only — it never decides anything. `sweep` classifies from
+    `evaluate()` and the ledger (see the module docstring), and this function
+    runs *after* that decision is already made, so a case escalates or does not
+    regardless of what the three agents said. That is what makes searching a
+    model's prose acceptable here when Task 6 established it is not acceptable
+    in an edge condition: there, the prose chose whether the expensive swarm
+    ran; here, it only supplies wording for an escalation the deterministic
+    gate already required. Returning `None` costs a caseworker some context and
+    nothing else — the gate's own reason is still reported.
+
+    Fails soft for that reason, and broadly: `results` is a plain dict whose
+    contents come from the SDK, `str()` on a `NodeResult` runs the SDK's own
+    `__str__` over a model result, and a swarm that failed or hit its iteration
+    cap has no `referee` entry at all. None of that may break the row for a
+    family whose case is already on its way to a human.
+    """
+    try:
+        results = getattr(result, "results", None)
+        if not isinstance(results, dict):
+            return None
+        node = results.get(_DELIBERATE_NODE)
+        if node is None:
+            return None
+        swarm_result = getattr(node, "result", None)
+        swarm_results = getattr(swarm_result, "results", None)
+        if not isinstance(swarm_results, dict):
+            return None
+        referee = swarm_results.get(_REFEREE_ROLE)
+        if referee is None:
+            # The swarm ran but the referee never concluded — it hit an
+            # iteration cap, a repetitive-handoff stop, or a timeout. Say so:
+            # "the deliberation did not finish" is information a caseworker
+            # should have, and silence would read as "there was no
+            # deliberation".
+            return "The deliberation did not reach a conclusion."
+        text = _strip_thinking(str(referee))
+        # The referee's own prompt says to begin its answer with the marker
+        # and nothing before it. But "the first line" is not always a safe
+        # proxy for that: an *unclosed* `<thinking>` tag leaves its own
+        # leading reasoning text in `text` (see `_strip_thinking`'s docstring
+        # — the alternative, discarding it, could discard the verdict too),
+        # so the first line there is reasoning, not the answer, even though
+        # the model still led its real answer with a marker further down.
+        # Anchoring is therefore checked per candidate LINE, not only the
+        # first one: a marker that starts a line is a real conclusion,
+        # because the prompt tells the referee to answer on its own line;
+        # a marker appearing mid-sentence never is.
+        #
+        # `_REFEREE_VERDICTS`'s *tuple order* must never decide the outcome —
+        # confirmed live: swapping it to `("CLEAR:", "AMBIGUOUS:")` changed
+        # nothing about the referee's actual output but silently reported a
+        # CLEAR verdict on a case the referee had called AMBIGUOUS, and every
+        # test still passed. Nor can "pick whichever marker occurs earliest
+        # in the text" replace it: a referee reasoning through "I first
+        # considered CLEAR: ..., but ultimately AMBIGUOUS: ..." states CLEAR
+        # first and means AMBIGUOUS — text position doesn't distinguish a
+        # reasoning step from a conclusion any better than tuple order does.
+        # Only a line-start anchor does, and it must be applied to every line,
+        # not only the first, because the first line is not guaranteed to be
+        # the answer once an unclosed tag has left reasoning ahead of it.
+        for line in text.strip().splitlines():
+            stripped_line = line.strip()
+            for marker in _REFEREE_VERDICTS:
+                if stripped_line.startswith(marker):
+                    conclusion = " ".join(text[text.find(marker):].split())
+                    if len(conclusion) > _DELIBERATION_MAX_CHARS:
+                        conclusion = conclusion[: _DELIBERATION_MAX_CHARS - 1].rstrip() + "…"
+                    return conclusion
+        # No line began with a marker — the model never led an answer with
+        # one, anywhere. Guessing which mid-sentence occurrence is "the real
+        # one" from position — first, last, earliest — has no principled
+        # answer once the anchor is gone, and hard rule 5 forbids resolving
+        # that guess toward CLEAR. Reporting honestly that no clean verdict
+        # was found is the safe failure: the case still escalates on the
+        # gate's own reason (this function only supplies wording, never the
+        # decision — see the module docstring), so nothing is lost but a
+        # sentence of context.
+        return "The deliberation did not state a conclusion."
+    except Exception:  # noqa: BLE001 — briefing text must never break a row
+        return None
 
 
 @dataclass(frozen=True)
@@ -241,6 +380,18 @@ def sweep(
         # case that interrupts, resumes, interrupts again, and then fails still
         # produces exactly one row — twelve families, twelve outcomes.
         reason: str | None = None
+        # The referee's conclusion, when this case routed through the swarm.
+        # Collected from the last result the graph produced and appended to
+        # whichever reason the classification below settles on — it never
+        # replaces one, and it never decides anything.
+        deliberation: str | None = None
+        # Whether `reason` is the generic "the run ended in state X" fallback
+        # rather than something specific like a gate interrupt. Tracked
+        # explicitly instead of re-derived by comparing strings later: the
+        # comparison would need `result`, which does not exist on the exception
+        # path, and a reason that merely *looks* like the fallback is not the
+        # same thing as being it.
+        reason_is_run_status = False
         try:
             graph = build_case_graph(store, case.case_id, today, channel)
             result = graph(
@@ -314,11 +465,23 @@ def sweep(
                 # interrupt. Not an error the sweep raised, and definitely not a
                 # filed renewal — a human gets it, because `acted` is a claim
                 # that Grace handled the case and nothing here confirms that.
+                #
+                # This wording is a last resort. It says nothing about the
+                # household, so wherever the deterministic gate has a specific
+                # reason, that one is reported instead — see the classification
+                # below. A FAILED status here does not mean `decide` never ran:
+                # a failed node does not stop the graph, so the gate's verdict
+                # is usually still known and is always more useful than this.
                 reason = (
                     f"The run ended in state "
                     f"'{getattr(result.status, 'value', result.status)}' "
                     "without completing. A caseworker must review this case."
                 )
+                reason_is_run_status = True
+
+            # Read after the interrupt loop so `result` is the final one. A
+            # case that never routed through the swarm yields `None`.
+            deliberation = _deliberation_note(result)
 
         except Exception as exc:  # noqa: BLE001 — fail closed, keep sweeping
             # Broad on purpose. `evaluate` raises `ValueError`, `TypeError`, or
@@ -343,18 +506,40 @@ def sweep(
         # enough.
         gate_reason = _gate_reason(store, case.case_id, today)
         if gate_reason is not None:
-            detail = reason or gate_reason
+            # The gate's typed reason wins over a generic run-status message.
+            #
+            # `reason` here may be a real interrupt reason (the gate's own
+            # wording, which is what we want) or the "ended in state 'failed'"
+            # fallback, which is not. Observed on a real `c-011` run: the
+            # deliberation swarm burned its handoff budget and reported FAILED,
+            # so the graph reported FAILED — but `decide` still ran (a failed
+            # node does not stop the graph; confirmed against the SDK), and the
+            # gate's verdict on the case record was known and specific. The row
+            # said "The run ended in state 'failed'" and dropped
+            # `material_income_change: income moved 30.0%` entirely, which is
+            # the one thing the caseworker needed. A run-status message is only
+            # informative when nothing better exists.
+            detail = gate_reason if reason_is_run_status else (reason or gate_reason)
             if _outreach_sent(store, case.case_id):
                 # The family has already been asked. A caseworker picking this
                 # up needs to know that, or they ask a second time — and a
                 # duplicate request is exactly the confusion that makes families
                 # give up on paperwork.
                 detail = f"{detail} (Grace has already messaged the family.)"
+            # Appended, never substituted. The gate's typed reason is what
+            # makes the escalation correct and auditable; the referee's question
+            # is what makes it *useful* to the human reading it. Dropping the
+            # gate reason in favour of the deliberation would put a model's
+            # sentence where the deterministic verdict belongs.
+            if deliberation:
+                detail = f"{detail} Deliberation — {deliberation}"
             escalated.append((case.case_id, detail))
         elif reason is not None:
             # The gate says the case is clean but the run did not finish
             # cleanly. Trust the run: something happened that the gate's view
             # of the case record cannot see.
+            if deliberation:
+                reason = f"{reason} Deliberation — {deliberation}"
             escalated.append((case.case_id, reason))
         elif _renewal_filed(store, case.case_id):
             acted.append(case.case_id)

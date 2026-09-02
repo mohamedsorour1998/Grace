@@ -27,12 +27,12 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 6 complete.** 285 tests passing (`.venv/bin/python -m pytest`, or
+**Plan 1, Task 7 complete.** 351 tests passing (`.venv/bin/python -m pytest`, or
 `.venv/bin/pytest` directly). `grace sweep` runs end to end against real Bedrock and reports
-**9 acted / 3 escalated**, stable across consecutive runs including against a caseworker
-answer that would have exploited the resume fail-open below. Task 7 — the deliberation swarm —
-is next; `make_needs_deliberation` already exists and is tested, waiting to be called and
-wired to a conditional edge.
+**9 acted / 3 escalated**, stable across consecutive runs, with `c-011` and `c-012` now
+carrying a referee's conclusion alongside the gate's typed reason — including a real run where
+the referee argued `CLEAR:` on a case the gate still correctly escalated. Task 8 — trajectory
+evals — is next.
 
 | Task | State |
 |---|---|
@@ -42,8 +42,8 @@ wired to a conditional edge.
 | 4 — Nova model registry + tools | **done** — `grace/models.py`, `grace/tools/{read,action}.py`, 157 tests total |
 | 5 — `AuthorityGate` + `LedgerHook` | **done** — `grace/{steering,ledger,vendored_actions}.py`, 212 tests total. Capability absence is now real enforcement, not shape. |
 | 6 — Graph spine + `grace sweep` CLI | **done** — `grace/{graph,run}.py`, 285 tests total. The first runnable end-to-end path. **Read "What Task 6 established" below before touching the sweep or the swarm** |
-| 7 — deliberation swarm | next — call `make_needs_deliberation(store, case_id, today)` (already written and tested) to get the conditional-edge predicate for a `deliberate` node |
-| 8 — trajectory evals | not started |
+| 7 — deliberation swarm | **done** — `grace/swarm.py`, 351 tests total. **Read "What Task 7 established" — a swarm ends when a node does not hand off, two separate defects made it collapse to one model silently, and two more (a timeout margin, a verdict-extraction order dependency) were found in review of the first two fixes** |
+| 8 — trajectory evals | next |
 | 9 — ledger/trace correlation | not started |
 
 `pyproject.toml`, `LICENSE`, `.gitignore`, `.env.example`, `README.md` all exist and are
@@ -337,6 +337,108 @@ resume records the failure *in its escalation reason*, not as a second row.
 purity rule still holds — no `strands`, no `boto3`, no I/O — and
 `test_authority_imports_only_pure_siblings` whitelists the addition.
 
+### What Task 7 established — follow these
+
+**A Swarm ends when a node finishes its turn without calling `handoff_to_agent`, and that made
+a three-model deliberation collapse to one model — silently, reporting `COMPLETED`.** Measured
+on real `c-011` runs through the graph, `node_history` came back `['advocate']`,
+`['advocate']`, `['advocate', 'referee']`. Status was `COMPLETED` every time; nothing in the
+result distinguishes a collapse from a real deliberation except `node_history`. Two independent
+causes, both fixed, both needed:
+
+1. *The prompts described when to hand off, not that they must.* Each debater's prompt now
+   names its own successor (`agent_name="verifier"` / `agent_name="referee"`) and makes the
+   handoff mandatory including when the advocate cannot make the case at all.
+2. *`Graph._build_node_input` prepends every upstream node's output to a nested Swarm's task*,
+   so the advocate opened by reading `documents` saying "all required documents are present and
+   current", believed it, and concluded there was nothing to argue. Reproduced deterministically
+   outside the graph by passing that same ContentBlock list: 2 of 3 runs collapsed with it, 0 of
+   4 without. The advocate is now told up front that a deterministic check already found a
+   question, that a document summary cannot settle an income/size/conflict question, and that
+   "the case looks fine" is not a conclusion it may reach alone.
+
+**The referee will hand back if you leave it any room to.** "Do not hand off further — you
+conclude" was not enough: on a real run the referee handed to the advocate, the swarm cycled
+`a→v→r→a→v→r→a→v`, hit `Max handoffs reached: 8`, and reported FAILED — eight paid calls to
+produce nothing, when the first three had already produced a conclusion. The prompt now says
+`NEVER call handoff_to_agent` and closes the escape hatch it used ("if the argument is
+incomplete, that is itself a reason to answer AMBIGUOUS"). `max_handoffs`/`max_iterations` are
+6, not the plan's 8: three turns plus one retry round.
+
+**`repetitive_handoff_min_unique_agents=2` can never fire on a two-agent ping-pong.** The SDK
+stops the swarm only when `unique_nodes < min_unique_agents`, so the plan's `window=4,
+min_unique=2` evaluates `2 < 2` on `[advocate, verifier, advocate, verifier]` — `False`,
+continue. Detection was configured, passed a `> 0` assertion, and could not trigger. It is 3
+now. **A test asserting a loop-safety setting is present is not a test that it fires** — drive
+`SwarmState.should_continue` with the real values instead.
+
+**`Swarm.nodes` is a `dict[str, SwarmNode]`.** The plan's `{n.name for n in swarm.nodes}` raises
+`AttributeError: 'str' object has no attribute 'name'`. Use `swarm.nodes.keys()`, and
+`swarm.nodes[role].executor` to reach the `Agent`.
+
+**Every swarm agent needs `description=`.** `Swarm._build_node_input` gates the
+"Agent description:" line on it, so an agent without one is offered to the others as a bare
+name with no stated role. Nothing crashes; routing just gets worse invisibly.
+
+**A `Swarm` node breaks any test that assumes every graph node is an `Agent`.** It has no
+`.model`, no `.tool_names`, and no `_session_manager` (its session manager is the *public*
+`session_manager`). Three Task 6 tests raised `AttributeError` on it and a fourth —
+`test_no_node_has_its_own_session_manager` — passed **vacuously** via `getattr(..., None)`.
+Recurse into `executor.nodes` rather than skipping: the three models inside the swarm are
+exactly the ones hard rule 2 is about.
+
+**A FAILED node does not stop the graph, so a FAILED status must not displace the gate's
+reason.** `decide` still ran after the swarm failed (verified against the SDK and directly),
+and `evaluate()` had a specific verdict the whole time — but the row read "The run ended in
+state 'failed'" and dropped `material_income_change: Income moved 30.0%`, the one fact the
+caseworker needed. `sweep` now prefers the gate's typed reason over the generic run-status
+fallback, tracked with an explicit flag rather than by re-comparing strings.
+
+**The referee's conclusion is appended to the escalation row, never substituted, and is read by
+key.** `_deliberation_note` in `grace/run.py` searches the referee's prose for `AMBIGUOUS:`/
+`CLEAR:` — which Task 6 established is wrong for an *edge condition*, and is acceptable here
+only because the classification is already final before the note is read: the case escalated
+because `evaluate()` said so. Confirmed on a real run where the referee concluded **CLEAR** for
+`c-011` and the case escalated anyway. The referee is selected from `SwarmResult.results` by the
+`"referee"` key, never `node_history[-1]` — a positional fallback would print the advocate's
+unchecked argument to a caseworker as though a verifier had confirmed it.
+
+**The swarm's `execution_timeout` must bind before the graph's `node_timeout` — and the margin
+that matters is the sum of both swarm budgets, not the execution budget alone.** The graph
+applies `node_timeout` to a nested Swarm as a whole and a graph node timeout is *fail-fast*: it
+raises out of the graph call, `decide` never runs, and `sweep` records an **error** (exit 1, no
+escalation row). The swarm hitting its own budget reports FAILED instead, the graph marks the
+node failed without raising, and `decide` still escalates. Same wall clock, opposite outcome for
+the family — so the swarm's budget must be the smaller number. **An earlier fix set the graph's
+node timeout to 330s, reasoning it only had to clear the swarm's 300s `execution_timeout` — that
+is the wrong margin.** `SwarmState.should_continue` checks `execution_timeout` only at the top
+of its loop, *before* a node starts, so a node beginning at 299s still runs to completion, up to
+its own `node_timeout` (90s). The true worst case is `execution_timeout + node_timeout = 390s`,
+and 330s does not clear it — reproduced at 1/30 scale with a sleeping fake model, no Bedrock
+cost: with the graph timeout between the swarm's `execution_timeout` alone and the true sum, the
+graph's timeout fired first and `decide` never ran, exactly the fail-fast outcome this setting
+exists to avoid. Fixed to `set_node_timeout(420.0)`. **If you change any of the three numbers
+(swarm `execution_timeout`, swarm `node_timeout`, graph `node_timeout`), re-derive the inequality
+as `swarm.execution_timeout + swarm.node_timeout < graph.node_timeout` — do not eyeball it
+against `execution_timeout` alone.**
+
+**The referee's `AMBIGUOUS:`/`CLEAR:` extraction must not depend on which marker is listed
+first in `_REFEREE_VERDICTS`.** An earlier version of `_deliberation_note` iterated the tuple
+and returned on the first marker *found in tuple order*, not the first the referee actually
+concluded. Confirmed live: reordering `_REFEREE_VERDICTS = ("AMBIGUOUS:", "CLEAR:")` to
+`("CLEAR:", "AMBIGUOUS:")` changed nothing about a referee's real output but silently reported a
+CLEAR verdict on a case the referee had called AMBIGUOUS — and every test at the time still
+passed. That is hard rule 5's forbidden direction: a deliberation step making Grace *less*
+cautious. Neither "first in tuple order" nor "earliest position in the text" is a safe fix — a
+referee reasoning "I first considered CLEAR: ..., but ultimately AMBIGUOUS: ..." states CLEAR
+first and means AMBIGUOUS either way. The fix anchors to a marker that **starts its own line**
+(the referee's prompt says to answer that way), checked across every line rather than only the
+first, because an unclosed `<thinking>` tag can leave reasoning text ahead of the real answer. A
+marker with no line-start anchor anywhere now honestly returns "the deliberation did not state a
+conclusion" rather than guessing — the case still escalates on the gate's own reason regardless,
+since this function only supplies wording. **Never search a model's output for a set of
+mutually-exclusive markers by iterating a collection and returning the first match — the
+collection's order is not a property of the model's answer.**
 
 
 ## The one idea that matters

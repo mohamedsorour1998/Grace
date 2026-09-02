@@ -2826,7 +2826,7 @@ something ambiguous. Cheap cases never pay for it.
 - Consumes: `nova` (Task 4); `make_read_tools` (Task 4); `needs_deliberation` (Task 6).
 - Produces: `grace/swarm.py`: `build_deliberation_swarm(read_tools: list) -> Swarm`
 
-- [ ] **Step 1: Write the failing swarm test**
+- [x] **Step 1: Write the failing swarm test**
 
 `tests/test_swarm.py`:
 
@@ -2897,12 +2897,12 @@ def test_swarm_has_loop_safety_configured():
     assert swarm.repetitive_handoff_detection_window > 0
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_swarm.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.swarm'`
 
-- [ ] **Step 3: Write `grace/swarm.py`**
+- [x] **Step 3: Write `grace/swarm.py`**
 
 ```python
 """The deliberation swarm.
@@ -2992,10 +2992,17 @@ def build_deliberation_swarm(read_tools: list) -> Swarm:
     )
 ```
 
-- [ ] **Step 4: Run the swarm tests**
+- [x] **Step 4: Run the swarm tests**
 
 Run: `.venv/bin/python -m pytest tests/test_swarm.py -v`
-Expected: PASS — 3 tests
+Expected: PASS — **27 tests, not 3.**
+
+**`swarm.nodes` is a `dict` keyed by node id, not an iterable of objects with a `.name`
+attribute.** The plan's Step 1 test — `{n.name for n in swarm.nodes} if hasattr(swarm,
+"nodes") else set()` — crashes with `AttributeError: 'str' object has no attribute 'name'`
+against the real SDK: iterating a dict yields its string keys. The correct accessor is
+`set(swarm.nodes.keys())`. This is exactly the accessor mismatch Step 4's own note below
+anticipates — fix the assertion, not the code.
 
 If `test_swarm_has_three_opposed_roles` fails on the `nodes` accessor, inspect the real
 attribute name and update the assertion:
@@ -3008,9 +3015,60 @@ print([a for a in dir(s) if not a.startswith('_')])
 "
 ```
 
-- [ ] **Step 5: Wire the swarm into the graph**
+**Every one of `advocate`/`verifier`/`referee` needs `description=`, and the plan's Step 3
+code above omits it from all three.** `strands.multiagent.swarm`'s routing-context builder
+does `if node and hasattr(node.executor, "description") and node.executor.description:` when
+it constructs the "other agents available for collaboration" text each agent reads before
+deciding whether to hand off. Without a `description`, an agent is silently listed with no
+stated role — no error, no log, just worse handoffs, confirmed by reading the SDK source
+directly. CLAUDE.md already documents this (Appendix A.1's "every agent needs a
+`description=`" note); the plan's own Step 3 draft did not follow it. Add one to each agent
+describing its actual role.
 
-In `grace/graph.py`, add the import:
+**A real swarm-collapse failure mode was found and fixed, and it is worth understanding
+before touching the prompts above.** Measured on three consecutive real `c-011` runs through
+the graph, `node_history` came back `['advocate']`, `['advocate']`, and
+`['advocate', 'referee']` — a three-model deliberation collapsing to one model's unchecked
+opinion, reporting `Status.COMPLETED` every time, with nothing in the result to distinguish
+it from a real deliberation. The cause: `Graph._build_node_input` prepends every upstream
+node's output to a nested `Swarm`'s task, so the advocate opens by reading the `documents`
+node's summary — "all required documents are present and current" — believed it, concluded
+there was nothing to argue, and stopped without handing off. Reproduced deterministically
+outside the graph by handing the swarm that same content: 2 of 3 runs collapsed with it, 0 of
+4 without it. Fixed with two changes, both load-bearing: each debater's prompt now names its
+own successor and makes the handoff mandatory ("Never end your turn without handing off"), and
+the advocate is told up front that a deterministic check already found a question, that a
+document summary cannot settle it, and that "the case looks fine" is not a conclusion it may
+reach alone. With both, the graph-shaped input converged 4/4 in testing, and this review found
+6/6 (three more `c-011`/`c-012` runs each) reaching `['advocate', 'verifier', 'referee']`.
+
+**Loop-safety numbers changed from the plan's Step 3 draft, for two independent reasons.**
+`max_handoffs`/`max_iterations` dropped from 8 to **6**: on a real `c-011` run under the
+plan's original 8, the referee handed back to the advocate and the swarm cycled
+a→v→r→a→v→r→a→v before hitting "Max handoffs reached: 8" — eight paid Bedrock calls to
+produce no conclusion, where the first three had already produced one (the referee's prompt
+now forbids handing off at all, which is the actual fix; 6 is the bound for when a model
+ignores it anyway). `repetitive_handoff_min_unique_agents` changed from the plan's **2** to
+**3**: the SDK's detection formula is `unique_nodes < min_unique_agents` over the last
+`window` nodes, and a pure advocate/verifier ping-pong over a window of 4 always has
+`unique_nodes == 2` — so `min_unique_agents=2` makes the check `2 < 2` = `False`, and
+detection *never fires* on the exact loop it exists to catch, while still being fully
+*configured* (a test asserting the window is merely non-zero would pass). `3` makes the check
+`2 < 3` = `True`, correctly firing, because it requires all three roles to have spoken in any
+four consecutive turns — which a real deliberation does and a two-agent loop cannot. Confirmed
+by reverting to `2`: exactly one test fails,
+`test_repetitive_handoff_detection_actually_fires_on_a_ping_pong`.
+
+- [x] **Step 5: Wire the swarm into the graph**
+
+**The code below does not work as written — `needs_deliberation` is not a free function.**
+Task 6's review replaced it with `make_needs_deliberation(store, case_id, today)`, a factory
+matching every other per-case component in `build_case_graph` (`AuthorityGate`, `LedgerHook`,
+the tool factories), because the original free-function version matched substrings in the
+`documents` node's free-text output and routed the swarm to exactly the wrong cases — see
+Task 6's own corrections for the measurement. `store`, `case_id`, and `today` are already in
+scope inside `build_case_graph`, so construct the bound predicate once and use it for both
+edges:
 
 ```python
 from grace.swarm import build_deliberation_swarm
@@ -3020,6 +3078,7 @@ Then, inside `build_case_graph`, replace the node-and-edge block with:
 
 ```python
     deliberate = build_deliberation_swarm(read_tools)
+    deliberation_needed = make_needs_deliberation(store, case_id, today)
 
     builder = GraphBuilder()
     builder.add_node(intake, "intake")
@@ -3027,20 +3086,27 @@ Then, inside `build_case_graph`, replace the node-and-edge block with:
     builder.add_node(deliberate, "deliberate")
     builder.add_node(decide, "decide")
     builder.add_edge("intake", "documents")
-    # Ambiguous cases deliberate first; clean cases go straight to decide.
-    builder.add_edge("documents", "deliberate", condition=needs_deliberation)
-    builder.add_edge("documents", "decide", condition=lambda s: not needs_deliberation(s))
+    # Ambiguous cases deliberate first; clean cases go straight to decide. The
+    # two conditions are built from the SAME bound predicate object, not two
+    # independent expressions, so they are exact complements: exactly one
+    # always fires. documents is the only fork in the graph, so an
+    # inconsistency between the two would either strand a case with no
+    # successor (nothing files, nothing explains why) or run both branches.
+    builder.add_edge("documents", "deliberate", condition=deliberation_needed)
+    builder.add_edge("documents", "decide", condition=lambda s: not deliberation_needed(s))
     builder.add_edge("deliberate", "decide")
     builder.set_entry_point("intake")
-    builder.set_node_timeout(120.0)
+    builder.set_node_timeout(420.0)
     builder.set_execution_timeout(900.0)
     builder.set_max_node_executions(20)
     return builder.build()
 ```
 
-Note the execution timeout rises to 900s: a swarm on the path takes longer.
+Note the execution timeout rises to 900s: a swarm on the path takes longer. **`node_timeout`
+is 420s, not the plan's original 120s (nor the 330s an earlier fix used) — see the timeout
+finding after Step 7 below; do not shorten it without reading that finding first.**
 
-- [ ] **Step 6: Add a graph test for the conditional routing**
+- [x] **Step 6: Add a graph test for the conditional routing**
 
 Append to `tests/test_graph.py`:
 
@@ -3053,7 +3119,7 @@ def test_clean_and_ambiguous_cases_route_differently():
     assert "deliberate" in node_ids
 ```
 
-- [ ] **Step 7: Run the sweep again and confirm routing**
+- [x] **Step 7: Run the sweep again and confirm routing**
 
 ```bash
 .venv/bin/python -m grace.run sweep --auto escalate 2>&1 | tee /tmp/grace-sweep-swarm.txt
@@ -3061,13 +3127,52 @@ grep -E "Handled autonomously|Escalated" /tmp/grace-sweep-swarm.txt
 ```
 
 Expected: the same 9/3 split as Task 6, but `c-011` and `c-012` now carry a referee's
-`AMBIGUOUS:` question rather than a bare gate reason. The gate still has the final say —
-no amount of deliberation can talk past it.
+`AMBIGUOUS:` or `CLEAR:` conclusion **appended to** the gate's typed reason, not replacing it.
+Confirmed on a real run: `c-012`'s referee actually concluded `CLEAR:` — arguing the case is
+eligible under either reported household size — and the case still escalated with
+`source_conflict` in the row and did not move to `acted`. That is the point, not a bug: the
+gate's deterministic verdict decided the case needs a human; the deliberation only supplies
+wording for why. No amount of persuasive argument from the three agents can talk past it.
 
-- [ ] **Step 8: Run the whole suite**
+**Two real defects were found in review of this task's own fixes, both confirmed against
+scaled or exact reproductions before being marked fixed — read these before changing either
+number they touch:**
 
-Run: `.venv/bin/python -m pytest tests/ -v`
-Expected: PASS — 63 tests
+1. **The `deliberate` node's graph-level timeout margin was inverted.** An earlier fix set
+   `builder.set_node_timeout(330.0)` reasoning that it only needed to clear the swarm's
+   `execution_timeout` (300s) — but `SwarmState.should_continue` checks `execution_timeout`
+   only at the top of its loop, *before* a node starts, so a node beginning at 299s still runs
+   to completion, up to its own `node_timeout` (90s). The true worst case is
+   `execution_timeout + node_timeout = 390s`, not 300s, and 330s does not clear it. Reproduced
+   at 1/30 scale with a sleeping fake model (no Bedrock cost): with the graph timeout set
+   between the swarm's `execution_timeout` alone and the true sum, the graph's node timeout
+   fired first, raised out of the graph call, and `decide` never ran — on a slow-Bedrock day,
+   `c-011`/`c-012` would become sweep *errors* (exit 1, no escalation row) instead of
+   escalations. Fixed to `set_node_timeout(420.0)`, which clears 390s with margin. If you
+   change either the swarm's `execution_timeout`/`node_timeout` or the graph's node timeout,
+   re-derive this inequality — do not eyeball it.
+2. **The referee's `CLEAR:`/`AMBIGUOUS:` marker extraction depended on tuple declaration
+   order.** `_deliberation_note` in `grace/run.py` originally iterated `_REFEREE_VERDICTS =
+   ("AMBIGUOUS:", "CLEAR:")` and returned on the first marker found — which is the first
+   *listed*, not the first the referee actually concluded. Confirmed live: reordering the
+   tuple to `("CLEAR:", "AMBIGUOUS:")` changed nothing about a referee's real output but
+   silently reported a CLEAR verdict on a case the referee had called AMBIGUOUS, and all 348
+   tests at the time still passed — hard rule 5's exact forbidden direction (a deliberation
+   step making Grace *less* cautious). The fix anchors to a marker that starts its own line —
+   the referee's own prompt says to answer that way — checked across every line rather than
+   only the first, because an unclosed `<thinking>` tag can leave reasoning text ahead of the
+   real answer. A marker with no line-start anchor anywhere (a referee that only mentions
+   AMBIGUOUS/CLEAR mid-sentence while reasoning) now honestly reports "the deliberation did
+   not state a conclusion" rather than guessing which occurrence is the real one — the case
+   still escalates on the gate's own reason regardless, since this function only supplies
+   wording, never the decision.
+
+- [x] **Step 8: Run the whole suite**
+
+Run: `.venv/bin/python -m pytest`
+Expected: PASS — **351 tests, not 63.** Prior total was 285; the plan's estimate was already
+stale before this task's own swarm-collapse and timeout/verdict-ordering fixes changed the
+count further.
 
 - [ ] **Step 9: Commit**
 

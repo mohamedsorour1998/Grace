@@ -50,13 +50,18 @@ def test_graph_builds_with_the_expected_nodes():
     assert {"intake", "documents", "decide"} <= node_ids
 
 
-def test_the_spine_is_exactly_three_nodes_until_task_7():
-    """`deliberate` does not exist yet. Asserting the node set exactly means
-    adding the swarm has to come with a deliberate test change, rather than
-    silently satisfying a `<=` assertion that was never about the swarm."""
+def test_the_spine_is_four_nodes_with_the_swarm_on_a_branch():
+    """Asserting the node set exactly, rather than with `<=`.
+
+    This was `== {"intake", "documents", "decide"}` until Task 7, so adding the
+    swarm had to come with a deliberate test change rather than silently
+    satisfying a subset assertion that was never about the swarm. Keep it
+    exact for the same reason: a fifth node appearing here should be a decision
+    someone made, not something a passing suite absorbed.
+    """
     store = InMemoryCaseStore(load_fixture_cases())
     graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
-    assert set(graph.nodes.keys()) == {"intake", "documents", "decide"}
+    assert set(graph.nodes.keys()) == {"intake", "documents", "deliberate", "decide"}
 
 
 def test_only_the_decide_node_can_act():
@@ -68,6 +73,11 @@ def test_only_the_decide_node_can_act():
     stronger layer (CLAUDE.md, layer 1). A future edit that hands
     `[*read_tools, *action_tools]` to every node would leave every gate test
     still passing, so this is asserted structurally.
+
+    The three agents inside `deliberate` have the same property, asserted in
+    tests/test_swarm.py where the swarm's `handoff_to_agent` addition can be
+    stated precisely. Checked here too, from the graph's side, because this is
+    the test someone reads when they add a node.
     """
     store = InMemoryCaseStore(load_fixture_cases())
     graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
@@ -77,6 +87,13 @@ def test_only_the_decide_node_can_act():
     decide = {t for t in graph.nodes["decide"].executor.tool_names}
     assert "submit_renewal" in decide
     assert "escalate_to_caseworker" in decide
+
+    from grace.authority import ACTION_TOOLS
+
+    swarm = graph.nodes["deliberate"].executor
+    for role, swarm_node in swarm.nodes.items():
+        names = set(swarm_node.executor.tool_names)
+        assert not (names & ACTION_TOOLS), (role, names & ACTION_TOOLS)
 
 
 def _plugins(graph, node_id):
@@ -242,13 +259,29 @@ def test_the_gates_seen_set_survives_an_in_process_resume(monkeypatch):
 
 
 def test_no_node_has_its_own_session_manager():
-    """Strands raises `ValueError` if an agent inside a Graph carries one —
-    only the orchestrator may. Asserted here so Plan 2's AgentCore wiring
-    cannot add one to a node without a test noticing."""
+    """Strands raises `ValueError` if an agent inside a Graph or Swarm carries
+    one — only the orchestrator may. Asserted here so Plan 2's AgentCore wiring
+    cannot add one to a node without a test noticing.
+
+    The `deliberate` node needs its own branch. A `Swarm` stores its own under
+    the *public* name `session_manager` and has no `_session_manager` attribute
+    at all, so the `getattr(..., None)` this test uses for `Agent` nodes
+    returns the default and passes without checking anything — a vacuous pass
+    on the one node that contains three more agents. Both names are asserted,
+    and the swarm's members are checked individually.
+    """
+    from strands.multiagent import Swarm
+
     store = InMemoryCaseStore(load_fixture_cases())
     graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
     for node_id, node in graph.nodes.items():
-        assert getattr(node.executor, "_session_manager", None) is None, node_id
+        executor = node.executor
+        if isinstance(executor, Swarm):
+            assert executor.session_manager is None, node_id
+            for role, swarm_node in executor.nodes.items():
+                assert swarm_node.executor._session_manager is None, (node_id, role)
+        else:
+            assert executor._session_manager is None, node_id
 
 
 def _calls_date_today(func) -> bool:
@@ -277,25 +310,53 @@ def test_the_graph_binds_the_passed_date_not_todays():
     assert _gate(graph)._today == date(2030, 1, 1)
 
 
+def _model_ids(graph) -> dict[str, str]:
+    """Every model the graph will actually call, keyed by where it runs.
+
+    Recurses into a `Swarm` node instead of skipping it. A `Swarm` is a
+    `MultiAgentBase`, not an `Agent`: it has no `.model` at all, so the obvious
+    `node.executor.model.get_config()` raises `AttributeError` on it — and the
+    obvious repair, a `getattr(..., None)` guard that skips nodes without one,
+    would leave the hard rule 1 and 2 checks below silently covering two of the
+    five models Grace runs. The three inside the swarm are the ones hard rule 2
+    is actually about.
+    """
+    from strands.multiagent import Swarm
+
+    ids: dict[str, str] = {}
+    for node_id, node in graph.nodes.items():
+        executor = node.executor
+        if isinstance(executor, Swarm):
+            for role, swarm_node in executor.nodes.items():
+                ids[f"{node_id}.{role}"] = swarm_node.executor.model.get_config()[
+                    "model_id"
+                ]
+        else:
+            ids[node_id] = executor.model.get_config()["model_id"]
+    return ids
+
+
 def test_every_node_runs_a_nova_model():
     """Hard rule 1, checked on the built object rather than on the source."""
     store = InMemoryCaseStore(load_fixture_cases())
     graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
-    for node_id, node in graph.nodes.items():
-        model_id = node.executor.model.get_config()["model_id"]
-        assert "amazon.nova" in model_id, (node_id, model_id)
+    ids = _model_ids(graph)
+    # intake, documents, decide, plus the swarm's three.
+    assert len(ids) == 6, ids
+    for where, model_id in ids.items():
+        assert "amazon.nova" in model_id, (where, model_id)
 
 
 def test_no_node_uses_the_banned_model():
     """`nova-lite-v1:0` filed a renewal it was told not to file (see
     grace/models.py). `decide` is the gated role, so this matters most there,
-    but no node may use it."""
+    but no node may use it — including the three inside the swarm."""
     from grace.models import BANNED_MODEL_IDS
 
     store = InMemoryCaseStore(load_fixture_cases())
     graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
-    for node_id, node in graph.nodes.items():
-        assert node.executor.model.get_config()["model_id"] not in BANNED_MODEL_IDS, node_id
+    for where, model_id in _model_ids(graph).items():
+        assert model_id not in BANNED_MODEL_IDS, where
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +463,234 @@ def test_needs_deliberation_fails_closed_when_evaluate_itself_raises():
         assert make_needs_deliberation(store, case.case_id, TODAY)(None) is True
     finally:
         graph_module.load_pack = original
+
+
+# ---------------------------------------------------------------------------
+# Conditional routing to the swarm (Task 7). The plan's test here asserted only
+# that a `deliberate` node exists in the graph, which the bug Task 6 found
+# would have passed: the original predicate routed the swarm to exactly the
+# wrong cases while the node existed and the graph built fine. These assert the
+# routing itself, structurally and behaviourally.
+# ---------------------------------------------------------------------------
+
+
+def _edges_from(graph, node_id: str) -> dict[str, Any]:
+    """The outgoing edges of one node, keyed by destination.
+
+    `Graph.edges` is a `set`, so it has no order to rely on — the conditions
+    are looked up by destination `node_id` rather than by position, for the
+    same reason `_most_recent` exists in `grace/authority.py`: a routing
+    decision must never depend on which edge happened to come first out of an
+    unordered container.
+    """
+    return {
+        edge.to_node.node_id: edge
+        for edge in graph.edges
+        if edge.from_node.node_id == node_id
+    }
+
+
+def test_documents_forks_to_exactly_deliberate_and_decide():
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
+    assert set(_edges_from(graph, "documents")) == {"deliberate", "decide"}
+    # And the swarm rejoins the spine, rather than being a dead end that
+    # deliberates and then never acts.
+    assert set(_edges_from(graph, "deliberate")) == {"decide"}
+    assert set(_edges_from(graph, "intake")) == {"documents"}
+
+
+@pytest.mark.parametrize("case_id", [c.case_id for c in load_fixture_cases()])
+def test_the_two_edges_out_of_documents_are_exact_complements(case_id):
+    """Exactly one branch out of `documents` fires, on every fixture.
+
+    `documents` is the only fork in the graph, and Python's Graph fires a node
+    when *any* incoming edge is satisfied. If both conditions were true the
+    swarm would run and `decide` would also fire immediately from `documents`,
+    racing the deliberation it was supposed to wait for. If neither were true
+    the case would strand: `documents` completes, nothing succeeds it, the graph
+    reports COMPLETED having never run `decide`, and the sweep sees a clean run
+    with no renewal filed — which it escalates, so a family gets a caseworker
+    for a graph-wiring bug.
+
+    Both conditions are built from one bound predicate in `build_case_graph`
+    precisely so this is structural, but "structural" is a claim about code
+    that a test should still check against the data.
+    """
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, case_id, TODAY, TranscriptChannel())
+    edges = _edges_from(graph, "documents")
+    to_deliberate = edges["deliberate"].condition(None)
+    to_decide = edges["decide"].condition(None)
+    assert to_deliberate != to_decide, (case_id, to_deliberate, to_decide)
+
+
+def test_the_edge_conditions_route_the_real_fixtures_correctly():
+    """The routing the swarm exists for, measured on all twelve households.
+
+    This is the assertion the Task 6 bug would have failed. The predicate it
+    replaced fired on `c-010` (a missing document — no deliberation resolves
+    "the document is not on file") and stayed silent on `c-011` (a 30% income
+    change) and `c-012` (a source conflict), the two cases a three-agent
+    argument exists for. Asserted through the built graph's actual edge
+    conditions rather than by calling `make_needs_deliberation` directly, so a
+    wiring mistake — the two conditions swapped, or the wrong predicate passed
+    to an edge — fails here too.
+    """
+    from grace.authority import evaluate
+    from grace.rules.pack import load_pack
+
+    store = InMemoryCaseStore(load_fixture_cases())
+    routed_to_swarm = set()
+    for case in load_fixture_cases():
+        graph = build_case_graph(store, case.case_id, TODAY, TranscriptChannel())
+        edges = _edges_from(graph, "documents")
+        if edges["deliberate"].condition(None):
+            routed_to_swarm.add(case.case_id)
+
+        # The same reason codes, straight from the gate, as the reason this
+        # routing is correct rather than merely expected.
+        codes = {r.code for r in evaluate(case, TODAY, load_pack(case.program, case.state)).reasons}
+        expected = bool(
+            codes & {"material_income_change", "household_size_change", "source_conflict"}
+        )
+        assert (case.case_id in routed_to_swarm) == expected, (case.case_id, codes)
+
+    assert routed_to_swarm == {"c-011", "c-012"}
+    # The nine clean cases and c-010 all skip it: ten of twelve households never
+    # pay for three extra model calls.
+    assert len(routed_to_swarm) == 2
+
+
+def test_a_case_that_cannot_be_verified_is_routed_to_the_swarm():
+    """Fail closed on the side that costs money, not coverage.
+
+    The cheap branch is the one that skips scrutiny, so "I could not tell" must
+    never land there. Checked through the edge condition rather than the
+    predicate alone, because a `lambda s: not predicate(s)` written against a
+    *differently constructed* predicate would still look right at the call
+    site and would send an unverifiable case straight to `decide`.
+    """
+    broken = replace(load_fixture_cases()[0], program="no_such_program", state="ZZ")
+    store = InMemoryCaseStore([broken])
+    graph = build_case_graph(store, broken.case_id, TODAY, TranscriptChannel())
+    edges = _edges_from(graph, "documents")
+    assert edges["deliberate"].condition(None) is True
+    assert edges["decide"].condition(None) is False
+
+
+def test_the_edge_conditions_are_the_legacy_single_argument_shape():
+    """The SDK picks a calling convention by parameter *name*.
+
+    `_is_context_condition` returns True for any condition with a parameter
+    named `invocation_state`, and then calls it as
+    `condition(state, invocation_state=...)`. Grace's conditions take `state`
+    only, so they must not acquire such a parameter — a rename would change how
+    the SDK invokes them, and a `TypeError` raised inside an edge condition is
+    an unhandled failure mid-graph, not a routing decision.
+    """
+    from strands.multiagent.graph import _is_context_condition
+
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, "c-011", TODAY, TranscriptChannel())
+    for destination, edge in _edges_from(graph, "documents").items():
+        assert not _is_context_condition(edge.condition), destination
+
+
+def test_the_graph_node_timeout_does_not_preempt_the_swarms_own_budget():
+    """Which timeout binds decides whether an ambiguous case escalates or errors.
+
+    `Graph._stream_node_to_queue` wraps an entire node — including a nested
+    `Swarm` — in `asyncio.wait_for(..., timeout=self.node_timeout)`, and a graph
+    node timeout is fail-fast: `_handle_node_timeout` puts the exception on the
+    event queue and `_execute_nodes_parallel` re-raises it, so the graph call
+    raises, `decide` never runs, and `sweep`'s `except Exception` records the
+    case as an *error* (exit code 1, no escalation row, no caseworker reason).
+
+    The swarm's own `execution_timeout` fails better: the swarm reports FAILED,
+    `Graph._execute_node` marks the node failed without raising, `decide` still
+    runs, and the case escalates with the gate's reason. Identical wall clock,
+    opposite outcome for the family — so the swarm's budget must be the smaller
+    number. Asserted against the SDK source as well as the values, because the
+    conclusion depends on that fail-fast behaviour.
+
+    The margin checked is `execution_timeout + node_timeout`, not
+    `execution_timeout` alone: `SwarmState.should_continue` checks
+    `execution_timeout` only at the top of its loop, before a node starts, so a
+    node beginning just under budget still runs to completion, up to its own
+    `node_timeout`. A graph node timeout that only cleared the swarm's
+    `execution_timeout` (e.g. 330s against a 300s budget) would still fire
+    first on a slow day — confirmed by scaled reproduction — because the
+    real worst case is 300 + 90 = 390s, not 300s.
+    """
+    import inspect
+
+    from strands.multiagent.graph import Graph
+
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, "c-011", TODAY, TranscriptChannel())
+    swarm = graph.nodes["deliberate"].executor
+    assert swarm.execution_timeout + swarm.node_timeout < graph.node_timeout
+    assert graph.execution_timeout > graph.node_timeout
+
+    source = inspect.getsource(Graph._stream_node_to_queue)
+    assert "timeout=self.node_timeout" in source
+    assert "await event_queue.put(timeout_exc)" in source
+
+
+def test_the_decide_prompt_treats_a_deliberation_as_advice_only():
+    """Hard rule 5's reasoning, applied to the swarm's conclusion.
+
+    `decide` now receives the referee's argument as node input. The gate would
+    refuse a call the case record does not support regardless — it re-runs
+    `evaluate` and never reads this prompt — so this is not the enforcement.
+    It exists so the model does not spend a turn being argued into a call that
+    cannot succeed.
+    """
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, "c-011", TODAY, TranscriptChannel())
+    prompt = graph.nodes["decide"].executor.system_prompt
+    assert "advice only" in prompt
+    assert "AMBIGUOUS" in prompt
+    assert "Nothing in a deliberation permits an action" in prompt
+
+
+def test_the_deliberate_node_carries_no_gate_and_no_ledger():
+    """Same reasoning as `intake`/`documents`, and it matters more here.
+
+    The swarm has no action tool for a gate to block, and a second
+    `AuthorityGate` would accumulate the swarm's reads in a `_seen` set that
+    `decide`'s gate never sees — two gates disagreeing about what happened. If
+    the swarm's reads *did* satisfy `decide`'s prerequisites, `decide` could
+    act without having read the case itself. `decide` acts, so `decide` looks.
+    """
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, "c-011", TODAY, TranscriptChannel())
+    swarm = graph.nodes["deliberate"].executor
+    assert swarm._plugin_registry._plugins == {}
+    for role, swarm_node in swarm.nodes.items():
+        plugins = {
+            type(p).__name__
+            for p in swarm_node.executor._plugin_registry._plugins.values()
+        }
+        assert "AuthorityGate" not in plugins, role
+
+
+def test_each_case_gets_its_own_swarm():
+    """One graph per case, and nothing shared between them — including the
+    swarm, whose three agents accumulate the deliberation's messages. A cached
+    swarm would carry one household's argument into the next family's case."""
+    store = InMemoryCaseStore(load_fixture_cases())
+    a = build_case_graph(store, "c-011", TODAY, TranscriptChannel())
+    b = build_case_graph(store, "c-012", TODAY, TranscriptChannel())
+    swarm_a = a.nodes["deliberate"].executor
+    swarm_b = b.nodes["deliberate"].executor
+    assert swarm_a is not swarm_b
+    for role in ("advocate", "verifier", "referee"):
+        assert swarm_a.nodes[role].executor is not swarm_b.nodes[role].executor
+    # And each reads its own household, because the tools are bound per case.
+    read_case = swarm_b.nodes["advocate"].executor.tool_registry.registry["read_case"]
+    assert "c-012" in read_case._tool_func()
 
 
 # ---------------------------------------------------------------------------
@@ -1149,3 +1438,360 @@ def test_main_exits_zero_on_a_clean_sweep_with_escalations(monkeypatch):
     )
     monkeypatch.setattr("sys.argv", ["grace", "sweep"])
     assert main() == 0
+
+
+def test_a_failed_run_still_reports_the_gates_specific_reason(monkeypatch):
+    """A run-status message must not displace what the gate actually found.
+
+    Observed on a real `c-011` sweep: the deliberation swarm exhausted its
+    handoff budget and reported FAILED, so the graph reported FAILED — but
+    `decide` still ran (a failed node does not stop the graph; verified against
+    the SDK), and `evaluate()` had a specific verdict on the case record the
+    whole time. The row read "The run ended in state 'failed' without
+    completing" and dropped `material_income_change: Income moved 30.0%`
+    entirely — the one fact the caseworker needed, replaced by a sentence about
+    Grace's internals.
+
+    "The run did not finish" is only worth saying when nothing better exists.
+    """
+    from strands.multiagent.base import Status
+
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-011"] = FakeGraph([FakeResult(status=Status.FAILED)])
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    row = dict(report.escalated)["c-011"]
+    assert "material_income_change" in row
+    assert "ended in state" not in row
+    # And the case is still escalated, not acted — a failed run files nothing.
+    assert "c-011" not in report.acted
+
+
+def test_a_failed_run_on_a_clean_case_still_says_the_run_failed(monkeypatch):
+    """The other side of that precedence.
+
+    When the gate has *no* reason — the case record is clean — the run-status
+    message is the only information there is, and it must survive. Dropping it
+    would leave a clean case with a failed run indistinguishable from one that
+    simply filed nothing.
+    """
+    from strands.multiagent.base import Status
+
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-005"] = FakeGraph([FakeResult(status=Status.FAILED)])
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    assert "ended in state 'failed'" in dict(report.escalated)["c-005"]
+
+
+def test_an_interrupt_reason_still_beats_the_gates_wording_on_a_failed_run(monkeypatch):
+    """Precedence is about the *generic* fallback, not about every reason.
+
+    An interrupt reason is the gate's own text about this specific household, so
+    it must keep winning over `_gate_reason`'s reconstruction — the narrowing
+    above must not have turned into "always prefer the gate."
+    """
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-011"] = FakeGraph([_interrupted("the gate's own wording for c-011")])
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    assert dict(report.escalated)["c-011"].startswith("the gate's own wording for c-011")
+
+
+# ---------------------------------------------------------------------------
+# The referee's conclusion in the escalation row. Fakes reproduce the nesting
+# a real `GraphResult` has around a `Swarm` node — `GraphResult.results[node]`
+# is a `NodeResult` whose `.result` is a `SwarmResult` with its own `.results`
+# — so the accessor path is testable without paying for three model calls. The
+# real shape was confirmed against a live c-011 run before these were written.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakeSwarmResult:
+    """Shaped like `SwarmResult`: a `results` dict keyed by role."""
+
+    results: dict = field(default_factory=dict)
+
+
+@dataclass
+class FakeNodeResult:
+    """Shaped like `NodeResult`. `str()` delegates to the inner result, which
+    is what the SDK's own `NodeResult.__str__` does."""
+
+    result: Any = None
+
+    def __str__(self) -> str:
+        return str(self.result)
+
+
+def _graph_result_with_deliberation(referee_text, extra_roles=None):
+    """A `GraphResult`-shaped object carrying a swarm's referee output."""
+    from strands.multiagent.base import Status
+
+    roles = dict(extra_roles or {})
+    if referee_text is not None:
+        roles["referee"] = FakeNodeResult(result=referee_text)
+    result = FakeResult(status=Status.COMPLETED)
+    result.results = {
+        "intake": FakeNodeResult(result="opened"),
+        "documents": FakeNodeResult(result="all current"),
+        "deliberate": FakeNodeResult(result=FakeSwarmResult(results=roles)),
+        "decide": FakeNodeResult(result="escalated"),
+    }
+    return result
+
+
+def test_the_referees_question_reaches_the_escalation_row(monkeypatch):
+    """The point of Task 7, as the caseworker sees it.
+
+    Before this, `c-011` escalated with the bare gate reason and the three
+    model calls the swarm cost produced nothing a human ever read. Verified
+    against a real run: the referee does conclude with an `AMBIGUOUS:`
+    question, and it was being discarded.
+    """
+    referee = (
+        "<thinking>Weighing the income change.</thinking>\n\n"
+        "AMBIGUOUS: Does the Yamamoto Household still qualify given the "
+        "reported income change?"
+    )
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-011"] = FakeGraph([_graph_result_with_deliberation(referee)])
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    row = dict(report.escalated)["c-011"]
+    assert "AMBIGUOUS: Does the Yamamoto Household still qualify" in row
+    # The gate's typed reason survives alongside it — appended, not replaced.
+    assert "material_income_change" in row
+    # And the thinking block does not reach the caseworker.
+    assert "Weighing the income change" not in row
+
+
+def test_the_deliberation_never_replaces_the_gates_reason(monkeypatch):
+    """A model's sentence must not stand where the deterministic verdict does.
+
+    Even a referee that concludes CLEAR — arguing the case is fine — cannot
+    remove the gate's reason from the row, because the gate is what decided the
+    case needs a human. This is hard rule 5's reasoning: a deliberation may
+    make Grace more cautious, never less.
+    """
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-012"] = FakeGraph(
+        [_graph_result_with_deliberation("CLEAR: the wage record is stale, ignore it.")]
+    )
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    row = dict(report.escalated)["c-012"]
+    assert "source_conflict" in row
+    assert "CLEAR: the wage record is stale" in row
+    assert "c-012" not in report.acted
+
+
+def test_deliberation_note_does_not_depend_on_referee_verdicts_tuple_order():
+    """`_REFEREE_VERDICTS`'s declaration order must never decide the outcome.
+
+    A `for marker in _REFEREE_VERDICTS` loop that returns on the first match
+    picks whichever marker happens to be listed first, not whichever the
+    referee actually concluded. Verified against exactly this failure:
+    reordering the tuple to `("CLEAR:", "AMBIGUOUS:")` left this test's input
+    unchanged and still correctly extracted AMBIGUOUS before the fix in
+    `_deliberation_note` that made the search order-independent — this test
+    pins that the fix holds regardless of which order the tuple is declared
+    in, by asserting on the extracted text itself rather than declaration
+    order (which this test does not touch).
+    """
+    import grace.run as run
+
+    note = run._deliberation_note(
+        _graph_result_with_deliberation(
+            "AMBIGUOUS: which figure governs the income change?"
+        )
+    )
+    assert note is not None
+    assert note.startswith("AMBIGUOUS:")
+
+
+def test_deliberation_note_does_not_guess_at_a_mid_sentence_marker():
+    """A marker appearing inside the referee's own reasoning — never at the
+    start of a line — must not be reported as a conclusion.
+
+    "I first considered CLEAR: ..., but ultimately AMBIGUOUS: ..." states
+    CLEAR first and means AMBIGUOUS; neither declaration order nor text
+    position distinguishes a reasoning step from a real conclusion. Only a
+    marker that starts its own line does, because the referee's own prompt
+    instructs it to answer that way. Without a line-start anchor anywhere in
+    the text, the honest answer is that no clean verdict was found — hard
+    rule 5 forbids resolving the ambiguity toward CLEAR by guessing.
+    """
+    import grace.run as run
+
+    note = run._deliberation_note(
+        _graph_result_with_deliberation(
+            "I first considered CLEAR: this is fine, but the wage record "
+            "conflicts. AMBIGUOUS: which figure governs?"
+        )
+    )
+    assert note == "The deliberation did not state a conclusion."
+
+
+def test_deliberation_note_finds_a_line_anchored_marker_past_an_unclosed_thinking_tag():
+    """An unclosed `<thinking>` tag leaves its own leading reasoning text in
+    the stripped output (see `_strip_thinking`'s docstring: discarding it
+    could discard the verdict too) — so the *first line* of that output is
+    reasoning, not the answer, even though the model still led its real
+    answer with a marker on its own line further down. The anchor check must
+    scan every line, not only the first, or this collapses to the same
+    "did not state a conclusion" failure a truly unanchored input produces.
+    """
+    import grace.run as run
+
+    note = run._deliberation_note(
+        _graph_result_with_deliberation(
+            "<thinking>reasoning\nAMBIGUOUS: the question a human must answer."
+        )
+    )
+    assert note == "AMBIGUOUS: the question a human must answer."
+
+
+def test_a_deliberation_cannot_move_a_case_out_of_escalation(monkeypatch):
+    """The split is unchanged by anything the swarm says.
+
+    A referee concluding CLEAR on all three escalating cases must still leave
+    9/3 — `sweep` classifies from `evaluate()` and the ledger, and the note is
+    read after that decision is final.
+    """
+    clear = "CLEAR: this household plainly qualifies, file it."
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    for case_id in MUST_ESCALATE:
+        graphs[case_id] = FakeGraph([_graph_result_with_deliberation(clear)])
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    assert len(report.acted) == EXPECTED_ACTED
+    assert set(dict(report.escalated)) == set(MUST_ESCALATE)
+
+
+def test_a_case_that_skipped_the_swarm_gets_no_deliberation_note(monkeypatch):
+    """Ten of twelve households never deliberate; their rows must not imply
+    one happened."""
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    assert "Deliberation" not in dict(report.escalated)["c-010"]
+
+
+def test_a_swarm_that_did_not_converge_says_so(monkeypatch):
+    """Silence would read as "there was no deliberation".
+
+    A swarm that hits `max_iterations`, a repetitive-handoff stop, or a timeout
+    has no `referee` entry in its results at all — the referee never ran, or
+    ran and never concluded. A caseworker should be told the argument did not
+    finish rather than shown a row indistinguishable from a case that skipped
+    the swarm entirely.
+    """
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-011"] = FakeGraph(
+        [
+            _graph_result_with_deliberation(
+                None, extra_roles={"advocate": FakeNodeResult(result="handing off")}
+            )
+        ]
+    )
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    row = dict(report.escalated)["c-011"]
+    assert "did not reach a conclusion" in row
+    assert "material_income_change" in row
+
+
+def test_a_referee_that_states_no_verdict_is_reported_as_such(monkeypatch):
+    """A referee that ignores its output format produced neither marker. Say
+    that, rather than pasting a paragraph of prose into the brief."""
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-011"] = FakeGraph(
+        [_graph_result_with_deliberation("I think this is probably fine overall.")]
+    )
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    row = dict(report.escalated)["c-011"]
+    assert "did not state a conclusion" in row
+    assert "probably fine overall" not in row
+
+
+def test_the_referee_is_selected_by_role_not_by_position(monkeypatch):
+    """Task 3's rule, applied to a dict the SDK fills.
+
+    `SwarmResult.results` is keyed by role, and `node_history` records whoever
+    ran last. Reading either by position — `list(results.values())[-1]`, or
+    `node_history[-1]` — would make the caseworker's briefing depend on
+    ordering rather than on which agent is defined to conclude. Here the
+    advocate is inserted *after* the referee, so a position-based accessor
+    reports the advocate's text and this test fails.
+    """
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    result = _graph_result_with_deliberation("AMBIGUOUS: the real question.")
+    result.results["deliberate"].result.results["advocate"] = FakeNodeResult(
+        result="AMBIGUOUS: the advocate's opening, which is not the verdict."
+    )
+    graphs["c-011"] = FakeGraph([result])
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    row = dict(report.escalated)["c-011"]
+    assert "AMBIGUOUS: the real question." in row
+    assert "advocate's opening" not in row
+
+
+def test_a_long_deliberation_is_truncated_rather_than_dumped(monkeypatch):
+    """The escalation list is what a caseworker actually reads. A referee that
+    writes an essay must not push the gate's reason off the screen."""
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-011"] = FakeGraph(
+        [_graph_result_with_deliberation("AMBIGUOUS: " + "word " * 500)]
+    )
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    row = dict(report.escalated)["c-011"]
+    assert len(row) < 800, len(row)
+    assert row.endswith("…")
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        None,
+        "a bare string where a result should be",
+        123,
+    ],
+)
+def test_a_malformed_result_shape_does_not_break_the_row(broken, monkeypatch):
+    """Briefing text must never cost a family their row in the report.
+
+    `results` is a plain dict the SDK fills and `str()` runs a model result's
+    own `__str__`, so the accessor path walks several shapes this code does not
+    own. Any failure there loses a sentence of context; it must not lose the
+    escalation, which is why `_deliberation_note` catches `Exception` broadly
+    rather than the two or three types that look likely.
+    """
+    from strands.multiagent.base import Status
+
+    result = FakeResult(status=Status.COMPLETED)
+    result.results = {"deliberate": broken}
+    graphs = {c.case_id: FakeGraph([_completed()]) for c in load_fixture_cases()}
+    graphs["c-011"] = FakeGraph([result])
+    report = _sweep_with(monkeypatch, graphs, auto_decide="escalate")
+    assert "material_income_change" in dict(report.escalated)["c-011"]
+    assert len(report.errors) == 0
+    assert len(report.acted) == EXPECTED_ACTED
+
+
+def test_a_result_with_no_results_attribute_is_tolerated(monkeypatch):
+    """`FakeResult` in the older tests above carries no `results` at all, which
+    is exactly what a `GraphResult` shape check must survive — those tests would
+    otherwise start failing for a reason unrelated to what they assert."""
+    import grace.run as run
+
+    assert run._deliberation_note(_completed()) is None
+    assert run._deliberation_note(None) is None
+
+
+def test_unclosed_thinking_tag_does_not_swallow_the_verdict():
+    """A truncated model response can leave `<thinking>` unclosed.
+
+    Dropping everything after the opening tag would discard the verdict, so the
+    remainder is kept — leading reasoning text and all — and searched. Keeping
+    too much is the safe direction here: `_deliberation_note` slices from the
+    marker onward, so text before it never reaches the caseworker anyway.
+    """
+    import grace.run as run
+
+    text = "<thinking>reasoning\nAMBIGUOUS: the question a human must answer."
+    assert "AMBIGUOUS: the question a human must answer." in run._strip_thinking(text)
+    assert "<thinking>" not in run._strip_thinking(text)
