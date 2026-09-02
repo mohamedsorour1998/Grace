@@ -591,3 +591,108 @@ def test_no_module_declares_a_non_nova_provider():
                 "cohere",
             ):
                 assert vendor not in literal.lower(), (module.__name__, vendor, literal)
+
+
+# ---------------------------------------------------------------------------
+# list_documents states the freshness verdict rather than the arithmetic.
+#
+# Task 6: an earlier version reported `received` plus `max_age_days` and left
+# the subtraction to the model. On a real sweep it got that wrong on two of the
+# nine clean fixture cases, told those families a current document had expired,
+# and texted them about it — a false alarm sent to a family whose paperwork was
+# in order. Deadline math is a tool, not an agent; handing a model two dates and
+# asking for a comparison is an agent.
+# ---------------------------------------------------------------------------
+
+
+def test_list_documents_says_current_for_a_clean_case(store):
+    out = _by_name(make_read_tools(store, "c-001", TODAY))["list_documents"]()
+    assert out.count("CURRENT") == 2
+    assert "STALE" not in out
+    assert "EXPIRED" not in out
+
+
+def test_list_documents_does_not_make_the_model_do_the_arithmetic(store):
+    """The raw allowance must not appear as a number to subtract with. It may
+    appear inside the STALE explanation, where the verdict is already stated."""
+    out = _by_name(make_read_tools(store, "c-001", TODAY))["list_documents"]()
+    assert "max age" not in out.lower()
+
+
+def test_list_documents_says_stale_for_a_document_past_its_max_age():
+    case = Case(
+        case_id="c-stale",
+        household=Household(
+            household_id="h-stale",
+            display_name="The Stale Household",
+            language="en",
+            phone="+15550000095",
+            monthly_income_cents=180_000,
+            size=2,
+        ),
+        program="medicaid",
+        state="NY",
+        cert_end=date(2026, 10, 15),
+        documents=(
+            Document(doc_id="proof_of_income", received=date(2026, 1, 1)),
+            Document(doc_id="proof_of_residency", received=date(2026, 3, 1)),
+        ),
+    )
+    out = _by_name(make_read_tools(InMemoryCaseStore([case]), "c-stale", TODAY))[
+        "list_documents"
+    ]()
+    assert "STALE" in out
+    assert "proof_of_income" in out
+
+
+def test_list_documents_says_expired_for_a_document_past_its_expiry():
+    case = Case(
+        case_id="c-exp",
+        household=Household(
+            household_id="h-exp",
+            display_name="The Expired Household",
+            language="en",
+            phone="+15550000094",
+            monthly_income_cents=180_000,
+            size=2,
+        ),
+        program="medicaid",
+        state="NY",
+        cert_end=date(2026, 10, 15),
+        documents=(
+            Document(
+                doc_id="proof_of_income",
+                received=date(2026, 9, 20),
+                expires=date(2026, 9, 30),
+            ),
+            Document(doc_id="proof_of_residency", received=date(2026, 3, 1)),
+        ),
+    )
+    out = _by_name(make_read_tools(InMemoryCaseStore([case]), "c-exp", TODAY))[
+        "list_documents"
+    ]()
+    assert "EXPIRED" in out
+
+
+def test_list_documents_and_the_gate_never_disagree_on_any_fixture():
+    """The property that matters: the tool a model reads and the gate that
+    permits the action must describe the same reality.
+
+    If `list_documents` said CURRENT where `evaluate` says `stale_document`, the
+    model would reason from facts the gate does not share and the disagreement
+    would be invisible — no error, tool says current, gate says stale. Both call
+    `document_problems`, so this asserts the wiring holds for all twelve
+    households rather than for the cases someone thought to enumerate.
+    """
+    from grace.authority import evaluate
+    from grace.cases.store import load_fixture_cases
+
+    for case in load_fixture_cases():
+        store_one = InMemoryCaseStore([case])
+        out = _by_name(make_read_tools(store_one, case.case_id, TODAY))["list_documents"]()
+        gate_says_stale = any(
+            r.code == "stale_document"
+            for r in evaluate(case, TODAY, load_pack(case.program, case.state)).reasons
+        )
+        tool_says_stale = "STALE" in out or "EXPIRED" in out
+        assert gate_says_stale == tool_says_stale, (case.case_id, out)

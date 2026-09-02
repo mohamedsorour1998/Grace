@@ -31,10 +31,10 @@ from datetime import date
 
 from strands import tool
 
-from grace.authority import _most_recent
+from grace.authority import _most_recent, document_problems
 from grace.cases.store import CaseStore
 from grace.rules.clock import renewal_window, window_status
-from grace.rules.pack import InvalidRulePack, load_pack
+from grace.rules.pack import load_pack
 
 # What a read tool says when it could not verify a fact it was asked for. The
 # wording matters: it must not look like a fact ("window closed"), and it must
@@ -125,36 +125,64 @@ def make_read_tools(store: CaseStore, case_id: str, today: date) -> list:
         c = store.get(case_id)
         try:
             pack = load_pack(c.program, c.state)
-        except InvalidRulePack:
-            # `renewal_window` is not called here, so `ValueError` from an
-            # inverted window cannot arise on this path — only a malformed or
-            # missing pack (`InvalidRulePack`) can. `check_window` above also
-            # catches `ValueError` because it does call `renewal_window`; the
-            # two tools catch different sets because they touch different
-            # functions, not by oversight.
+            lines = []
+            for req in pack.required_documents:
+                # `_most_recent`, not `{d.doc_id: d for d in c.documents}`: a
+                # household that re-submits leaves the superseded copy on file,
+                # and a dict comprehension is last-wins by record *order*, not
+                # by which copy is newest. Reusing the gate's own selector is
+                # the point — this tool is what a model reads before deciding
+                # whether to act, so if it named a different copy than
+                # `evaluate` does, the model would be reasoning from facts the
+                # gate does not share.
+                doc = _most_recent(c.documents, req.doc_id)
+                if doc is None:
+                    lines.append(f"- {req.doc_id}: MISSING (required)")
+                    continue
+                # The verdict is computed here and stated plainly, not left to
+                # the model to derive from `received` plus `max_age_days`. An
+                # earlier version reported both raw values and let the model
+                # subtract; on a real sweep it got the arithmetic wrong on two
+                # of nine clean cases and texted those families that a current
+                # document had expired. `document_problems` is the same
+                # function `evaluate` uses, so the tool and the gate cannot
+                # disagree about staleness — the same reason `_most_recent` is
+                # shared rather than reimplemented.
+                problems = document_problems(doc, req, today)
+                if not problems:
+                    verdict = "CURRENT"
+                elif problems == ("stale_by_age",):
+                    verdict = f"STALE (older than the {req.max_age_days} days allowed)"
+                elif problems == ("expired",):
+                    verdict = "EXPIRED (past its own expiry date)"
+                else:
+                    verdict = (
+                        f"STALE (older than the {req.max_age_days} days allowed) "
+                        "and EXPIRED (past its own expiry date)"
+                    )
+                lines.append(
+                    f"- {req.doc_id}: {verdict}"
+                    f" — received {doc.received.isoformat()}"
+                    f"{f', expires {doc.expires.isoformat()}' if doc.expires else ''}"
+                )
+        except Exception:
+            # Fails closed on anything, not a chosen subset. One `try` around
+            # both the pack load and the per-document verdict on purpose: a
+            # pack with an out-of-range `max_age_days` loads cleanly through
+            # `load_pack`'s own validation (which enforces no upper bound) and
+            # then makes `document_problems`'s date arithmetic — the same
+            # arithmetic `renewal_window` does — raise `OverflowError`. A `try`
+            # that only wrapped `load_pack` would leave that call unguarded,
+            # which is exactly the "narrowed to the exceptions I've seen so
+            # far" pattern that caused `check_window`'s version of this bug
+            # (Task 4) — see the module docstring's item 2. Confirmed live: a
+            # pack with `max_age_days: 999999999` raised uncaught from this
+            # function until the `try` covered the loop, not just the load.
             #
-            # Without a pack there is no list of required documents, so any
+            # Without a pack, or without a verdict for every document, any
             # summary here would be an invented one. Say nothing rather than
             # imply the paperwork is complete.
             return _UNVERIFIABLE
-        lines = []
-        for req in pack.required_documents:
-            # `_most_recent`, not `{d.doc_id: d for d in c.documents}`: a
-            # household that re-submits leaves the superseded copy on file, and
-            # a dict comprehension is last-wins by record *order*, not by which
-            # copy is newest. Reusing the gate's own selector is the point —
-            # this tool is what a model reads before deciding whether to act,
-            # so if it named a different copy than `evaluate` does, the model
-            # would be reasoning from facts the gate does not share.
-            doc = _most_recent(c.documents, req.doc_id)
-            if doc is None:
-                lines.append(f"- {req.doc_id}: MISSING (required)")
-            else:
-                lines.append(
-                    f"- {req.doc_id}: received {doc.received.isoformat()}"
-                    f"{f', expires {doc.expires.isoformat()}' if doc.expires else ''}"
-                    f" (max age {req.max_age_days} days)"
-                )
         return "\n".join(lines)
 
     return [read_case, check_window, list_documents]

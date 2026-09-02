@@ -27,9 +27,12 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1, Task 5 complete.** 212 tests passing (`.venv/bin/python -m pytest`, or
-`.venv/bin/pytest` directly). Task 6 — the graph spine and `grace sweep` CLI — is next; this is
-the first task that produces a runnable end-to-end path.
+**Plan 1, Task 6 complete.** 285 tests passing (`.venv/bin/python -m pytest`, or
+`.venv/bin/pytest` directly). `grace sweep` runs end to end against real Bedrock and reports
+**9 acted / 3 escalated**, stable across consecutive runs including against a caseworker
+answer that would have exploited the resume fail-open below. Task 7 — the deliberation swarm —
+is next; `make_needs_deliberation` already exists and is tested, waiting to be called and
+wired to a conditional edge.
 
 | Task | State |
 |---|---|
@@ -38,8 +41,8 @@ the first task that produces a runnable end-to-end path.
 | 3 — the authority gate | **done** — `grace/authority.py`, 121 tests total. The task that matters most. |
 | 4 — Nova model registry + tools | **done** — `grace/models.py`, `grace/tools/{read,action}.py`, 157 tests total |
 | 5 — `AuthorityGate` + `LedgerHook` | **done** — `grace/{steering,ledger,vendored_actions}.py`, 212 tests total. Capability absence is now real enforcement, not shape. |
-| 6 — Graph spine + `grace sweep` CLI | next — **read "What Task 5 established" below first: wiring an `AuthorityGate` must go through `plugins=[...]`, and the SDK swallows any exception the handler raises** |
-| 7 — deliberation swarm | not started |
+| 6 — Graph spine + `grace sweep` CLI | **done** — `grace/{graph,run}.py`, 285 tests total. The first runnable end-to-end path. **Read "What Task 6 established" below before touching the sweep or the swarm** |
+| 7 — deliberation swarm | next — call `make_needs_deliberation(store, case_id, today)` (already written and tested) to get the conditional-edge predicate for a `deliberate` node |
 | 8 — trajectory evals | not started |
 | 9 — ledger/trace correlation | not started |
 
@@ -223,12 +226,116 @@ worked around.
 
 **`AuthorityGate._seen` is per-instance, in-memory, and does not survive a fresh process.** It
 cannot drift from the ledger on the read path — both are driven off the same
-`BeforeToolCallEvent` — but Grace builds one graph per case today, so this has never been tested
-against a resumed run. The moment a `Graph`/`Swarm` interrupt is resumed in a new process (Task
-6/7), a freshly-constructed gate's `_seen` starts empty while the ledger already shows the prior
-reads, and the gate will `Guide` for reads that already happened. Decide then whether `_seen`
-needs reconstructing from the ledger on resume, or whether resume always re-runs the read nodes
-regardless.
+`BeforeToolCallEvent`. **Task 6 tested the resumed-run case and it is fine in-process:**
+`Graph._build_node_input` restores the node executor's `messages`, `state`, `_interrupt_state`,
+and `_model_state` on resume but never touches the plugin registry, so the same `AuthorityGate`
+instance is reused and `_seen` still holds every prior read (verified against a real graph
+resume, and pinned by `test_the_gates_seen_set_survives_an_in_process_resume`). A resume in a
+*new* process (Plan 2, via a session manager) would start with an empty `_seen` — still not
+fail-open, since an empty `_seen` makes the gate stricter, but it would `Guide` once before
+proceeding.
+
+### What Task 6 established — follow these
+
+**`GraphResult` has no `stop_reason` field.** Only single-agent `AgentResult` does. The plan's
+sweep checked `getattr(result, "stop_reason", None) == "interrupt"`, which is always `False` on
+a graph, so its escalation branch never executed and every case fell through to "handled
+autonomously". Use `result.status == Status.INTERRUPTED` with `result.interrupts`
+(`from strands.multiagent.base import Status`). This was caught by reading the SDK; nothing
+about the failure was visible at runtime.
+
+**Resuming an interrupt with a truthy response *approves* the blocked tool — and a denylist of
+"escalate" words is itself fail-open.** The SDK's `SteeringHandler._handle_tool_steering_action`
+does `can_proceed = event.interrupt(...)` and cancels the tool only `if not can_proceed`. Any
+non-empty string is truthy, so a denylist approach (deny only on an exact match to a word
+meaning "escalate") makes the *unrecognized* answer the dangerous one: confirmed against the
+real executor, `"Escalate."` (one trailing period), `"no, hold this one"` (contains "no" but is
+not equal to it), and `"needs review"` all resumed and filed a renewal for `c-010`, a household
+missing a required document. `APPROVE_DECISIONS` in `grace/run.py` is an **allowlist** instead —
+only an exact match to `{"approve", "yes", "file", "proceed"}` resumes the graph; everything
+else, including anything unrecognized, denies. Re-verified end to end with a real Bedrock sweep
+using `auto_decide="Escalate."`: 9/3, and none of the three escalating cases carry a
+`renewal_submitted` row. **If you add a resume path anywhere, the polarity that fails closed is
+always "resume only on an exact match to an affirmative," never "deny only on an exact match to
+a negative."**
+
+**A resume loop needs its own iteration cap — `set_max_node_executions` does not bound it.**
+That setting bounds nodes *within* one graph invocation; a resume calls the graph again, so a
+case that interrupts on every resume loops with no bound at all, and each round is a paid
+Bedrock call. Confirmed by running one case to 500 resumes before hard-killing it.
+`MAX_RESUME_ROUNDS` in `grace/run.py` caps this; exhausting it escalates with a reason saying
+so, rather than spinning.
+
+**Never derive a graph edge condition from a model's summary of a narrower question than the
+one the edge is deciding.** A first version of the deliberation predicate matched substrings in
+the `documents` node's free text — but `documents` only ever calls `list_documents`, so its
+prose can never mention income, household size, or a source conflict. Measured against the real
+fixtures: that version fired on `c-010` (a missing document, needing no deliberation — the
+swarm exists to argue about ambiguous eligibility, not to conclude "the document isn't on
+file") and stayed silent on `c-011`/`c-012`, the two cases a deliberation swarm exists for.
+Widening the `documents` prompt to also relay income/conflict data would recreate the
+`document_problems` bug one function up — asking a model to compare two numbers and describe
+the difference in prose, when the comparison already has a deterministic answer.
+**`make_needs_deliberation(store, case_id, today)`** replaces the free function: a factory
+matching every other per-case component in this file, which re-runs `evaluate()` directly and
+routes to the swarm exactly when a reason code is `material_income_change`,
+`household_size_change`, or `source_conflict` — never for `missing_document`/`stale_document`/
+window reasons, and never for a clean verdict. Verified against all twelve fixtures that this
+matches `evaluate()`'s own reason codes on every case, not just the three named in the demo.
+**There is no free function named `needs_deliberation` — call the factory to get a bound
+predicate, and pass that as the edge condition.**
+
+**Never classify a sweep outcome by whether an interrupt fired.** An interrupt means "the model
+tried something the gate refused", which is not the same question as "did this case need a
+human". Observed on a real run: on `c-010` (missing `proof_of_residency`) the model called
+`send_family_message` rather than `submit_renewal`; the gate *correctly* allowed it, no
+interrupt fired, and an incomplete household was reported as handled — 10/2 instead of 9/3, no
+error. `sweep` now classifies from two things that cannot be argued with: `evaluate()` run
+directly on the case (did it need a human) and the **ledger** (`renewal_submitted` — was a
+renewal actually filed, hard rule 6). An interrupt still supplies the caseworker's wording and
+still forces an escalation, but it is no longer the only thing that can produce one.
+
+**Deadline math is a tool, not an agent — and that includes document freshness.**
+`list_documents` used to report `received` plus `max_age_days` and leave the subtraction to the
+model. On a real sweep the model got it wrong on **two of the nine clean cases**, reported
+current documents as expired, and texted those families about paperwork that was in order.
+`document_problems(doc, required, today)` in `grace/authority.py` now computes the verdict, both
+`evaluate` and `list_documents` call it, and the tool states `CURRENT`/`STALE`/`EXPIRED`
+outright. Shared for the same reason `_most_recent` is shared: a duplicated implementation
+drifts, an import cannot. **Never hand a model two dates and ask it to compare them.**
+
+**A fail-closed `try` must wrap every call that can raise, not just the one you already know
+about.** `list_documents`'s `try` was widened once to add `Exception` around `load_pack`
+(Task 4), then reused for `document_problems` when Task 6 introduced it — but
+`document_problems` does the same date arithmetic `renewal_window` does, and the `try` block's
+boundary had not moved to cover the loop that calls it. An out-of-range `max_age_days` raised
+`OverflowError` from *inside* the loop, past the `except` that closed before it. Confirmed live
+with a repro pack before and after the fix. When you extend a function that already has a
+fail-closed `try`, check whether the new code is inside that `try`'s literal indentation —
+"this function already fails closed" is not the same claim as "every line in this function is
+covered by the `except`."
+
+**The `decide` node must use `SequentialToolExecutor()`.** The default executor is concurrent,
+and this model routinely requests `read_case`, `check_window`, `list_documents`, and
+`submit_renewal` in a single turn. Run concurrently, `submit_renewal` reaches the gate before
+the reads register in `_seen`, so the gate `Guide`s a correctly-ordered call and whether the
+model retries is luck — the same clean case filed on one run and not the next, moving the split
+to 8/4 with no error. Sequential execution also stops at the first interrupt instead of running
+the rest of the batch, which is what a gate blocking an action should do.
+
+**Only `decide` gets action tools, and only `decide` gets the gate.** `intake` and `documents`
+receive `read_tools` alone, so no prompt reaching them can file anything — capability absence
+(layer 1) applied per node, which is stronger than the gate. A second `AuthorityGate` on a read
+node would also keep its own `_seen`, giving two gates that disagree about what happened.
+
+**Every case must land in exactly one of `acted`/`escalated`/`errors`.** A case counted twice,
+or counted nowhere, makes "nine handled alone, three escalated" arithmetic that does not add up
+while each individual count still looks plausible. A case that escalates and then fails on
+resume records the failure *in its escalation reason*, not as a second row.
+
+**`grace/authority.py` gained `document_problems` and an import of `RequiredDocument`.** The
+purity rule still holds — no `strands`, no `boto3`, no I/O — and
+`test_authority_imports_only_pure_siblings` whitelists the addition.
 
 
 
@@ -356,8 +463,10 @@ future move is a one-file change.
 **Multi-agent interrupts use `result.status`, not `result.stop_reason`.** A Graph or Swarm
 signals an escalation with `result.status == Status.INTERRUPTED` and carries
 `result.interrupts`; only single-agent invocations use `stop_reason == "interrupt"`.
-`GraphResult` has no `stop_reason` field at all. Respond with `interrupt.id` (distinct from
-`interrupt.name`), and never send a null response — the server refuses it. See Appendix B.1.
+`GraphResult` has no `stop_reason` field at all — confirmed in Task 6, where the plan's
+`getattr(result, "stop_reason", None)` check silently never fired. Respond with `interrupt.id`
+(distinct from `interrupt.name`), and never send a null response — the server refuses it. **A
+truthy response approves the blocked tool**; see "What Task 6 established". See Appendix B.1.
 
 **Python Graph uses OR semantics.** A node fires when *any* incoming edge is satisfied
 (TypeScript uses AND). `decide` has three incoming edges and firing on the first satisfied
@@ -402,6 +511,7 @@ well before recording the demo, not on the day. See Appendix E.5.
 | `SteeringHandler`, `AgentSkills`, `ContextOffloader` | `plugins=[...]` |
 | `HookProvider` | `hooks=[...]` |
 | Conversation strategy | `context_manager="auto"` (verified present in 1.54.0) |
+| Serial tool execution | `tool_executor=SequentialToolExecutor()` — required on any gated node, see Task 6 |
 
 ---
 

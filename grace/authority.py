@@ -25,7 +25,7 @@ from typing import Literal
 
 from grace.cases.models import Case, Document
 from grace.rules.clock import renewal_window, window_status
-from grace.rules.pack import RulePack
+from grace.rules.pack import RequiredDocument, RulePack
 
 Decision = Literal["act", "escalate"]
 
@@ -121,6 +121,37 @@ def _most_recent(documents: tuple[Document, ...], doc_id: str) -> Document | Non
     return min(copies, key=lambda d: (-d.received.toordinal(), d.expires or date.max))
 
 
+def document_problems(
+    doc: Document, required: RequiredDocument, today: date
+) -> tuple[str, ...]:
+    """Which freshness conditions this copy of a required document fails.
+
+    `()` means current. Returns codes rather than prose so both callers can
+    render their own wording: `evaluate` builds `GateReason`s, `list_documents`
+    builds a line a model reads.
+
+    Extracted so the *verdict* is computed in exactly one place, for the same
+    reason `_most_recent` is shared (see Task 4's note in CLAUDE.md). Before
+    this existed, `list_documents` reported the raw `received` date and the
+    allowed `max_age_days` and left the subtraction to the model — which got it
+    wrong on two of the nine clean fixture cases in a real run, telling a family
+    their document had expired when it was current for another two weeks. The
+    model then texted them about it. Deadline math is a tool, not an agent;
+    handing a model two dates and asking for a comparison is an agent.
+
+    Both boundaries are inclusive: a document exactly at its maximum age, or
+    expiring today, is still current. The two conditions are independent — a
+    document can be both older than `max_age_days` and past its own `expires`
+    — so both are reported, never `elif`.
+    """
+    problems: list[str] = []
+    if doc.received + timedelta(days=required.max_age_days) < today:
+        problems.append("stale_by_age")
+    if doc.expires is not None and doc.expires < today:
+        problems.append("expired")
+    return tuple(problems)
+
+
 def evaluate(case: Case, today: date, pack: RulePack | None = None) -> GateResult:
     """Decide whether Grace may act on this case alone.
 
@@ -187,27 +218,31 @@ def evaluate(case: Case, today: date, pack: RulePack | None = None) -> GateResul
         # would fail a clean case for a document that is in fact acceptable.
         #
         # A document can be both older than max_age_days AND past its own
-        # expiry date at once — these are checked independently (`if`, not
-        # `elif`) so both reasons reach the caseworker brief. Silently
+        # expiry date at once — `document_problems` reports both independently
+        # (never `elif`) so both reasons reach the caseworker brief. Silently
         # dropping one would contradict evaluate()'s own contract of
         # reporting every failing condition, not just the first one found.
-        if doc.received + timedelta(days=required.max_age_days) < today:
-            reasons.append(
-                GateReason(
-                    code="stale_document",
-                    detail=(
-                        f"{required.doc_id} received {doc.received.isoformat()}, "
-                        f"older than {required.max_age_days} days"
-                    ),
+        #
+        # The arithmetic lives in `document_problems` so `list_documents` can
+        # share it rather than re-deriving staleness in a model's head.
+        for problem in document_problems(doc, required, today):
+            if problem == "stale_by_age":
+                reasons.append(
+                    GateReason(
+                        code="stale_document",
+                        detail=(
+                            f"{required.doc_id} received {doc.received.isoformat()}, "
+                            f"older than {required.max_age_days} days"
+                        ),
+                    )
                 )
-            )
-        if doc.expires is not None and doc.expires < today:
-            reasons.append(
-                GateReason(
-                    code="stale_document",
-                    detail=f"{required.doc_id} expired {doc.expires.isoformat()}",
+            else:
+                reasons.append(
+                    GateReason(
+                        code="stale_document",
+                        detail=f"{required.doc_id} expired {doc.expires.isoformat()}",
+                    )
                 )
-            )
 
     # 3. Income unchanged outside the band the pack calls immaterial.
     #

@@ -2346,7 +2346,7 @@ households, files nine renewals alone, and escalates three with specific questio
   - `grace/graph.py`: `build_case_graph(store: CaseStore, case_id: str, today: date, channel) -> Graph`; `needs_deliberation(state) -> bool`
   - `grace/run.py`: `sweep(store: CaseStore, today: date, channel, auto_decide=None) -> SweepReport`; `SweepReport` frozen dataclass with `acted: tuple[str, ...]`, `escalated: tuple[tuple[str, str], ...]`, `errors: tuple[tuple[str, str], ...]`; `main()` CLI entry
 
-- [ ] **Step 1: Write the failing graph test**
+- [x] **Step 1: Write the failing graph test**
 
 `tests/test_graph.py`:
 
@@ -2393,12 +2393,12 @@ def test_needs_deliberation_fails_closed_on_unreadable_state():
     assert needs_deliberation(FakeState()) is True
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_graph.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.graph'`
 
-- [ ] **Step 3: Write `grace/graph.py`**
+- [x] **Step 3: Write `grace/graph.py`**
 
 ```python
 """The deterministic graph spine.
@@ -2512,11 +2512,13 @@ def build_case_graph(
     return builder.build()
 ```
 
-Note: the swarm node is added in Task 7 via the `needs_deliberation` conditional edge.
-This task ships a working three-node spine first — ugly version working beats elegant
-version broken.
+Note: the swarm node is added in Task 7 via a conditional edge. This task ships a working
+three-node spine first — ugly version working beats elegant version broken. **The predicate
+that edge conditions on is not the free function `needs_deliberation` drafted above — see
+finding 8 after Step 7 below, which replaces it with `make_needs_deliberation(store, case_id,
+today)`.**
 
-- [ ] **Step 4: Run the graph tests**
+- [x] **Step 4: Run the graph tests**
 
 Run: `.venv/bin/python -m pytest tests/test_graph.py -v`
 
@@ -2532,7 +2534,7 @@ g = b.build(); print([a for a in dir(g) if not a.startswith('_')])
 "
 ```
 
-- [ ] **Step 5: Write `grace/run.py`**
+- [x] **Step 5: Write `grace/run.py`**
 
 ```python
 """Local sweep: the runnable deliverable.
@@ -2666,7 +2668,7 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- [ ] **Step 6: Add the console script**
+- [x] **Step 6: Add the console script**
 
 Append to `pyproject.toml`:
 
@@ -2677,7 +2679,7 @@ grace = "grace.run:main"
 
 Then: `.venv/bin/python -m pip install -q -e .`
 
-- [ ] **Step 7: Run the sweep against real Bedrock**
+- [x] **Step 7: Run the sweep against real Bedrock**
 
 ```bash
 .venv/bin/python -m grace.run sweep --auto escalate
@@ -2687,10 +2689,103 @@ Expected: a report over twelve cases. Nine should reach `submit_renewal`; `c-010
 `c-011`, and `c-012` should appear under "Escalated to a human" with reasons naming
 `proof_of_residency`, the income change, and the source conflict respectively.
 
+**The plan's own Step 3/5 code above does not produce this output — six real defects were
+found here, three in implementation and three more in review of the fix. Read these before
+touching `grace/graph.py` or `grace/run.py` again; the actual shipped code differs from what
+is drafted above in every one of these places.**
+
+1. **`getattr(result, "stop_reason", None) == "interrupt"` is always `False` on a `Graph`.**
+   `GraphResult` has no `stop_reason` field at all — only single-agent `AgentResult` does.
+   The plan's escalation-detection loop never ran, so every case fell through to "handled
+   autonomously": a 12/0 sweep, no error, no exception. Multi-agent results signal an
+   interrupt with `result.status == Status.INTERRUPTED` (`from strands.multiagent.base import
+   Status`) and carry `result.interrupts`. Caught by reading the SDK before running anything —
+   nothing about this failure is visible at runtime.
+2. **Resuming an interrupt with a truthy response *approves* the blocked tool — and a
+   denylist of "escalate" words is itself fail-open.** The SDK's own
+   `SteeringHandler._handle_tool_steering_action` does `can_proceed = event.interrupt(...)`
+   and cancels the tool only `if not can_proceed`. Any non-empty string is truthy. A first fix
+   used a denylist (`{"escalate", "deny", "no", ...}`) to avoid resuming on an answer that
+   means "a human takes this" — but a denylist makes the *unrecognized* answer the dangerous
+   one. Confirmed against the real executor: resuming with `"Escalate."` (one trailing
+   period), `"no, hold this one"` (contains "no" but is not equal to it), or `"needs review"`
+   all resumed and filed a renewal for `c-010`, a household missing a required document, while
+   the sweep report still listed the case as escalated. The fix is `APPROVE_DECISIONS`, an
+   *allowlist* of exact affirmatives (`{"approve", "yes", "file", "proceed"}`) — only an exact
+   match resumes; everything else, including anything unrecognized, denies. Re-verified against
+   the real executor and against a full real-Bedrock sweep with `auto_decide="Escalate."`:
+   9/3, and none of the three escalating cases carry a `renewal_submitted` ledger row.
+3. **The resume loop had no iteration cap.** A case that interrupts on every resume loops with
+   no bound — `set_max_node_executions(12)` bounds nodes *within* one graph invocation, not
+   resumes *across* invocations, so it does not help. Confirmed by running one case to 500
+   resumes under `--auto approve` before hard-killing it; each round is a paid Bedrock call.
+   `MAX_RESUME_ROUNDS = 3` caps it; exhausting it escalates with a reason saying so.
+4. **Classifying by `Status.INTERRUPTED` alone answers the wrong question.** An interrupt
+   means "the model tried something the gate refused" — not "did this case need a human." On
+   a real run, `c-010`'s model called `send_family_message` instead of `submit_renewal`; the
+   gate *correctly* allowed it (chasing one missing document by SMS is exactly what Grace
+   exists to do), so no interrupt fired, and an incomplete household was reported as handled
+   autonomously — 10/2, with no error. `sweep` now classifies each case from two sources that
+   cannot be argued with: `evaluate()` run directly on the case (did it need a human), and the
+   ledger (`renewal_submitted` — was a renewal actually filed, per hard rule 6). An interrupt
+   still supplies the caseworker's wording and still forces an escalation, but it is no longer
+   the only thing that can produce one.
+5. **`list_documents` made the model do date arithmetic, and got it wrong on two of nine
+   clean cases.** It reported the raw `received` date and `max_age_days` and left the
+   subtraction to Nova, which miscalculated on a real sweep and texted two families that a
+   current document had expired. `document_problems(doc, required, today)` in
+   `grace/authority.py` now computes the verdict once; both `evaluate` and `list_documents`
+   call it, and the tool states `CURRENT`/`STALE`/`EXPIRED` outright — the project's own
+   "deadline math is a tool, not an agent" rule, the violation was just hidden inside a read
+   tool this time.
+6. **`decide` needed `tool_executor=SequentialToolExecutor()`, not the default concurrent
+   one.** The model routinely requests `read_case`, `check_window`, `list_documents`, and
+   `submit_renewal` in a single turn. Run concurrently, `submit_renewal` could reach the gate
+   before its prerequisite reads finished registering in `AuthorityGate._seen`, so the gate
+   `Guide`d a call that was in fact correctly ordered — and whether the model then retried was
+   luck. Observed directly: the same clean case filed on one run and not the next, moving the
+   split to 8/4 with no error anywhere.
+
+**Two further defects found in review of the fix above, both confirmed against the exact
+repro before being marked fixed — do not trust a fix that only reads correct:**
+
+7. **`list_documents`'s exception handler wrapped only `load_pack`, not `document_problems`.**
+   `document_problems` does the same date arithmetic `renewal_window` does
+   (`doc.received + timedelta(days=required.max_age_days)`), and `load_pack` enforces no
+   upper bound on `max_age_days` — so a pack with `max_age_days: 999999999` loads cleanly and
+   then raises `OverflowError` from inside the `for req in pack.required_documents` loop,
+   which sat *outside* the `try` block that was supposed to fail this closed. This is finding
+   5's fix reintroducing finding-4's bug shape one call deeper — the exact "narrowed to the
+   exceptions I've seen so far" pattern CLAUDE.md's Task 4 section already warns about.
+   Confirmed live with the repro pack file before and after: raised uncaught, then correctly
+   returned `_UNVERIFIABLE` once the `try` was widened to cover the whole function body, not
+   just the `load_pack` call.
+8. **`needs_deliberation`, as drafted in this task's own Step 3 code (below), routes the
+   Task-7 swarm to exactly the wrong cases.** It matches substrings in the `documents` node's
+   free-text output, and `documents` only ever calls `list_documents` — it has never seen
+   income, household size, or source-conflict data. Measured against the real fixtures: the
+   drafted predicate fired on `c-010` (a missing document, needing no deliberation at all —
+   the swarm exists to argue about ambiguous eligibility, not to conclude "the document isn't
+   on file") and stayed silent on `c-011` (30% income change) and `c-012` (source conflict) —
+   the two cases a deliberation swarm exists for. Widening the `documents` node's prompt to
+   also relay income/conflict text would recreate finding 5's bug one function up: asking a
+   model to compare two numbers and describe the difference in prose, when the comparison
+   already has a deterministic answer. The fix replaces the free function with
+   `make_needs_deliberation(store, case_id, today)`, a factory matching every other per-case
+   component in this file (`AuthorityGate`, `LedgerHook`, the tool factories), which re-runs
+   `evaluate()` directly and answers from its reason codes
+   (`material_income_change`/`household_size_change`/`source_conflict` route to the swarm;
+   `missing_document`/`stale_document`/window reasons and a clean verdict do not). Verified
+   against all twelve fixtures, not just the three named ones: the predicate's answer matches
+   `evaluate()`'s own reason codes on every case. **Task 7 must call
+   `make_needs_deliberation(store, case_id, today)` to get a bound predicate — the plan's own
+   `condition=needs_deliberation` at Step 2 below no longer applies; there is no free function
+   by that name.**
+
 This costs a few cents of Nova inference. If Bedrock throttles, the `global.` classifier
 profile should absorb it; if not, rerun.
 
-- [ ] **Step 8: Verify the escalation split is exactly right**
+- [x] **Step 8: Verify the escalation split is exactly right**
 
 ```bash
 .venv/bin/python -m grace.run sweep --auto escalate 2>&1 | tee /tmp/grace-sweep.txt
@@ -2702,12 +2797,13 @@ Expected: the count matches, and all three escalations are the intended cases. I
 case escalated, the gate is too strict; if `c-010`/`c-011`/`c-012` acted, it is too loose —
 either is a bug worth fixing before moving on.
 
-- [ ] **Step 9: Run the whole suite**
+- [x] **Step 9: Run the whole suite**
 
-Run: `.venv/bin/python -m pytest tests/ -v`
-Expected: PASS — 59 tests
+Run: `.venv/bin/python -m pytest`
+Expected: PASS — **285 tests, not 59.** Prior total was 212; the plan's estimate was already
+stale before this task's own review-driven fixes changed the count again.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add grace/graph.py grace/run.py tests/test_graph.py pyproject.toml

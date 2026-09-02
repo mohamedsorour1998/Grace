@@ -780,3 +780,131 @@ def test_authority_does_not_expose_the_pack_loader():
     through the module's namespace either, e.g. via a star import."""
     assert not hasattr(grace.authority, "load_pack")
     assert isinstance(MEDICAID, RulePack)  # the type it consumes, nothing more
+
+
+# ---------------------------------------------------------------------------
+# document_problems — the shared freshness verdict.
+#
+# Extracted in Task 6 because `list_documents` was reporting the raw `received`
+# date and `max_age_days` and leaving the subtraction to the model, which got it
+# wrong on two of the nine clean fixture cases in a real sweep and then texted
+# those families that a current document had expired. Both the gate and the tool
+# now call this, for the same reason they share `_most_recent`: a duplicated
+# implementation can drift, an import cannot.
+# ---------------------------------------------------------------------------
+
+
+def _required(doc_id="proof_of_income", max_age_days=60):
+    from grace.rules.pack import RequiredDocument
+
+    return RequiredDocument(doc_id=doc_id, max_age_days=max_age_days)
+
+
+def test_document_problems_is_empty_for_a_current_document():
+    from grace.authority import document_problems
+
+    doc = Document(doc_id="proof_of_income", received=date(2026, 9, 20))
+    assert document_problems(doc, _required(), TODAY) == ()
+
+
+def test_document_problems_reports_a_document_past_its_max_age():
+    from grace.authority import document_problems
+
+    doc = Document(doc_id="proof_of_income", received=date(2026, 1, 1))
+    assert document_problems(doc, _required(), TODAY) == ("stale_by_age",)
+
+
+def test_document_problems_reports_a_document_past_its_own_expiry():
+    from grace.authority import document_problems
+
+    doc = Document(
+        doc_id="proof_of_income",
+        received=date(2026, 9, 20),
+        expires=date(2026, 9, 30),
+    )
+    assert document_problems(doc, _required(), TODAY) == ("expired",)
+
+
+def test_document_problems_reports_both_conditions_when_both_hold():
+    """Independent conditions, so both are reported — never `elif`. The
+    caseworker brief needs the whole picture, and `evaluate` promises every
+    failing condition rather than the first one found."""
+    from grace.authority import document_problems
+
+    doc = Document(
+        doc_id="proof_of_income",
+        received=date(2026, 1, 1),
+        expires=date(2026, 2, 1),
+    )
+    assert document_problems(doc, _required(), TODAY) == ("stale_by_age", "expired")
+
+
+@pytest.mark.parametrize(
+    "received, max_age_days",
+    [
+        (date(2026, 8, 2), 60),  # exactly at the age limit
+        (date(2026, 9, 1), 30),  # exactly at a different age limit
+    ],
+)
+def test_the_max_age_boundary_is_inclusive(received, max_age_days):
+    """A document exactly at its maximum age is still current. Escalating on
+    the last valid day would fail a clean case for an acceptable document."""
+    from grace.authority import document_problems
+
+    doc = Document(doc_id="proof_of_income", received=received)
+    assert document_problems(doc, _required(max_age_days=max_age_days), TODAY) == ()
+
+
+def test_the_expiry_boundary_is_inclusive():
+    """A document expiring today is still current."""
+    from grace.authority import document_problems
+
+    doc = Document(doc_id="proof_of_income", received=date(2026, 9, 20), expires=TODAY)
+    assert document_problems(doc, _required(), TODAY) == ()
+
+
+def test_a_document_one_day_past_each_boundary_is_reported():
+    """The other side of both boundaries, so "inclusive" is pinned from both
+    directions rather than only from the passing side."""
+    from grace.authority import document_problems
+
+    stale = Document(doc_id="proof_of_income", received=date(2026, 8, 1))
+    assert document_problems(stale, _required(max_age_days=60), TODAY) == ("stale_by_age",)
+    expired = Document(
+        doc_id="proof_of_income",
+        received=date(2026, 9, 20),
+        expires=date(2026, 9, 30),
+    )
+    assert document_problems(expired, _required(), TODAY) == ("expired",)
+
+
+def test_a_document_with_no_expiry_is_never_reported_as_expired():
+    """`expires=None` means the document does not expire, not that it expired
+    at an unknown time."""
+    from grace.authority import document_problems
+
+    doc = Document(doc_id="proof_of_income", received=date(2026, 9, 20), expires=None)
+    assert "expired" not in document_problems(doc, _required(), TODAY)
+
+
+def test_evaluate_and_document_problems_agree_on_every_fixture():
+    """The gate and the shared helper must not disagree.
+
+    `evaluate` builds its `stale_document` reasons from `document_problems`, so
+    this asserts the wiring rather than the arithmetic: a refactor that reverts
+    `evaluate` to its own inline subtraction would pass every other test in this
+    module and fail here.
+    """
+    from grace.authority import _most_recent, document_problems
+
+    for case in load_fixture_cases():
+        pack = load_pack(case.program, case.state)
+        expected = 0
+        for req in pack.required_documents:
+            doc = _most_recent(case.documents, req.doc_id)
+            if doc is not None:
+                expected += len(document_problems(doc, req, TODAY))
+        actual = sum(
+            1 for r in evaluate(case, TODAY, pack).reasons if r.code == "stale_document"
+        )
+        assert actual == expected, case.case_id
