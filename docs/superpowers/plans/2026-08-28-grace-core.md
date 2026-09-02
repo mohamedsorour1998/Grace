@@ -3329,11 +3329,239 @@ the specific gap that mattered, the real cost table (~65 invocations, ~75s), and
 flakiness (one run in five hit the 420s graph timeout under Bedrock latency — a real, disclosed
 risk, not swept under "stable").
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add evals/
 git commit -m "test: trajectory evals proving the gate ordering holds"
+```
+
+---
+
+## Task 9: Ledger/trace correlation
+
+Small, and it closes a real hole: the ledger is authoritative for *what* executed; a trace is
+authoritative for *ordering and timing*. If they disagree, something is wrong that neither
+alone would reveal — a tool that ran but was not logged (the exact failure a transcript-based
+eval would miss, per the Testing section), or a ledger entry with no corresponding span.
+
+**Files:**
+- Modify: `grace/ledger.py` (write the active trace ID into every entry)
+- Create: `tests/test_ledger_trace_correlation.py`
+
+**Interfaces:**
+- Consumes: `LedgerHook` (Task 5); `build_case_graph` (Task 6/7); `LedgerEntry.detail` (Task 2).
+- Produces: `grace/ledger.py`: `_current_trace_id() -> str | None`; every `LedgerEntry` this
+  hook writes carries `trace_id` in `detail`.
+
+**Read Appendix E.7 before starting — it specifies this task and was written before it, but
+two things in it need correcting against the real SDK, both verified directly rather than
+assumed:**
+
+1. **`LedgerEntry` has no dedicated `trace_id` field, and this task does not add one.**
+   `LedgerEntry.detail` already accepts arbitrary `str -> JSON-safe scalar` pairs (Task 2), and
+   `LedgerHook._append(self, kind, **detail)` already forwards arbitrary kwargs into it. Adding
+   `trace_id` is a one-line addition to each `_append(...)` call, not a schema change to a type
+   used by Tasks 2, 4, 5, 6, 7, and 8.
+2. **Appendix E.7's Test 3 ("every tool call in `GraphResult.execution_order` has a matching
+   ledger entry, and vice versa") is imprecise about *which* nodes this holds for, and
+   implementing it literally would fail on nodes that are correct by design.**
+   `GraphResult.execution_order` is a `list[GraphNode]`, not a list of tool calls — each
+   node's *own* tool activity lives in `node.result.result.metrics.tool_metrics` (a dict keyed
+   by tool name, with a `call_count`), and that structure differs for an `Agent` node versus
+   the `deliberate` node (a `Swarm`, with its own nested `SwarmResult`). More importantly:
+   **only `decide` is built with `hooks=[ledger]`** (Task 8's finding). `intake`, `documents`,
+   and the swarm's three agents call tools too, and none of those calls reach the case ledger.
+   Verified directly on a real `c-001` run: `decide.result.result.metrics.tool_metrics` and
+   the ledger's `tool_call` counts for `decide`'s tools match *exactly*
+   (`submit_renewal: 2, read_case: 1, check_window: 1, list_documents: 1` on both sides,
+   the `2` because the gate `Guide`d the first attempt) — but `intake`'s two tool calls and
+   `documents`' one have no ledger counterpart at all, by design, not by bug. **The
+   correlation this task's test must assert is scoped to `decide` only**: for every tool named
+   in `decide`'s `tool_metrics` with `call_count == N`, the ledger has exactly `N` `tool_call`
+   rows for that tool, and vice versa — restricted to ledger rows recorded after `decide`
+   starts (the same case's `intake`/`documents` reads must not be double-counted against
+   `decide`'s own tally). Do not write a test expecting `intake`/`documents` tool calls to
+   appear in the ledger; that would fail on a correctly-running graph and contradict what
+   Task 8 already established and tested.
+
+- [ ] **Step 1: Write the failing trace-correlation test**
+
+`tests/test_ledger_trace_correlation.py`:
+
+```python
+"""The ledger is ground truth for what executed; a trace is ground truth for
+ordering and timing. If they disagree, something is wrong neither alone would
+reveal — see the module's own docstring in grace/ledger.py for why this
+matters and what it does and does not check.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+
+from grace.cases.store import InMemoryCaseStore, load_fixture_cases
+from grace.ledger import _current_trace_id
+from grace.tools.action import TranscriptChannel
+
+
+TODAY = date(2026, 10, 1)
+
+
+def test_current_trace_id_is_none_without_a_configured_tracer():
+    """The normal unit-test path: no exporter attached, nothing raises."""
+    assert _current_trace_id() is None
+
+
+def test_current_trace_id_is_32_lowercase_hex_when_a_tracer_is_active():
+    """Matches the `traceparent` header format and CloudWatch's own
+    rendering, so the value pastes straight into Transaction Search."""
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider = TracerProvider()
+    tracer = provider.get_tracer("test")
+    with tracer.start_as_current_span("test-span"):
+        trace_id = _current_trace_id()
+    assert trace_id is not None
+    assert len(trace_id) == 32
+    assert trace_id == trace_id.lower()
+    int(trace_id, 16)  # raises ValueError if it is not valid hex
+
+
+def test_every_ledger_entry_carries_a_trace_id_key():
+    """Present as a key even when its value is None — a caller reading
+    `entry.detail["trace_id"]` must not need to guess whether tracing was
+    configured for a particular run."""
+    from grace.cases.store import InMemoryCaseStore, load_fixture_cases
+    from grace.graph import build_case_graph
+
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
+    graph(f"Process the renewal for case c-001. Today is {TODAY.isoformat()}.")
+    ledger = store.ledger("c-001")
+    assert ledger, "no ledger entries were written at all"
+    for entry in ledger:
+        assert "trace_id" in entry.detail
+
+
+def test_decides_tool_metrics_agree_with_its_ledger_tool_calls():
+    """The correlation this task exists to prove, scoped to the one node
+    that has a LedgerHook. See the note above Step 1 in the plan for why
+    intake/documents/the swarm are deliberately excluded.
+    """
+    from collections import Counter
+
+    from grace.cases.store import InMemoryCaseStore, load_fixture_cases
+    from grace.graph import build_case_graph
+
+    store = InMemoryCaseStore(load_fixture_cases())
+    graph = build_case_graph(store, "c-001", TODAY, TranscriptChannel())
+    result = graph(
+        f"Process the renewal for case c-001. Today is {TODAY.isoformat()}."
+    )
+
+    decide_node = next(n for n in result.execution_order if n.node_id == "decide")
+    tool_metrics = decide_node.result.result.metrics.tool_metrics
+    from_metrics = Counter(
+        {name: tm.call_count for name, tm in tool_metrics.items()}
+    )
+
+    ledger = store.ledger("c-001")
+    from_ledger = Counter(
+        e.detail.get("tool") for e in ledger if e.kind == "tool_call"
+    )
+
+    assert from_metrics == from_ledger, (
+        f"decide's own tool_metrics {dict(from_metrics)} does not match its "
+        f"ledger tool_call counts {dict(from_ledger)}"
+    )
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `.venv/bin/python -m pytest tests/test_ledger_trace_correlation.py -v`
+Expected: FAIL on `test_every_ledger_entry_carries_a_trace_id_key` and
+`test_decides_tool_metrics_agree_with_its_ledger_tool_calls` costs real Bedrock inference —
+`_current_trace_id` does not exist yet, and no entry carries `trace_id` yet. The first two
+tests (no tracer / tracer configured) exercise `_current_trace_id` directly and cost nothing.
+
+- [ ] **Step 3: Write `_current_trace_id` and wire it into `LedgerHook`**
+
+In `grace/ledger.py`, add:
+
+```python
+from opentelemetry import trace
+
+
+def _current_trace_id() -> str | None:
+    """Return the active W3C trace ID, or None when tracing is not configured.
+
+    Recorded on every ledger entry so a DynamoDB row can be joined to its
+    CloudWatch trace (Plan 2). Returns None rather than raising when no
+    exporter is attached, which is the normal case for unit tests — this
+    function must never be the reason a test needs a tracer configured.
+    """
+    span = trace.get_current_span()
+    ctx = span.get_span_context()
+    if not ctx.is_valid:
+        return None
+    return format(ctx.trace_id, "032x")
+```
+
+Then change `LedgerHook._append` to include it:
+
+```python
+    def _append(self, kind: str, **detail: LedgerDetailValue) -> None:
+        self._store.append_ledger(
+            LedgerEntry(
+                case_id=self._case_id,
+                at=datetime.now(timezone.utc),
+                kind=kind,
+                detail={**detail, "trace_id": _current_trace_id()},
+            )
+        )
+```
+
+`_current_trace_id()` returning `None` is fine: `LedgerDetailValue` already includes `None`
+(Task 2), so `detail={"trace_id": None, ...}` passes `LedgerEntry`'s own type check without
+special-casing.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `.venv/bin/python -m pytest tests/test_ledger_trace_correlation.py -v`
+Expected: PASS — 4 tests. If `test_decides_tool_metrics_agree_with_its_ledger_tool_calls` fails
+on the accessor path (`decide_node.result.result.metrics`), print one real `GraphResult` and
+adjust — the *property* being tested (decide's own tool-call tally matches its own ledger
+rows) is what matters, not the exact attribute chain, and this is exactly the kind of SDK
+surface every prior task has found drifts from what a first read suggests.
+
+- [ ] **Step 5: Run the whole suite**
+
+Run: `.venv/bin/python -m pytest`
+Expected: PASS. Prior total was 351; report the real number, since every prior task's estimate
+in this plan has proven stale once written.
+
+- [ ] **Step 6: Confirm no household identity reached a span**
+
+`_current_trace_id` reads only the trace ID — it never touches span attributes, and this task
+adds no new `trace_attributes=` anywhere. Confirm this stays true:
+
+```bash
+grep -n "trace_attributes" grace/*.py
+```
+
+Expected: no new occurrences beyond what already exists (if any). Appendix E.4/CLAUDE.md hard
+rule 9 govern what may go into `trace_attributes=` if a future task adds it — `grace.case_id`
+only, never a household's name, phone, or address.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add grace/ledger.py tests/test_ledger_trace_correlation.py
+git commit -m "feat: correlate ledger entries with their OTEL trace ID"
 ```
 
 ---
