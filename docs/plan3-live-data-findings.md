@@ -162,3 +162,48 @@ it: the role is set once by `admin_create_user`, an admin API that this list doe
 absence is deliberate and is now commented as such in the plan — the client cannot rewrite the claim
 that authorises it, because it was never granted the ability to try. Same reasoning as layer 1 of the
 escalation boundary.
+
+---
+
+## Amplify: the plan was missing the one thing that makes SSR work (Task 7)
+
+`CreateApp`'s `platform` enum is confirmed `['WEB', 'WEB_DYNAMIC', 'WEB_COMPUTE']` from the live API
+model, so the plan's platform assertion is sound.
+
+**The gap: `computeRoleArn` is a real parameter on both `CreateApp` and `CreateBranch`, and Task 7's
+draft sets neither.** Amplify's SSR compute functions take their AWS credentials from that role and
+from nothing else. With no role attached, the SSR runtime has no credentials, so every DynamoDB read in
+`lib/cases.ts` and the `invoke_agent_runtime` call in `lib/decide.ts` fail with AccessDenied — **after
+a green build and a successful deploy.** The app serves, the pages render their empty states, and the
+build log says nothing. Same class as choosing the wrong platform: wrong rather than broken, which is
+the harder kind to notice.
+
+Confirmed from the Amplify documentation:
+
+- The role needs a **custom trust policy with `amplify.amazonaws.com`** as the service principal, and
+  attaching a role whose trust relationship is wrong is **refused with an error** — so this is
+  verifiable at provision time rather than at request time.
+- Credentials are available in the SSR runtime immediately, with no redeploy needed to change the role.
+- App-level attachment is the default; the docs recommend branch-level *only* when a public repo uses
+  auto-branch creation or PR previews. Grace's app has one branch and neither feature enabled, so
+  app-level is the simpler correct choice — and keeping those two features off is what keeps it correct.
+
+Least privilege for what the dashboard actually does, with the real ARNs:
+
+```text
+dynamodb:Query, dynamodb:GetItem
+  arn:aws:dynamodb:us-east-1:339712964409:table/grace-cases
+  arn:aws:dynamodb:us-east-1:339712964409:table/grace-cases/index/escalation-queue
+dynamodb:PutItem
+  arn:aws:dynamodb:us-east-1:339712964409:table/grace-cases
+bedrock-agentcore:InvokeAgentRuntime
+  arn:aws:bedrock-agentcore:us-east-1:339712964409:runtime/grace_grace-oTyyvo8stE
+```
+
+**The index needs its own ARN.** A policy granting `Query` on the table alone denies the GSI query
+while the table query succeeds — so `/queue` would break and `/case/[id]` would work, which reads like
+a bug in the queue page rather than a missing permission.
+
+**No `Scan` and no `DeleteItem`.** `lib/cases.ts` queries rather than scans, and granting `Scan` would
+let a bug read every ledger row in the table. Nothing in the app deletes, and a dashboard that can
+delete a ledger row can destroy the audit trail the entire project rests on.

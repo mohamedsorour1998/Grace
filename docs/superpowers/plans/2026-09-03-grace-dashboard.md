@@ -3381,6 +3381,38 @@ Expected: FAIL — `ImportError: cannot import name 'provision_amplify' from 'in
 
 - [ ] **Step 3: Write `infra/provision_amplify.py`**
 
+**This draft is missing the SSR compute role, and without it the whole task fails silently in the
+worst way.** Verified against the live API and the Amplify documentation on 2026-09-04:
+
+- `CreateApp`'s `platform` enum really is `['WEB', 'WEB_DYNAMIC', 'WEB_COMPUTE']`, so the platform
+  assertion is sound.
+- **But `computeRoleArn` is a real parameter on both `CreateApp` and `CreateBranch`, and this draft
+  sets neither.** Amplify's SSR compute functions get their AWS credentials from that role and from
+  nothing else. With no role attached there are no credentials in the SSR runtime, so `lib/cases.ts`'s
+  every DynamoDB call and `lib/decide.ts`'s `invoke_agent_runtime` fail with AccessDenied — **after a
+  green build and a successful deploy.** The app would serve, the pages would render their empty and
+  error states, and nothing in the build log would say why. That is the same class of failure as the
+  wrong platform value: wrong rather than broken.
+- The role needs a **custom trust policy naming `amplify.amazonaws.com`** as the service principal. The
+  documentation states outright that attaching a role whose trust relationship is wrong is refused with
+  an error, so this is checkable rather than a guess.
+- Grant least privilege, scoped to what the dashboard actually does: `dynamodb:Query` and
+  `dynamodb:GetItem` on the `grace-cases` table **and its `escalation-queue` index** (an index needs
+  its own ARN — `table/grace-cases/index/escalation-queue` — or the GSI query is denied while the table
+  query succeeds), `dynamodb:PutItem` on the table for the decision row, and
+  `bedrock-agentcore:InvokeAgentRuntime` on the Grace runtime ARN. **No `Scan`**: `lib/cases.ts`
+  queries, and granting `Scan` would let a bug read every ledger row in the table.
+- Attach it **app-level** here. The docs recommend branch-level instead when a public repo uses
+  auto-branch creation or PR previews — this app has one branch and neither feature, so app-level is
+  the simpler correct choice. Keep `enableAutoBranchCreation` and PR previews off, which is also why
+  that recommendation does not bite.
+
+So Task 7 grows an `infra/provision_amplify_role.py` (or a function in this module) that creates the
+role idempotently, and `provision` passes `computeRoleArn=` to `create_app`/`update_app`. Add a test
+asserting the trust policy's principal is `amplify.amazonaws.com` and that the policy grants no
+`dynamodb:Scan` and no `dynamodb:DeleteItem` — the second because nothing in this app deletes, and a
+dashboard that can delete a ledger row can destroy the audit trail the whole project rests on.
+
 ```python
 """The Amplify app that hosts the dashboard. Idempotent.
 
