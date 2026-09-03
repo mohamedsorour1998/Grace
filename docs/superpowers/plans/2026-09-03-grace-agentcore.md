@@ -4111,7 +4111,7 @@ The fixture set is fixed at twelve cases, three of which must escalate. A sweep 
 than three is a gate that got looser. Standard `SystemErrors` / `Throttles` / p99 latency alarms are
 worth having as hygiene, and they are *not* what this task is about.
 
-- [ ] **Step 1: Write the failing alarm test**
+- [x] **Step 1: Write the failing alarm test**
 
 Create `tests/test_infra_alarm.py`:
 
@@ -4156,12 +4156,12 @@ def test_one_datapoint_is_enough_to_alarm():
     assert spec["EvaluationPeriods"] == 1
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_alarm.py -v`
 Expected: FAIL — `ImportError: cannot import name 'provision_alarm' from 'infra'`.
 
-- [ ] **Step 3: Write `infra/provision_alarm.py`**
+- [x] **Step 3: Write `infra/provision_alarm.py`**
 
 ```python
 """One alarm, on the invariant rather than on errors.
@@ -4269,12 +4269,12 @@ def provision(logs_client=None, cw_client=None) -> str:
     return f"arn:aws:cloudwatch:{naming.REGION}:{account}:alarm:{naming.ALARM}"
 ```
 
-- [ ] **Step 4: Run the alarm tests**
+- [x] **Step 4: Run the alarm tests**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_alarm.py -v`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Write `infra/provision_all.py`**
+- [x] **Step 5: Write `infra/provision_all.py`**
 
 ```python
 """Provision everything, in dependency order. Idempotent end to end.
@@ -4378,7 +4378,7 @@ if __name__ == "__main__":
         print(f"{key}: {value}")
 ```
 
-- [ ] **Step 6: Write `infra/teardown.py`**
+- [x] **Step 6: Write `infra/teardown.py`**
 
 ```python
 """Delete what `provision_all` created. Grace resources only.
@@ -4471,12 +4471,12 @@ if __name__ == "__main__":
     main(include_table=args.include_table)
 ```
 
-- [ ] **Step 7: Run the whole suite**
+- [x] **Step 7: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **431 tests**. Report the real number.
 
-- [ ] **Step 8: Provision everything and confirm idempotence**
+- [x] **Step 8: Provision everything and confirm idempotence**
 
 ```bash
 .venv/bin/python -m infra.provision_all
@@ -4485,7 +4485,7 @@ Expected: PASS — **431 tests**. Report the real number.
 
 Expected: the same ARNs printed twice.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add infra/provision_alarm.py infra/provision_all.py infra/teardown.py \
