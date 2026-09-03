@@ -247,7 +247,7 @@ cheap and they make a rename a one-file change.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -290,6 +290,36 @@ def test_a_naive_timestamp_is_refused():
     inconsistently against aware ones."""
     with pytest.raises(ValueError):
         naming.ledger_sk(datetime(2026, 10, 1, 12, 0, 0), 1)
+
+
+def test_a_non_utc_offset_still_sorts_chronologically():
+    """The defect a UTC-only test cannot see.
+
+    `LedgerEntry` requires an *aware* datetime, not a UTC one. Confirmed
+    against the real type: it accepts `-05:00`. And a `-05:00` 08:00 is
+    chronologically *after* a UTC 12:00, while `"...T08:00:00-05:00"`
+    string-sorts *before* `"...T12:00:00+00:00"` — so without normalization
+    DynamoDB returns the audit trail in the wrong order, with no error, and
+    the trajectory evals read that order as ground truth.
+
+    A test written only with UTC inputs passes against the buggy version,
+    which is why this one is explicit about the mixed-offset case.
+    """
+    utc_noon = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
+    est_later = datetime(2026, 10, 1, 8, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+    assert est_later > utc_noon  # 13:00 UTC vs 12:00 UTC — sanity check the premise
+    assert naming.ledger_sk(est_later, 1) > naming.ledger_sk(utc_noon, 1)
+
+
+def test_the_escalation_key_normalizes_the_offset_too():
+    """Same latent bug, same fix. Escalation rows are one per case per moment
+    so collisions are unlikely, but a mis-sorted caseworker queue is still a
+    mis-sorted queue."""
+    utc_noon = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
+    est_later = datetime(2026, 10, 1, 8, 0, 0, tzinfo=timezone(timedelta(hours=-5)))
+    assert naming.escalation_sk(est_later) > naming.escalation_sk(utc_noon)
+    with pytest.raises(ValueError):
+        naming.escalation_sk(datetime(2026, 10, 1, 12, 0, 0))
 
 
 def test_the_case_partition_key_is_opaque():
@@ -352,27 +382,41 @@ def case_pk(case_id: str) -> str:
 def ledger_sk(at: datetime, seq: int) -> str:
     """Sort key for one ledger entry.
 
-    ISO-8601 plus a **zero-padded** sequence, because DynamoDB sorts the sort
-    key lexically: an unpadded sequence puts 10 before 9, and the trajectory
-    evals read ledger *position* to assert that reads precede actions.
+    ISO-8601 **normalized to UTC**, plus a **zero-padded** sequence.
 
-    The sequence is what makes collisions impossible. `LedgerEntry.at` is
-    `datetime.now(timezone.utc)` and one tool call writes `tool_call` then
-    `tool_result` back to back; two rows sharing a microsecond would collide and
-    one would silently overwrite the other, losing an audit row — the one thing
-    this table exists not to do.
+    Every part of that is load-bearing, because DynamoDB sorts the range key
+    lexically and the trajectory evals read ledger *position* to assert reads
+    precede actions:
+
+    - **UTC normalization.** `LedgerEntry` requires an *aware* datetime but not a
+      UTC one, and a non-UTC offset breaks lexical ordering outright: a
+      `-05:00` 08:00 is chronologically *after* a UTC 12:00, yet
+      `"...T08:00:00-05:00"` string-sorts *before* `"...T12:00:00+00:00"`.
+      Confirmed against the real type. Silent misordering of an audit trail.
+    - **The naive check stays first.** `.astimezone()` on a naive datetime
+      silently assumes local time, turning an unknown value into a confidently
+      wrong one. Guard, then convert — never rely on `astimezone` alone.
+    - **Zero padding.** An unpadded sequence sorts 10 before 9.
+    - **The sequence itself.** `LedgerEntry.at` is `datetime.now(timezone.utc)`
+      and one tool call writes `tool_call` then `tool_result` back to back; two
+      rows sharing a microsecond would collide and one would silently overwrite
+      the other, losing an audit row.
     """
     if at.tzinfo is None:
         raise ValueError("ledger_sk requires a timezone-aware datetime")
-    return f"LEDGER#{at.isoformat()}#{seq:06d}"
+    return f"LEDGER#{at.astimezone(timezone.utc).isoformat()}#{seq:06d}"
 
 
 def escalation_sk(at: datetime) -> str:
-    """Sort key for a pending-caseworker row. One escalation per case per
-    moment, so no sequence is needed."""
+    """Sort key for a pending-caseworker row.
+
+    Same UTC normalization and same guard ordering as `ledger_sk`, for the same
+    reason — one escalation per case per moment means collisions are unlikely,
+    but a non-UTC offset would still sort the queue wrongly.
+    """
     if at.tzinfo is None:
         raise ValueError("escalation_sk requires a timezone-aware datetime")
-    return f"ESCALATION#{at.isoformat()}"
+    return f"ESCALATION#{at.astimezone(timezone.utc).isoformat()}"
 ```
 
 Also create an empty `infra/__init__.py`.
@@ -3061,6 +3105,26 @@ row — the family silently fell off the list. Same principle, one layer up.
 `maxConcurrency: 3` is considered, not a default. Twelve concurrent cases each open a graph
 invocation, and the two swarm-routed cases alone cost ~18–19 Bedrock invocations each; twelve at once
 invites the throttling the retry policy then has to absorb.
+
+**The definition below is pre-verified.** It was validated against the real
+`stepfunctions:validate_state_machine_definition` API before this task was written and returned
+`result: OK` with zero diagnostics — including the `States.Format` intrinsics, the
+`$$.State.EnteredTime` context reference, and the `dynamodb:putItem` parameters nested inside the
+Map's `ItemProcessor`. If your version stops validating, you changed something: re-run the validator
+rather than guessing, since it reports the exact path of the offending field.
+
+```bash
+.venv/bin/python -c "
+import boto3, json
+from infra import provision_stepfunctions as p
+sf = boto3.client('stepfunctions', region_name='us-east-1')
+r = sf.validate_state_machine_definition(
+    definition=json.dumps(p.definition('<AWS_ACCOUNT_ID>', 'arn:aws:lambda:us-east-1:<AWS_ACCOUNT_ID>:function:grace-invoke-case')),
+    type='STANDARD')
+print(r['result'])
+for d in r.get('diagnostics', []): print(d['severity'], d['code'], d.get('location',''), d['message'])
+"
+```
 
 - [ ] **Step 1: Write the failing Lambda handler test**
 
