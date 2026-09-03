@@ -1511,12 +1511,12 @@ def redaction_is_configured(env: Mapping[str, str] | None = None) -> bool:
     *presence*, then compiles everything after the `=` into an **allowlist of
     attributes to leave unredacted**. Measured against the real `Tracer`:
 
-    ```text
-    gen_ai_latest_experimental                          enabled=False  messages exported
-    gen_ai_latest_experimental,gen_ai_unredacted_attributes=   enabled=True   messages REDACTED
-    gen_ai_unredacted_attributes=gen_ai.input.messages;gen_ai.output.messages
-                                                        enabled=True   messages exported
-    ```
+        gen_ai_latest_experimental
+            -> enabled=False, messages exported
+        gen_ai_latest_experimental,gen_ai_unredacted_attributes=
+            -> enabled=True,  messages REDACTED   (Grace's policy)
+        gen_ai_unredacted_attributes=gen_ai.input.messages;gen_ai.output.messages
+            -> enabled=True,  messages exported
 
     The third case passes a substring check, reports redaction "enabled", and
     exports the full household record. So this function requires the value to be
