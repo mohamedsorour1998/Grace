@@ -2970,6 +2970,32 @@ Five facts, each confirmed against the generated reference agent. Do not substit
 5. **`agentcore deploy` deploys through CDK**, and CDK is already bootstrapped in this account
    (Task 0). `--dry-run` and `--diff` exist and are worth using first.
 
+### The runtime role is already fixed for this — two gaps were closed in Task 6
+
+Do not re-derive these; they were found by cross-checking against a runtime **already deployed and
+working in this account**, and verified with `simulate-principal-policy` before and after:
+
+- **`bedrock:Converse` / `ConverseStream` were missing.** `strands.models.bedrock` calls
+  `self.client.converse_stream if streaming else self.client.converse` (bedrock.py:1397), so a
+  policy granting only `InvokeModel` leaves every Nova call `implicitDeny`. The symptom would have
+  been an AccessDenied on the first model call of the first deployed sweep — after every test passed.
+- **ECR pull was missing**, so a Container build could not start: Runtime pulls the image before
+  running the process. `ecr:GetAuthorizationToken` is account-level (`Resource: "*"`, as AWS
+  documents); the layer-pull actions are scoped to this account's registry.
+- The log grant now covers `/aws/bedrock-agentcore/*` including `CreateLogGroup`, which is where
+  Runtime actually creates its group.
+
+If the deploy still fails on permissions, compare against
+`theagentorg-shared-agentcore-runtime-role` in this account — it is a known-working reference for
+what AgentCore Runtime requires. Add only what is actually missing, and keep every Bedrock grant
+scoped to the three Nova profiles (hard rule 1).
+
+**`metadataConfiguration` / MMDSv2 does not apply here.** An AWS doc note says MMDSv2 becomes
+mandatory 2026-06-30 (already past) for runtimes lacking `requireMMDSV2: true`. Checked the installed
+API: `CreateAgentRuntime` has **no `metadataConfiguration` member** on this version, and
+`agentcore deploy` owns runtime creation through CDK regardless — so this is not Grace's setting to
+pass. Recorded so nobody spends time on it.
+
 ### Two template defaults Grace deliberately does not copy
 
 - **`aws-opentelemetry-distro`** is in the template's dependencies. CLAUDE.md forbids it: it is for
