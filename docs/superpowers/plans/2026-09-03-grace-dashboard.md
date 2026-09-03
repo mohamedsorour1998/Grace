@@ -131,7 +131,7 @@ including all of Plan 2 were pushed, and `docs/deployed-verification.md` is publ
 here because Amplify's git-based deploy depends on it and because a public repo is a submission
 requirement.
 
-- [ ] **Step 2: Confirm the deployed backend the dashboard reads from**
+- [x] **Step 2: Confirm the deployed backend the dashboard reads from**
 
 ```bash
 export AWS_PAGER=""
@@ -151,7 +151,7 @@ count of pending rows. **If the queue is empty the dashboard has nothing to show
 first (Plan 2's `provision_stepfunctions.CASE_IDS`), because a dashboard built against an empty table
 cannot be distinguished from a broken reader.
 
-- [ ] **Step 3: Confirm the Node toolchain and the exact package versions**
+- [x] **Step 3: Confirm the Node toolchain and the exact package versions**
 
 ```bash
 node --version    # v24.19.0 observed
@@ -165,7 +165,7 @@ npm view @aws-sdk/client-bedrock-agentcore version
 Record the observed versions in the runbook and **pin them** in `package.json`. Both prior plans were
 bitten by version drift between research and execution.
 
-- [ ] **Step 4: Confirm Cognito and Amplify are usable in this account**
+- [x] **Step 4: Confirm Cognito and Amplify are usable in this account**
 
 ```bash
 aws cognito-idp list-user-pools --max-results 20 --region us-east-1 \
@@ -195,19 +195,19 @@ Expected: `['WEB', 'WEB_DYNAMIC', 'WEB_COMPUTE']` and `True`. **`WEB_COMPUTE` is
 `CreateDeployment` matters as the fallback: connecting a GitHub repo needs browser-based app
 authorization, which cannot be done unattended, so a zip deploy is the escape hatch.
 
-- [ ] **Step 5: Confirm the Python suite baseline**
+- [x] **Step 5: Confirm the Python suite baseline**
 
 Run: `.venv/bin/python -m pytest`
 Expected: **622 passed**. Every later task is measured against this; if it is not 622, something is
 wrong before Plan 3 began.
 
-- [ ] **Step 6: Write the preflight section of the runbook**
+- [x] **Step 6: Write the preflight section of the runbook**
 
 Create `docs/dashboard-runbook.md` with a `## Preflight` section recording: the observed versions, the
 Cognito and Amplify findings, the `WEB_COMPUTE` platform value, the zip-deploy fallback, and the
 pending-queue count. Later tasks append the local-run and deploy sequences.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add docs/dashboard-runbook.md
