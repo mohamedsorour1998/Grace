@@ -95,6 +95,10 @@ EventBridge (daily sweep) → Step Functions → Lambda → AgentCore Runtime
 Caseworker dashboard → API layer → invoke_agent_runtime
 ```
 
+**[Full architecture diagram →](docs/architecture.md)** — the whole system, plus the three claims it
+supports and the evidence for each. Rendered as
+[`docs/architecture.png`](docs/architecture.png) as well.
+
 The agent is a capability inside the system, not the backend. Step Functions owns retries and
 workflow durability so the agent doesn't have to, and the dashboard never talks to the runtime
 directly. AgentCore Gateway would sit alongside Memory here for rule packs and document
