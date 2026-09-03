@@ -1305,7 +1305,7 @@ when *not* to act.
   `grace.observability.REDACTION_TOKEN: str`,
   `grace.observability.redaction_is_configured(env: Mapping[str, str] | None = None) -> bool`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/test_observability.py`:
 
@@ -1451,12 +1451,12 @@ def test_the_redaction_check_agrees_with_the_sdks_own_tracer():
             _os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = previous
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_observability.py -v`
 Expected: FAIL — `ImportError: cannot import name 'observability' from 'grace'`.
 
-- [ ] **Step 3: Write `grace/observability.py`**
+- [x] **Step 3: Write `grace/observability.py`**
 
 ```python
 """Trace exporter setup, and the span-redaction invariant.
@@ -1549,17 +1549,17 @@ def setup_telemetry() -> None:
                        exc_info=True)
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `.venv/bin/python -m pytest tests/test_observability.py -v`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Run the whole suite**
+- [x] **Step 5: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **396 tests**. Report the real number.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add grace/observability.py tests/test_observability.py
@@ -2541,7 +2541,7 @@ Two consequences the policy below depends on:
 - `p.split(".", 1)[-1]` is what turns `global.amazon.nova-2-lite-v1:0` into
   `amazon.nova-2-lite-v1:0` — verified against all three profiles.
 
-- [ ] **Step 1: Write the failing IAM policy test**
+- [x] **Step 1: Write the failing IAM policy test**
 
 Create `tests/test_infra_iam.py`:
 
@@ -2624,12 +2624,12 @@ def _as_list(value):
     return value if isinstance(value, list) else [value]
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_iam.py -v`
 Expected: FAIL — `ImportError: cannot import name 'provision_iam' from 'infra'`.
 
-- [ ] **Step 3: Write `infra/provision_iam.py`**
+- [x] **Step 3: Write `infra/provision_iam.py`**
 
 ```python
 """The four execution roles. Each scoped to what it actually needs.
@@ -2867,12 +2867,12 @@ if __name__ == "__main__":
         print(f"{purpose}: {arn}")
 ```
 
-- [ ] **Step 4: Run the IAM tests**
+- [x] **Step 4: Run the IAM tests**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_iam.py -v`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 5: Create the roles and verify the Deny landed**
+- [x] **Step 5: Create the roles and verify the Deny landed**
 
 ```bash
 .venv/bin/python -m infra.provision_iam
@@ -2887,7 +2887,7 @@ Expected: both runs print four ARNs, and the query returns the
 `GetWorkloadAccessTokenForUserId` Deny. If the Deny is absent, stop — that is the one statement this
 task exists for.
 
-- [ ] **Step 6: Confirm the managed policy is attached nowhere**
+- [x] **Step 6: Confirm the managed policy is attached nowhere**
 
 ```bash
 for r in grace-runtime-role grace-lambda-role grace-stepfunctions-role grace-eventbridge-role; do
@@ -2899,12 +2899,12 @@ done
 Expected: empty for all four — inline policies only, and specifically no
 `BedrockAgentCoreFullAccess`, which the docs warn grants the denied action.
 
-- [ ] **Step 7: Run the whole suite**
+- [x] **Step 7: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **416 tests**. Report the real number.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add infra/provision_iam.py tests/test_infra_iam.py
