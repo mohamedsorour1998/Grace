@@ -636,12 +636,13 @@ is what exercises the wire format.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 
 from grace.cases.models import LedgerEntry
 from grace.cases.store import CaseStore, InMemoryCaseStore, load_fixture_cases
-from grace.cases.dynamo_store import DynamoDBCaseStore, to_dynamo
+from grace.cases.dynamo_store import DynamoDBCaseStore, _attr, to_dynamo
 
 TODAY = date(2026, 10, 1)
 AT = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -651,19 +652,28 @@ class FakeTable:
     """The slice of the DynamoDB client the store uses, in memory.
 
     Deliberately not `moto`: that is a new test dependency for four API calls,
-    and Global Constraints keep dependencies minimal. This fake asserts the same
-    contract — items keyed by (pk, sk), queried in sort-key order — and it fails
-    loudly on a float, which is the serialization trap this task exists to
-    handle.
+    and Global Constraints keep dependencies minimal.
+
+    **A fake that cannot fail the way the real service fails is worse than no
+    fake**, so this one enforces two real DynamoDB behaviours: an `N` value must
+    parse as a finite `Decimal` (the real service rejects Infinity and NaN), and
+    a Query returns at most one page, signalling more with `LastEvaluatedKey`.
+    The page size is tiny so the store's pagination loop is genuinely exercised
+    rather than merely present.
     """
+
+    PAGE_SIZE = 3
 
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], dict] = {}
 
     def put_item(self, TableName: str, Item: dict) -> dict:
         for key, value in Item.items():
-            if isinstance(value, dict) and "N" in value and isinstance(value["N"], float):
-                raise TypeError(f"float reached the wire for {key!r}")
+            if isinstance(value, dict) and "N" in value:
+                # Real DynamoDB refuses a non-numeric or non-finite N.
+                parsed = Decimal(str(value["N"]))
+                if not parsed.is_finite():
+                    raise TypeError(f"non-finite N reached the wire for {key!r}")
         self.items[(Item["pk"]["S"], Item["sk"]["S"])] = Item
         return {}
 
@@ -675,7 +685,15 @@ class FakeTable:
             if item_pk == pk and sk.startswith(prefix)
         ]
         rows.sort(key=lambda i: i["sk"]["S"], reverse=not kwargs.get("ScanIndexForward", True))
-        return {"Items": rows}
+        start = kwargs.get("ExclusiveStartKey")
+        if start is not None:
+            after = start["sk"]["S"]
+            rows = [r for r in rows if r["sk"]["S"] > after]
+        page, rest = rows[: self.PAGE_SIZE], rows[self.PAGE_SIZE :]
+        response: dict = {"Items": page}
+        if rest:
+            response["LastEvaluatedKey"] = {"pk": page[-1]["pk"], "sk": page[-1]["sk"]}
+        return response
 
 
 def _dynamo_store(cases) -> DynamoDBCaseStore:
@@ -773,15 +791,20 @@ def test_a_none_trace_id_round_trips_as_none(store):
 def test_every_scalar_type_round_trips(store):
     """`LedgerDetailValue` is `str | int | float | bool | None`. All five
     must survive storage, because a type that fails at the storage boundary
-    fails *after* the action already happened."""
+    fails *after* the action already happened.
+
+    Float is 1.1, not 1.5: an exactly-representable value cannot detect a
+    `Decimal(x)`-instead-of-`Decimal(str(x))` conversion, and `approx` would
+    hide it even then. Compared exactly.
+    """
     store.append_ledger(LedgerEntry(
         case_id="c-001", at=AT, kind="tool_result",
-        detail={"s": "text", "i": 42, "f": 1.5, "b": True, "n": None},
+        detail={"s": "text", "i": 42, "f": 1.1, "b": True, "n": None},
     ))
     d = store.ledger("c-001")[0].detail
     assert d["s"] == "text"
     assert d["i"] == 42
-    assert d["f"] == pytest.approx(1.5)
+    assert float(d["f"]) == 1.1
     assert d["b"] is True
     assert d["n"] is None
 
@@ -801,20 +824,48 @@ def test_a_float_becomes_a_decimal_not_a_float():
     same failure `str(channel.send(...))` was added to prevent in Task 4:
     a `Channel` is a plain Protocol, so a real SNS implementation returning a
     boto3 response shape is exactly how a non-scalar reaches the ledger.
+
+    **Uses 1.1, not 1.5, deliberately.** `Decimal(1.5) == Decimal("1.5")` is
+    True because 1.5 is exactly representable in binary — so 1.5 cannot tell
+    `Decimal(x)` apart from `Decimal(str(x))` and a test written with it
+    passes against the wrong conversion. `Decimal(1.1)` is
+    `1.10000000000000008881784197001252323389053344726562 5`, which does not
+    equal `Decimal("1.1")`. Verified both.
     """
     from decimal import Decimal
 
-    assert isinstance(to_dynamo(1.5), Decimal)
-    assert to_dynamo(1.5) == Decimal("1.5")
+    assert isinstance(to_dynamo(1.1), Decimal)
+    assert to_dynamo(1.1) == Decimal("1.1")
+    assert to_dynamo(1.1) != Decimal(1.1)  # the binary-noise form
 
 
-def test_a_bool_stays_a_bool_and_does_not_become_one():
+def test_a_bool_serializes_to_BOOL_and_an_int_to_N():
     """`isinstance(True, int)` is True in Python, so a serializer that checks
-    `int` before `bool` silently stores `True` as the number 1. The ledger
-    would then read a boolean flag back as an integer."""
-    assert to_dynamo(True) is True
-    assert to_dynamo(1) == 1
-    assert not isinstance(to_dynamo(True), int) or to_dynamo(True) is True
+    `int` before `bool` silently stores `True` as the number 1.
+
+    **Asserted at the wire shape, not the return value.** `to_dynamo(True) is
+    True` passes against the buggy int-first ordering — verified — because the
+    value comes back unchanged either way. The distinction only exists in the
+    attribute shape, so that is where it must be tested.
+    """
+    assert _attr(True) == {"BOOL": True}
+    assert _attr(False) == {"BOOL": False}
+    assert _attr(1) == {"N": "1"}
+    assert _attr(0) == {"N": "0"}
+
+
+def test_a_non_finite_float_is_refused():
+    """DynamoDB rejects Infinity and NaN, and `Decimal("Infinity")` would
+    round-trip into an `int("Infinity")` ValueError on read.
+
+    The deeper reason: CLAUDE.md's Task 1 finding records that a NaN threshold
+    silently disables a comparison, because every comparison against NaN is
+    False. A NaN reaching an audit row is the same family of bug — it reads
+    back as a number and behaves like nothing.
+    """
+    for value in (float("inf"), float("-inf"), float("nan")):
+        with pytest.raises(TypeError):
+            to_dynamo(value)
 
 
 def test_a_non_scalar_is_refused_loudly():
@@ -822,6 +873,26 @@ def test_a_non_scalar_is_refused_loudly():
     reaching the wire and failing inside botocore with an unrelated message."""
     with pytest.raises(TypeError):
         to_dynamo({"nested": "dict"})  # type: ignore[arg-type]
+
+
+def test_the_ledger_query_follows_every_page():
+    """A DynamoDB Query returns at most 1MB and signals more with
+    `LastEvaluatedKey`.
+
+    At ~20-40 small rows per case this cannot bite today, but the failure mode
+    is **silent truncation of an audit trail**: `sweep` classifies a case by
+    scanning for a `renewal_submitted` row, so a dropped page would report a
+    filed renewal as unfiled with no error anywhere — the same class as the
+    sort-key defect Task 1 found.
+
+    `FakeTable` pages at a small size so the loop is genuinely exercised. A
+    pagination loop that never iterates in any test is not tested.
+    """
+    store = _dynamo_store(load_fixture_cases())
+    for n in range(7):
+        store.append_ledger(LedgerEntry(case_id="c-001", at=AT + timedelta(seconds=n),
+                                        kind="tool_call", detail={"tool": f"t{n}"}))
+    assert [e.detail["tool"] for e in store.ledger("c-001")] == [f"t{n}" for n in range(7)]
 
 
 def test_an_escalation_row_lands_on_the_queue_index():
@@ -875,6 +946,7 @@ harms nobody, while a ledger row is evidence.
 from __future__ import annotations
 
 import itertools
+import math
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -897,14 +969,26 @@ def to_dynamo(value: LedgerDetailValue) -> Any:
     **after** the underlying action already succeeded — the renewal filed, the
     audit row lost, which is hard rule 6 inverted. Same failure shape as a
     `Channel` returning a boto3 dict (Task 4).
+
+    `Decimal(str(value))`, never `Decimal(value)`: the latter captures binary
+    float noise (`Decimal(1.1)` is `1.1000000000000000888…`).
+
+    Non-finite floats are refused outright. DynamoDB rejects Infinity and NaN,
+    and `Decimal("Infinity")` would round-trip into an `int("Infinity")`
+    ValueError on read — but the sharper reason is the one CLAUDE.md already
+    records from Task 1: a NaN silently disables every comparison it appears in,
+    because comparisons against NaN are all False. A NaN in an audit row reads
+    back as a number and behaves like nothing.
     """
     if value is None or isinstance(value, bool) or isinstance(value, str):
         return value
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        # `str()` first: Decimal(1.1) captures binary float noise, Decimal("1.1")
-        # does not.
+        if not math.isfinite(value):
+            raise TypeError(
+                f"LedgerEntry.detail values must be finite numbers, got {value!r}"
+            )
         return Decimal(str(value))
     raise TypeError(f"LedgerEntry.detail values must be JSON-safe scalars, got {value!r}")
 
@@ -984,33 +1068,50 @@ class DynamoDBCaseStore:
         self._client.put_item(TableName=self._table, Item=item)
 
     def ledger(self, case_id: str) -> list[LedgerEntry]:
-        response = self._client.query(
-            TableName=self._table,
-            KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
-            ExpressionAttributeValues={
-                ":pk": {"S": naming.case_pk(case_id)},
-                ":prefix": {"S": "LEDGER#"},
-            },
-            # Chronological, matching `InMemoryCaseStore`'s append order. The
-            # evals read position, so this is load-bearing.
-            ScanIndexForward=True,
-        )
+        """Every ledger row for one case, in append order.
+
+        **Paginated, because a Query returns at most 1MB** and signals more with
+        `LastEvaluatedKey`. At ~20-40 small rows per case that limit cannot bite
+        today, but the failure mode is silent truncation of an audit trail:
+        `sweep` classifies a case by scanning for a `renewal_submitted` row, so a
+        dropped page would report a filed renewal as unfiled with no error
+        anywhere. Same class of defect as an unsorted key.
+
+        `ScanIndexForward=True` is chronological, matching `InMemoryCaseStore`'s
+        append order — the evals read position, so this is load-bearing.
+        """
         entries: list[LedgerEntry] = []
-        for item in response.get("Items", []):
-            detail = {
-                key[2:]: _from_attr(value)
-                for key, value in item.items()
-                if key.startswith("d_")
+        start_key: dict | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "TableName": self._table,
+                "KeyConditionExpression": "pk = :pk AND begins_with(sk, :prefix)",
+                "ExpressionAttributeValues": {
+                    ":pk": {"S": naming.case_pk(case_id)},
+                    ":prefix": {"S": "LEDGER#"},
+                },
+                "ScanIndexForward": True,
             }
-            entries.append(
-                LedgerEntry(
-                    case_id=str(item["case_id"]["S"]),
-                    at=datetime.fromisoformat(str(item["at"]["S"])),
-                    kind=str(item["kind"]["S"]),
-                    detail=detail,
+            if start_key is not None:
+                kwargs["ExclusiveStartKey"] = start_key
+            response = self._client.query(**kwargs)
+            for item in response.get("Items", []):
+                detail = {
+                    key[2:]: _from_attr(value)
+                    for key, value in item.items()
+                    if key.startswith("d_")
+                }
+                entries.append(
+                    LedgerEntry(
+                        case_id=str(item["case_id"]["S"]),
+                        at=datetime.fromisoformat(str(item["at"]["S"])),
+                        kind=str(item["kind"]["S"]),
+                        detail=detail,
+                    )
                 )
-            )
-        return entries
+            start_key = response.get("LastEvaluatedKey")
+            if not start_key:
+                return entries
 
     def write_escalation(
         self, case_id: str, reason: str, question: str, deadline: str
