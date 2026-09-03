@@ -276,8 +276,10 @@ number. That is a fix rather than a precaution — it used to return the househo
 quoted it into its deliberation, and the text reached a CloudWatch log group inside a Step Functions
 payload, a path that span redaction does not cover. The name is removed at the source, with a
 regression test over all 12 fixtures, because a model that can read a name will eventually quote it
-somewhere nobody is filtering. Log events written before the fix still contain it and cannot be
-unwritten; that is recorded honestly in
+somewhere nobody is filtering. **The fix is deployed** — runtime version 2, and re-invoking the exact
+case that leaked now returns an escalation with no name in the payload, confirmed across a full 9/3
+sweep with zero household names anywhere in the output. Log events written before the fix still
+contain it and cannot be unwritten; that is recorded honestly in
 [docs/deployed-verification.md](docs/deployed-verification.md#5-a-household-name-reached-cloudwatch--found-fixed-at-the-source-pre-fix-events-remain)
 rather than quietly cleaned up.
 

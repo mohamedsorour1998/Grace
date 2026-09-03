@@ -374,3 +374,49 @@ original 360 are all still present and unchanged.
 inference — see §7 for their separate result.
 
 
+
+---
+
+## 10. The PII fix is deployed and verified in production
+
+Recorded after the sections above, because the fix landed in the repository first and the running
+image was still version 1.
+
+```console
+$ agentcore deploy -y
+✓ Deployed to 'default' (stack: AgentCore-grace-default)
+  ApplicationAgentGraceRuntimeIdOutput: grace_grace-oTyyvo8stE
+
+$ aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE
+{ "version": "2", "status": "READY", "updated": "2026-09-03T04:44:47Z" }
+```
+
+**`c-012` — the exact case that leaked `Mensah` — invoked on the new image:**
+
+```text
+status: escalated
+reason: A caseworker must decide. source_conflict: household size 5 on application, 3 on most
+        recent wage record Deliberation — CLEAR: The household qualifies under the existing
+        application despite the wage record discrepancy, ...
+household names in the returned payload: NONE
+```
+
+The referee still deliberates and still reaches a conclusion; it simply has no name to quote,
+because `read_case` no longer supplies one. Note the referee concluded **CLEAR** and the case
+escalated anyway — the gate's deterministic verdict decides, and deliberation only supplies wording
+(Plan 1, Task 7).
+
+**A full deployed sweep on the fixed image**, execution `6d5bc845-06a3-4108-9403-1e08998989b9`:
+
+```text
+status: SUCCEEDED
+counts: {'acted': 9, 'escalated': 3}
+PII in the whole sweep output: NONE
+```
+
+Third consecutive deployed sweep at 9/3, and the first with the fix in place.
+
+**What remains true:** log events written *before* the fix still contain the name and cannot be
+unwritten. They age out with the log group's retention. So the accurate statement is that the leak
+happened, was found by scanning rather than by assumption, is closed at the source in both the
+repository and the running system, and its historical events remain until retention expires.
