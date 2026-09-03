@@ -62,8 +62,12 @@ Identity are deferred with written reasons (spec §8, README). **Never describe 
 2. A household name **did** reach CloudWatch before it was fixed (see the PII finding below). The fix
    is now deployed — runtime **version 2**, and a fresh invocation of `c-012` (the case that leaked)
    returns an escalation with no name in the payload, confirmed on a full 9/3 sweep with zero PII in
-   the output. **Pre-fix log events still contain the name** and cannot be unwritten; they age out with
-   retention. So: fixed in the repo, fixed in the running system, historical events still carry it.
+   the output. Fixing the source did not clean what was already written, so that was scanned
+   separately: three fields across two pre-fix `c-012` rows in DynamoDB held the surname and were
+   stripped in place on 2026-09-04 (no key, `status`, `deadline`, or `renewal_submitted` row touched;
+   a 633-row scan now returns clean — `docs/plan3-live-data-findings.md`). **Pre-fix log events still
+   contain the name** and cannot be unwritten; they age out with retention. So: fixed in the repo,
+   fixed in the running system, fixed in durable storage, historical log events still carry it.
 
 - Plan 2 spec: `docs/superpowers/specs/2026-09-03-grace-agentcore-design.md`
 - Plan 2 tasks: `docs/superpowers/plans/2026-09-03-grace-agentcore.md`

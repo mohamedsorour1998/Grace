@@ -416,7 +416,30 @@ PII in the whole sweep output: NONE
 
 Third consecutive deployed sweep at 9/3, and the first with the fix in place.
 
+**One place the name survived the fix, found later and also closed.** The fix stopped *new* rows from
+carrying a name, but rows already written kept theirs — and DynamoDB is durable storage the dashboard
+reads, not a log group that ages out. A scan of all 633 items in `grace-cases` on 2026-09-04 found the
+surname in three fields across two `c-012` rows: `reason` and `question` on one escalation row, and
+`d_question` on one ledger row, all of it the referee's deliberation prose.
+
+Those three values were stripped in place on 2026-09-04. Only the identity phrase changed — `the
+Mensah Household` → `this household` — so the referee's argument still reads as written. Both rows were
+backed up first; the writes were `UpdateItem` on named fields with `attribute_exists(pk)`; no key
+attribute, `status`, `escalated_at`, `deadline`, or `renewal_submitted` row was touched, so nothing
+moved in the GSI and the 9/3 counts are unaffected.
+
+```text
+rows scanned: 633
+name/phone hits: CLEAN
+GSI rows: 17 households: {'c-010': 6, 'c-012': 6, 'c-011': 5}
+c-012 status still: PENDING_CASEWORKER | deadline: 2026-10-12
+```
+
+The full account, including the query that produces it, is in
+[docs/plan3-live-data-findings.md](plan3-live-data-findings.md).
+
 **What remains true:** log events written *before* the fix still contain the name and cannot be
 unwritten. They age out with the log group's retention. So the accurate statement is that the leak
-happened, was found by scanning rather than by assumption, is closed at the source in both the
-repository and the running system, and its historical events remain until retention expires.
+happened, was found by scanning rather than by assumption, is closed at the source in the repository,
+in the running system, and now in durable storage as well — and its historical log events remain until
+retention expires.

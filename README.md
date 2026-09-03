@@ -282,10 +282,15 @@ payload, a path that span redaction does not cover. The name is removed at the s
 regression test over all 12 fixtures, because a model that can read a name will eventually quote it
 somewhere nobody is filtering. **The fix is deployed** — runtime version 2, and re-invoking the exact
 case that leaked now returns an escalation with no name in the payload, confirmed across a full 9/3
-sweep with zero household names anywhere in the output. Log events written before the fix still
-contain it and cannot be unwritten; that is recorded honestly in
+sweep with zero household names anywhere in the output.
+
+Fixing the source did not clean up what was already written, so that was checked separately: a scan of
+all 633 rows in the DynamoDB table found the surname in three fields of two pre-fix rows, and those
+values were stripped in place without touching any key, status, deadline, or `renewal_submitted` row.
+The scan now returns clean. Log events written before the fix still contain the name and cannot be
+unwritten; that, and the exact scope of the cleanup, are recorded in
 [docs/deployed-verification.md](docs/deployed-verification.md#5-a-household-name-reached-cloudwatch--found-fixed-at-the-source-pre-fix-events-remain)
-rather than quietly cleaned up.
+rather than quietly smoothed over.
 
 ### Notifications
 
