@@ -1639,7 +1639,23 @@ _gate_reason = gate_reason
 ```
 
 Do the same for `renewal_filed`, `outreach_sent`, and `deliberation_note`. **Do not change any
-function body.** Update the four internal call sites inside `sweep` to the new names.
+function body — and specifically, do NOT update `sweep`'s call sites.**
+
+An earlier version of this step said to update them, which would have broken the demo.
+`sweep`'s body binds a **local** variable of the same name:
+
+```python
+gate_reason = _gate_reason(store, case.case_id, today)   # line ~545
+```
+
+Rewriting that to the public name yields `gate_reason = gate_reason(...)`, and Python then treats
+`gate_reason` as local throughout the function — so the call raises
+`UnboundLocalError: cannot access local variable 'gate_reason' where it is not associated with a
+value`. Demonstrated. It fires on every case with a non-clean verdict, which is all three demo
+escalations, from a change that was supposed to be a no-op.
+
+The aliases make every existing call site correct as written, so leaving `sweep` alone is both safer
+and closer to this step's own "do not change any function body".
 
 - [x] **Step 2: Confirm nothing broke**
 
