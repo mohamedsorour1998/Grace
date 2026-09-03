@@ -1471,6 +1471,21 @@ def test_the_scopes_do_not_include_anything_write_shaped():
     """openid gives the `sub`; profile is not needed and would carry name and
     email into a token that CloudTrail logs."""
     assert set(provision_cognito.CLIENT_SPEC["AllowedOAuthScopes"]) == {"openid"}
+
+
+def test_the_role_attribute_is_explicitly_readable():
+    """**The one that makes sign-in work at all.**
+
+    Verified against the live API documentation: when `ReadAttributes` is
+    omitted, the client may read only `email_verified`,
+    `phone_number_verified`, and the pool's *standard* attributes — a custom
+    attribute is not among them. So without naming `custom:role` here it never
+    reaches the ID token, `verifySession` refuses every legitimate caseworker,
+    and the symptom reads as "auth is broken" rather than "one attribute is
+    unreadable". It fails closed, which is the right direction and still means
+    nobody can sign in.
+    """
+    assert provision_cognito.ROLE_CLAIM in provision_cognito.CLIENT_SPEC["ReadAttributes"]
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -1535,6 +1550,15 @@ CLIENT_SPEC: dict = {
     "AllowedOAuthScopes": ["openid"],
     "SupportedIdentityProviders": ["COGNITO"],
     "ExplicitAuthFlows": ["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+    # **`ReadAttributes` must name `custom:role` explicitly.** Verified against
+    # the live API docs: when `ReadAttributes` is omitted, the client can read
+    # only `email_verified`, `phone_number_verified`, and the pool's *standard*
+    # attributes — a custom attribute is not among them. So leaving this out
+    # would keep `custom:role` out of the ID token, `verifySession` would refuse
+    # every legitimate caseworker, and the failure would look like "auth is
+    # broken" rather than "one attribute is unreadable". Fails closed, which is
+    # the right direction and still unusable.
+    "ReadAttributes": ["email", ROLE_CLAIM],
     # An hour. Long enough for a caseworker's session, short enough that a
     # leaked token expires before it is useful.
     "IdTokenValidity": 60,
