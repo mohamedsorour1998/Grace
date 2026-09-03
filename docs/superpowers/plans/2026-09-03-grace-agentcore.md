@@ -3486,7 +3486,7 @@ for d in r.get('diagnostics', []): print(d['severity'], d['code'], d.get('locati
 "
 ```
 
-- [ ] **Step 1: Write the failing Lambda handler test**
+- [x] **Step 1: Write the failing Lambda handler test**
 
 Create `tests/test_lambda_handler.py`:
 
@@ -3576,12 +3576,12 @@ def test_a_runtime_failure_becomes_an_error_outcome_not_an_exception():
     assert out["case_id"] == "c-012"
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_lambda_handler.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'infra.lambda_src'`.
 
-- [ ] **Step 3: Write `infra/lambda_src/handler.py`**
+- [x] **Step 3: Write `infra/lambda_src/handler.py`**
 
 Create `infra/lambda_src/__init__.py` (empty) and `infra/lambda_src/handler.py`:
 
@@ -3663,12 +3663,12 @@ def lambda_handler(event: dict, context: object, client=None, runtime_arn: str |
         return {"status": "error", "case_id": case_id, "detail": str(exc)}
 ```
 
-- [ ] **Step 4: Run the handler tests**
+- [x] **Step 4: Run the handler tests**
 
 Run: `.venv/bin/python -m pytest tests/test_lambda_handler.py -v`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Write the failing state-machine test**
+- [x] **Step 5: Write the failing state-machine test**
 
 Create `tests/test_state_machine.py`:
 
@@ -3736,12 +3736,12 @@ def _next_map(definition):
     return next(s for s in definition["States"].values() if s["Type"] == "Map")
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_state_machine.py -v`
 Expected: FAIL — `ImportError: cannot import name 'provision_stepfunctions' from 'infra'`.
 
-- [ ] **Step 7: Write `infra/provision_lambda.py`**
+- [x] **Step 7: Write `infra/provision_lambda.py`**
 
 ```python
 """Package and create the `grace-invoke-case` function. Idempotent."""
@@ -3812,7 +3812,7 @@ def provision(runtime_arn: str, client=None, role_arn: str | None = None) -> str
     return str(response["FunctionArn"])
 ```
 
-- [ ] **Step 8: Write `infra/provision_stepfunctions.py`**
+- [x] **Step 8: Write `infra/provision_stepfunctions.py`**
 
 ```python
 """The `grace-sweep` state machine: a Map over the twelve cases.
@@ -3977,7 +3977,7 @@ def provision(lambda_arn: str, client=None, role_arn: str | None = None,
         return arn
 ```
 
-- [ ] **Step 9: Write `infra/provision_eventbridge.py`**
+- [x] **Step 9: Write `infra/provision_eventbridge.py`**
 
 ```python
 """Daily schedule. What makes 'runs unattended in the background' literal."""
@@ -4024,12 +4024,12 @@ def provision(state_machine_arn: str, client=None, role_arn: str | None = None) 
     return str(rule["RuleArn"])
 ```
 
-- [ ] **Step 10: Run the state-machine tests**
+- [x] **Step 10: Run the state-machine tests**
 
 Run: `.venv/bin/python -m pytest tests/test_state_machine.py -v`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 11: Provision all three and run the sweep for real**
+- [x] **Step 11: Provision all three and run the sweep for real**
 
 ```bash
 .venv/bin/python -c "
@@ -4073,12 +4073,12 @@ counter — read the escalation rows and find out which case moved and why. A cl
 means the gate got stricter; one of `c-010`/`c-011`/`c-012` acting means it got looser. Either is a
 bug worth stopping for.
 
-- [ ] **Step 12: Run the whole suite**
+- [x] **Step 12: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **427 tests**. Report the real number.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 git add infra/lambda_src/ infra/provision_lambda.py infra/provision_stepfunctions.py \

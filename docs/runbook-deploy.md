@@ -317,3 +317,86 @@ resolve in-process tracing within the no-distro constraint or present the Dynamo
 demo's evidence instead. The ledger is the stronger artifact anyway — CLAUDE.md already says a trace
 can be dropped by sampling and a ledger row cannot.
 
+### Task 8 — the scheduled sweep (verified end to end, 2026-09-03)
+
+```text
+lambda:        arn:aws:lambda:us-east-1:339712964409:function:grace-invoke-case
+state machine: arn:aws:states:us-east-1:339712964409:stateMachine:grace-sweep
+rule:          arn:aws:events:us-east-1:339712964409:rule/grace-daily-sweep
+```
+
+**The deployed sweep reports `{'acted': 9, 'escalated': 3}` in 61s** —
+execution `arn:aws:states:us-east-1:339712964409:execution:grace-sweep:b756eb11-48e2-4d48-87e0-b1def55ed5dd`,
+status `SUCCEEDED`. `c-010` escalated on `missing_document`, `c-011` on `material_income_change`
+(30.0%), `c-012` on `source_conflict`, each with the gate's own typed reason plus the referee's
+`AMBIGUOUS:` question. Confirmed on the ledger afterwards: `renewal_submitted` appears **0** times for
+all three, and once each for the nine clean cases. Hard rule 6 holds against deployed infrastructure.
+
+#### `invoke_agent_runtime` is not idempotent, and boto3 retries it five times by default
+
+The most serious defect found in Plan 2. Measured with a black-hole socket server (accepts the
+connection, reads the request, never replies) so every attempt ends in `ReadTimeoutError` and the
+accept count *is* the number of HTTP attempts:
+
+| Client config | Attempts |
+|---|---|
+| plan's draft (no `Config`) | **5** |
+| `retries={"mode": "standard", "max_attempts": 1}` | **2** |
+| `retries={"total_max_attempts": 1}` | **1** |
+
+`ReadTimeoutError` maps to `GENERAL_CONNECTION_ERROR` in botocore's own retry table, so a runtime
+that is merely *slow* is indistinguishable from a dropped connection. Each retry re-runs the entire
+graph for the same case, so a slow case could file the same renewal up to five times — hard rule 6's
+harm from the other direction. Plan 1 measured one real eval run at 512s against a typical 75s, and
+the default `read_timeout` is **60s**, so this was reachable rather than theoretical.
+
+`total_max_attempts` is the only setting that means "do not retry": `max_attempts` counts *retries*
+in standard mode, so a test asserting `max_attempts == 1` passes while the client still retries.
+`infra/lambda_src/handler.py` sets `total_max_attempts=1` and `read_timeout=870` (clearing the
+graph's 420s node timeout, staying under the Lambda's 900s deadline).
+
+#### `Catch` cannot see a handler that returns `{"status": "error"}`
+
+The plan's definition had a `Catch` branch and nothing else. But `grace/entrypoint.py` and the Lambda
+handler are both written *never to raise* — so Step Functions sees a **successful** task carrying an
+error payload, and `Catch` does not fire. That made the two failure paths opposite: a Lambda killed at
+its deadline got an escalation row, and a Lambda that reported the same failure politely got none.
+**The family that disappeared was the one whose failure was handled better.**
+
+Fixed with a `CheckOutcome` Choice state routing `$.status == "error"` to a second DynamoDB writer.
+Both writers are built by one function so the row shape cannot drift. Re-validated against the real
+`stepfunctions:validate_state_machine_definition` API after the change: **`result: OK`, zero
+diagnostics**, intrinsics and `$$.State.EnteredTime` still parse. Proven live with a bogus
+`c-nonexistent` case (no Bedrock cost): the history shows
+`InvokeCase → CheckOutcome → RecordReportedFailure → ReportFailure` and a real `PENDING_CASEWORKER`
+row landed. That row was deleted afterwards so it does not pollute the caseworker queue.
+
+#### Task 9's draft metric-filter pattern matches zero events
+
+Tested with `logs:test_metric_filter` against the real log events, which is ingestion-independent —
+`filter_log_events` returns 0 for *every* pattern including the empty one for several minutes after a
+run, and `storedBytes` reads 0, so that API cannot be used to check a pattern promptly.
+
+| Pattern | Matches |
+|---|---|
+| Task 9 draft: `{ $.status = "escalated" }` | **0 of 3** |
+| `{ $.details.output = "*escalated*" }` | 14 (six event types) |
+| `{ $.type = "TaskStateExited" && $.details.output = "*\"status\":\"escalated\"*" }` | **3** ✅ |
+
+There is no top-level `status` field. A Step Functions log event's keys are `type`, `details`,
+`execution_arn`, `id`, `previous_event_id`, `redrive_count`, `event_timestamp` — the outcome payload
+sits at `$.details.output` as an **embedded JSON string**, not a nested object. Without the `$.type`
+anchor the same outcome is counted six times (`ChoiceStateExited`, `PassStateExited`,
+`TaskStateExited`, `TaskSucceeded`, `MapStateExited`, `ExecutionSucceeded`), so the alarm's
+`Threshold: 3` would compare against 14 and never fire. **Task 9 must use the type-anchored pattern
+above**, and should assert the count is exactly 3 rather than non-zero.
+
+#### Known cosmetic inconsistency: two `escalated_at` formats
+
+The state machine writes `$$.State.EnteredTime`, which renders UTC as `2026-09-03T03:34:31.779Z`,
+while `grace/cases/dynamo_store.py` writes `...+00:00` for the same instant. `Z` and `+` sort
+inconsistently against each other bytewise, so the escalation GSI's range key is not globally ordered
+across the two writers. **Deliberately not fixed:** the caseworker queue's meaningful order is by
+`deadline`, rows from either writer sort correctly among themselves, and normalizing would mean
+reformatting a timestamp inside a `States.Format` intrinsic — more risk than the defect.
+
