@@ -22,7 +22,9 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 - Spec: `docs/superpowers/specs/2026-08-28-grace-design.md`
 - Plan 1 (core, local): `docs/superpowers/plans/2026-08-28-grace-core.md`
 - Plan 2 (AgentCore deploy): `docs/superpowers/plans/2026-09-03-grace-agentcore.md` — **complete**
-- Plan 3 (dashboard) to follow.
+- Plan 3 (dashboard): `docs/superpowers/plans/2026-09-03-grace-dashboard.md` — **in progress**,
+  spec `docs/superpowers/specs/2026-09-03-grace-dashboard-design.md`,
+  runbook `docs/dashboard-runbook.md`
 
 ---
 
@@ -873,6 +875,76 @@ case was read" (`test_read_case_returns_the_bound_case_only` and, more important
 `test_an_injected_identity_argument_cannot_redirect_a_read` — the load-bearing layer-2 test). Both now
 discriminate on `case_id`, which tests the identical property with an opaque value. If you add a test
 that needs to prove *which* case was read, use `case_id`; never reintroduce a name as a fixture marker.
+
+### What Plan 3 established — follow these
+
+Plan 3 adds a Next.js caseworker dashboard in `web/`, deployed to Amplify with Cognito auth. It also
+un-defers **AgentCore Identity**, so when Task 4 ships the honest surface count becomes **four**, not
+three — update the "Scope is three AgentCore surfaces" paragraph above at that point, and not before.
+
+Task state:
+
+| Task | State |
+|---|---|
+| 0 — preflight | **done** — eight of the plan's dependency pins were wrong; corrected from real registry data |
+| 1 — scaffold `web/` | **done** — commit `e3ea347`, four gates green (`typecheck`, `lint`, `test`, `build`), Python suite unchanged at 622. **Two more version pins and three config defects; read below** |
+| 2 — `lib/authorize.ts` | not started |
+| 3 — `lib/cases.ts` | not started |
+| 4 — Cognito + session verification | not started |
+| 5 — `lib/decide.ts` + the write route | not started |
+| 6 — pages | not started |
+| 7 — Amplify | not started |
+| 8 — verification + docs | not started |
+
+**`web/` runs its own toolchain, and `npm run build` is the gate that matters** — it is what Amplify
+runs, so a green `typecheck` and `test` with a failing `build` is not a deployable app. Four commands,
+all from `web/`: `npm run typecheck`, `npm run lint`, `npm run test`, `npm run build`. The Python suite
+is separate and must stay at its current count; `web/` is additive and may never change it.
+
+**TypeScript is pinned to 6.0.3, not 7.x, and this is not a stale pin.** TypeScript 7 is the native Go
+port and `typescript-eslint` **refuses to load under it** — an explicit
+`throw new Error("typescript-eslint does not support TS 7.0.")` guarded by `if (versionMajor >= 7)` in
+its own `dist/index.js`. `eslint-config-next@16.3.4` depends on `typescript-eslint@^8.46.0`, so
+pinning TS 7 means `npm run lint` cannot run at all. `tsc --noEmit` and `next build` pass identically
+under 6.0.3, so nothing is lost. Upstream tracking issue: `typescript-eslint#10940`. **Do not bump
+`typescript` past 6 until that closes.**
+
+**`@aws-sdk/util-dynamodb` is on 3.996.9 while its sibling clients are on 3.1125.0, and that is
+correct.** That package never entered the `3.1xxx` series — `latest` is 3.996.9 across 568 published
+versions. Its peer range is `@aws-sdk/client-dynamodb: ^3.1111.0`, which 3.1125.0 satisfies, so the
+pair is compatible. A "consistency" bump to 3.1125.0 installs a version that does not exist.
+
+**`eslint-config-next` exports an array, not a factory.** `import next from "eslint-config-next"` then
+`[...next()]` throws `next is not a function`; its own `dist/index.d.ts` reads
+`declare const config: Linter.Config[]; export = config`. Spread the value: `[...next, ...]`.
+
+**Every `.mjs` config must assign to a named `const` before exporting.** `eslint-config-next` enables
+`import/no-anonymous-default-export`, so a bare `export default { ... }` in `postcss.config.mjs` or
+`export default [ ... ]` in `eslint.config.mjs` makes the config lint *itself*. Clean lint output, not
+merely a zero exit code, is the bar.
+
+**`vitest.config.mts` uses `import.meta.dirname`, never `__dirname`.** Vitest 5 warns on every run
+that `__dirname` is unsupported by `configLoader: "native"`, which is planned to become Vite's
+default.
+
+**`next build` rewrites `tsconfig.json` in place** — it forces `jsx` from `"preserve"` to
+`"react-jsx"` (Next 16 uses the React automatic runtime) and appends `.next/dev/types/**/*.ts` to
+`include`. Next's version is the committed one; reverting it just makes the next build rewrite it.
+`*.tsbuildinfo` is gitignored because `incremental: true` writes an absolute-path-keyed cache on every
+typecheck.
+
+**The static-export guard is real, and was watched failing.** `__tests__/smoke.test.ts` asserts
+`next.config.ts` does not set `output`; adding `output: "export"` fails it with
+`expected 'export' to be undefined`. A static export has **no route handlers and no middleware**, so
+it would silently delete the Cognito gate and the decide endpoint — the app would build, serve, and be
+wrong. **Never add `output: "export"` to `web/next.config.ts`.**
+
+**`web/` carries no resume vocabulary and no `NEXT_PUBLIC_` variables.** `interruptResponse`,
+`APPROVE_DECISIONS`, and `MAX_RESUME_ROUNDS` appear nowhere — Plan 3's approve/deny path records the
+decision and **re-invokes so the gate re-evaluates**, it never resumes a paused graph (any truthy
+resume response approves the blocked tool; see Task 6 of Plan 1). No `NEXT_PUBLIC_` variable exists
+either, because anything so prefixed is inlined into the client bundle, and every value this app holds
+is either a credential or a household-scoped identifier.
 
 
 ## The one idea that matters
