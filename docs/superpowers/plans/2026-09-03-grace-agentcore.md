@@ -1385,17 +1385,70 @@ def test_the_redaction_token_keeps_its_trailing_equals():
 
 def test_redaction_is_detected_as_configured_or_not():
     """A deployed runtime must be checkable, not assumed. `.env.example`
-    having the token says nothing about what Runtime actually has set."""
+    having the token says nothing about what Runtime actually has set.
+
+    The third case is the one that matters most and the one a substring check
+    gets wrong: a token that is *present* but carries an allowlist reports
+    redaction enabled and still exports the household record. Verified against
+    the real `Tracer` — `_redaction_enabled` is True there while
+    `gen_ai.input.messages` and `gen_ai.output.messages` are both unredacted.
+    """
+    # Grace's policy: token present, value empty -> redact everything.
     assert observability.redaction_is_configured(
         {"OTEL_SEMCONV_STABILITY_OPT_IN":
          "gen_ai_latest_experimental,gen_ai_unredacted_attributes="}
     )
-    # The documented trap: enabling the experimental semconv alone does NOT
-    # protect span content. Redaction needs the separate token.
+    # The documented trap: the experimental semconv alone protects nothing.
     assert not observability.redaction_is_configured(
         {"OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"}
     )
     assert not observability.redaction_is_configured({})
+    # Present but allowlisting the two attributes that carry the household
+    # record. This is hard rule 8 defeated while the token is technically there.
+    assert not observability.redaction_is_configured(
+        {"OTEL_SEMCONV_STABILITY_OPT_IN":
+         "gen_ai_unredacted_attributes=gen_ai.input.messages;gen_ai.output.messages"}
+    )
+    # A single allowlisted attribute is still a hole.
+    assert not observability.redaction_is_configured(
+        {"OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_unredacted_attributes=gen_ai.system_instructions"}
+    )
+
+
+def test_the_redaction_check_agrees_with_the_sdks_own_tracer():
+    """The guard and the SDK must not disagree about what a value means.
+
+    `redaction_is_configured` is Grace's gate; `Tracer` is what actually
+    redacts. If they diverge, the gate passes a configuration that leaks — so
+    this drives the real `Tracer` and asserts the two agree on every case.
+    """
+    import os as _os
+
+    from strands.telemetry import Tracer
+
+    cases = [
+        ("gen_ai_latest_experimental,gen_ai_unredacted_attributes=", True),
+        ("gen_ai_latest_experimental", False),
+        ("gen_ai_unredacted_attributes=gen_ai.input.messages;gen_ai.output.messages", False),
+    ]
+    previous = _os.environ.get("OTEL_SEMCONV_STABILITY_OPT_IN")
+    try:
+        for value, grace_says_safe in cases:
+            _os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = value
+            tracer = Tracer()
+            sdk_redacts_messages = tracer._redaction_enabled and not any(
+                tracer._is_attribute_unredacted(name)
+                for name in ("gen_ai.input.messages", "gen_ai.output.messages")
+            )
+            assert observability.redaction_is_configured({"OTEL_SEMCONV_STABILITY_OPT_IN": value}) == (
+                grace_says_safe
+            ), value
+            assert sdk_redacts_messages == grace_says_safe, value
+    finally:
+        if previous is None:
+            _os.environ.pop("OTEL_SEMCONV_STABILITY_OPT_IN", None)
+        else:
+            _os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = previous
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -1441,20 +1494,44 @@ logger = logging.getLogger(__name__)
 # record — exports to CloudWatch verbatim.
 REDACTION_TOKEN = "gen_ai_latest_experimental,gen_ai_unredacted_attributes="
 
-_UNREDACTED_KEY = "gen_ai_unredacted_attributes="
+_UNREDACTED_PREFIX = "gen_ai_unredacted_attributes="
 _ENV_KEY = "OTEL_SEMCONV_STABILITY_OPT_IN"
 
 
 def redaction_is_configured(env: Mapping[str, str] | None = None) -> bool:
-    """Whether span redaction is actually on in this environment.
+    """Whether span redaction is on **and covers everything**, in this environment.
 
     Checkable rather than assumed, because `.env.example` carrying the token says
-    nothing about what a deployed Runtime has set. Note the documented trap this
-    guards: enabling `gen_ai_latest_experimental` alone does **not** protect span
-    content — redaction needs the separate `gen_ai_unredacted_attributes=` token.
+    nothing about what a deployed Runtime has set.
+
+    **Presence of the token is not the same claim as content being redacted, and
+    conflating the two defeats hard rule 8.** Read the SDK's own parsing
+    (`strands.telemetry.tracer`, ~line 131): it takes the first token starting
+    with `gen_ai_unredacted_attributes=`, sets `_redaction_enabled` from its mere
+    *presence*, then compiles everything after the `=` into an **allowlist of
+    attributes to leave unredacted**. Measured against the real `Tracer`:
+
+    ```text
+    gen_ai_latest_experimental                          enabled=False  messages exported
+    gen_ai_latest_experimental,gen_ai_unredacted_attributes=   enabled=True   messages REDACTED
+    gen_ai_unredacted_attributes=gen_ai.input.messages;gen_ai.output.messages
+                                                        enabled=True   messages exported
+    ```
+
+    The third case passes a substring check, reports redaction "enabled", and
+    exports the full household record. So this function requires the value to be
+    **empty** — Grace's policy is redact everything, so any allowlist entry is a
+    hole, not a configuration. The trailing `=` matters because it is what makes
+    the value empty rather than absent; emptiness is the property, not the
+    character.
     """
-    value = (env if env is not None else os.environ).get(_ENV_KEY, "")
-    return _UNREDACTED_KEY in value
+    raw = (env if env is not None else os.environ).get(_ENV_KEY, "")
+    # Split the way the SDK splits, so the two cannot disagree about what a
+    # given value means.
+    for token in (t.strip() for t in raw.split(",")):
+        if token.startswith(_UNREDACTED_PREFIX):
+            return token.partition("=")[2].strip() == ""
+    return False
 
 
 def setup_telemetry() -> None:

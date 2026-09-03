@@ -726,10 +726,16 @@ These are not stylistic preferences. Breaking one is a bug.
    family their renewal was filed unless `submit_renewal` returned successfully. This is the
    specific failure this system must not have.
 7. **Escalating is always allowed.** `escalate_to_caseworker` is never gated.
-8. **Never remove the span-redaction token.** `OTEL_SEMCONV_STABILITY_OPT_IN` must keep the
-   `gen_ai_unredacted_attributes=` suffix. Its value lists what to leave *unredacted*, so the
-   empty value means "redact everything"; **absence of the token disables redaction entirely**
-   and exports the full household record to CloudWatch. The trailing `=` is load-bearing.
+8. **Never remove the span-redaction token, and never give it a non-empty value.**
+   `OTEL_SEMCONV_STABILITY_OPT_IN` must keep the `gen_ai_unredacted_attributes=` suffix **with
+   nothing after the `=`**. The value is an *allowlist of attributes to leave unredacted*, so the
+   empty value means "redact everything" and the trailing `=` is what makes it empty rather than
+   absent. Two distinct failures, both verified against the real `Tracer`: **absence** of the token
+   disables redaction entirely (`_redaction_enabled=False`), and a **non-empty** value carves holes
+   in it — `gen_ai_unredacted_attributes=gen_ai.input.messages;gen_ai.output.messages` reports
+   redaction "enabled" while exporting the full household record. So "the token is present" is not
+   the same claim as "content is redacted"; `grace/observability.py`'s
+   `redaction_is_configured` checks emptiness, not presence.
 9. **Never put household identity in a span attribute.** `trace_attributes` are exported
    verbatim — the rule-8 policy covers only the five `gen_ai.*` content attributes, not custom
    ones. `grace.case_id` yes; name, phone, or address never. Same rule as the JWT `sub`.
