@@ -98,9 +98,11 @@ Two blockers were confirmed on 2026-09-03 and will stop a deploy dead. Discoveri
 day is the expensive version. This task writes nothing to AWS.
 
 **Files:**
+
 - Create: `docs/runbook-deploy.md` (the preflight section only; later tasks append)
 
 **Interfaces:**
+
 - Consumes: nothing
 - Produces: a verified-green environment. No code artifacts.
 
@@ -215,10 +217,12 @@ The table is the foundation everything else writes to. Naming comes first so not
 string twice.
 
 **Files:**
+
 - Create: `infra/__init__.py`, `infra/naming.py`, `infra/provision_dynamodb.py`
 - Test: `tests/test_infra_naming.py`
 
 **Interfaces:**
+
 - Consumes: nothing
 - Produces:
   - `infra.naming.REGION: str`, `ACCOUNT_ID: str | None`, `TABLE: str`, `ESCALATION_GSI: str`,
@@ -481,6 +485,7 @@ git commit -m "feat: grace-cases table and one home for every resource name"
 ```
 
 ---
+
 ## Task 2: `DynamoDBCaseStore` and the store factory
 
 The second `CaseStore` implementation. The test strategy is the point of this task: **one test body,
@@ -488,10 +493,12 @@ parametrized over both stores.** A separate test file for the new store is how t
 drift here breaks the trajectory evals in a way that reads as a gate regression.
 
 **Files:**
+
 - Create: `grace/cases/dynamo_store.py`, `grace/store_factory.py`
 - Test: `tests/test_dynamo_store.py`, `tests/test_store_factory.py`
 
 **Interfaces:**
+
 - Consumes: `grace.cases.store.CaseStore` (a `@runtime_checkable` Protocol),
   `grace.cases.models.{Case, LedgerEntry, LedgerDetailValue}`,
   `grace.cases.store.load_fixture_cases`, `infra.naming`
@@ -1084,16 +1091,19 @@ git commit -m "feat: DynamoDB ledger behind the existing CaseStore protocol"
 ```
 
 ---
+
 ## Task 3: Conditional telemetry setup
 
 Small, and it must land before the entrypoint imports it. The whole content of this task is knowing
 when *not* to act.
 
 **Files:**
+
 - Create: `grace/observability.py`
 - Test: `tests/test_observability.py`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks
 - Produces: `grace.observability.setup_telemetry() -> None`,
   `grace.observability.REDACTION_TOKEN: str`,
@@ -1291,11 +1301,13 @@ The one genuinely new piece of logic, and where Plan 1's findings either hold or
 Read §5 of the spec before starting.
 
 **Files:**
+
 - Create: `grace/entrypoint.py`
 - Modify: `grace/run.py` — promote four private helpers to public names (see Step 1)
 - Test: `tests/test_entrypoint.py`
 
 **Interfaces:**
+
 - Consumes: `grace.store_factory.build_store`, `grace.graph.build_case_graph`,
   `grace.observability.setup_telemetry`, `grace.tools.action.TranscriptChannel`,
   `grace.cases.dynamo_store.DynamoDBCaseStore.write_escalation`,
@@ -1776,6 +1788,7 @@ git commit -m "feat: Runtime entrypoint that escalates without ever resuming"
 ```
 
 ---
+
 ## Task 5: AgentCore Memory, attached where it is legal to attach it
 
 A recert cycle is annual. "Income verified via pay stubs last cycle" and "prefers Arabic, evenings"
@@ -1783,11 +1796,13 @@ must survive the eleven months between contacts. Read §3.1–3.3 of the spec fi
 original assumptions about Memory were wrong.
 
 **Files:**
+
 - Create: `grace/memory.py`, `infra/provision_memory.py`
 - Modify: `pyproject.toml` — add `bedrock-agentcore`
 - Test: `tests/test_memory.py`
 
 **Interfaces:**
+
 - Consumes: `infra.naming.{MEMORY, REGION, TAGS}`
 - Produces:
   - `grace.memory.RETRIEVAL_NAMESPACES: dict[str, RetrievalConfig]`
@@ -1809,6 +1824,13 @@ original assumptions about Memory were wrong.
 3. **Hard rule 2 constrains where it may attach at all.** Agents inside a Graph or Swarm must not
    have their own `session_manager` — Python raises `ValueError`. So Memory attaches to the
    orchestrator only.
+4. **`namespaces` is a legacy parameter; use `namespaceTemplates`.** Verified against the live API
+   model: `CreateMemory`'s strategy shape documents `namespaces` as *"a legacy parameter, use
+   `namespaceTemplates`"*. Both fields exist and both accept the same list, which is exactly why this
+   is dangerous — writing the legacy field succeeds, and CLAUDE.md already warns that a retrieval
+   namespace not matching what was set at creation **retrieves nothing, silently**. There is no error
+   to notice. Step 9's agreement check therefore reads *both* spellings and asserts the result is
+   non-empty, so it cannot pass vacuously because the service echoed the other field.
 
 **Verified signatures** (introspected against the real package, with `strands` present — do not
 re-derive these from docs):
@@ -2090,13 +2112,21 @@ def provision(client=None) -> str:
                 {
                     "semanticMemoryStrategy": {
                         "name": "household-facts",
-                        "namespaces": ["/facts/{actorId}"],
+                        # `namespaceTemplates`, NOT `namespaces`. Verified against
+                        # the live API model: `namespaces` is documented as "a
+                        # legacy parameter, use namespaceTemplates". CLAUDE.md
+                        # already warns the retrieval namespace must match what is
+                        # set at creation, and a mismatch retrieves nothing
+                        # silently — so writing the legacy field while
+                        # `grace/memory.py` retrieves against the template form is
+                        # exactly the invisible failure to avoid.
+                        "namespaceTemplates": ["/facts/{actorId}"],
                     }
                 },
                 {
                     "userPreferenceMemoryStrategy": {
                         "name": "household-preferences",
-                        "namespaces": ["/preferences/{actorId}"],
+                        "namespaceTemplates": ["/preferences/{actorId}"],
                     }
                 },
             ],
@@ -2135,10 +2165,19 @@ from infra import naming, provision_memory
 mid = provision_memory.provision()
 c = boto3.client('bedrock-agentcore-control', region_name=naming.REGION)
 m = c.get_memory(memoryId=mid)['memory']
-created = {n for s in m.get('strategies', []) for n in s.get('namespaces', [])}
+# Read BOTH fields: \`namespaces\` is the legacy spelling and \`namespaceTemplates\`
+# is current, and which one a strategy echoes back is a property of the API, not
+# of what was sent. Unioning them means this check cannot pass vacuously against
+# an empty set just because the service answered in the other spelling.
+created = {
+    n for s in m.get('strategies', [])
+    for key in ('namespaceTemplates', 'namespaces')
+    for n in (s.get(key) or [])
+}
 declared = set(RETRIEVAL_NAMESPACES)
 print('created :', sorted(created))
 print('declared:', sorted(declared))
+assert created, 'no namespaces came back at all — the check would be vacuous'
 assert created == declared, 'namespace mismatch retrieves nothing, silently'
 print('OK: namespaces agree')
 "
@@ -2160,13 +2199,16 @@ git commit -m "feat: per-household AgentCore Memory on the orchestrator only"
 ```
 
 ---
+
 ## Task 6: IAM — four roles, each narrow, one explicit Deny
 
 **Files:**
+
 - Create: `infra/provision_iam.py`
 - Test: `tests/test_infra_iam.py`
 
 **Interfaces:**
+
 - Consumes: `infra.naming`
 - Produces: `infra.provision_iam.provision(client=None, account_id: str | None = None) -> dict[str, str]`
   mapping role purpose → role ARN, keys `runtime`, `lambda`, `stepfunctions`, `eventbridge`;
@@ -2557,37 +2599,84 @@ git commit -m "feat: four scoped IAM roles and an explicit deny on the unverifie
 ```
 
 ---
+
 ## Task 7: Deploy to AgentCore Runtime
 
-The highest-risk task in this plan: it is the first one whose failure mode is an AWS error message
-rather than a failing test. Task 0's preflight must be green before starting — a stopped Docker
-daemon fails this task at the container build, several minutes in.
+The highest-risk task in this plan: the first whose failure mode is an AWS error rather than a
+failing test. Task 0's preflight must be green first.
+
+**The AgentCore contract was verified empirically before this task was written** — by scaffolding a
+throwaway template agent with `agentcore create --framework Strands --build Container` and reading
+what it generated. Everything below reflects that reference implementation, not documentation.
 
 **Files:**
-- Create: `Dockerfile`, `.dockerignore`, `runtime_app.py` (repo root — the container's entrypoint)
-- Modify: `docs/runbook-deploy.md` — append the observed, working deploy sequence
+
+- Create: `Dockerfile`, `.dockerignore`, `runtime_app.py` (repo root)
+- Modify: `docs/runbook-deploy.md` — append the working deploy sequence
 - Test: `tests/test_runtime_app.py`
 
 **Interfaces:**
-- Consumes: `grace.entrypoint.invoke`
-- Produces: a `READY` runtime named `grace`, its ARN recorded in the runbook, and
-  `runtime_app.handler(payload: dict, context: object | None = None) -> dict`
 
-### Why `runtime_app.py` sits at the repo root
+- Consumes: `grace.entrypoint.process_case`, `grace.observability.{REDACTION_TOKEN, redaction_is_configured}`
+- Produces: a `READY` runtime, its ARN in the runbook, and `runtime_app.invoke(payload, context) -> dict`
 
-AgentCore Runtime invokes a module-level handler in the container's working directory. Keeping it
-outside `grace/` means the package stays importable and testable without any Runtime-specific shim,
-and the model-id guard that walks `grace/` with `pkgutil` is unaffected by deployment plumbing.
+### The verified Runtime contract
+
+Five facts, each confirmed against the generated reference agent. Do not substitute assumptions.
+
+1. **The entrypoint is `BedrockAgentCoreApp`, not a bare handler function.**
+
+   ```python
+   from bedrock_agentcore.runtime import BedrockAgentCoreApp
+   app = BedrockAgentCoreApp()
+
+   @app.entrypoint
+   def invoke(payload, context): ...
+
+   if __name__ == "__main__":
+       app.run()
+   ```
+
+   It is a Starlette app; `run(port=8080, host=None)`. Its own docstring says *"Invocation payloads
+   are passed to the registered function unchanged. Applications should validate input before
+   forwarding it to an agent framework"* — which is exactly what `process_case` already does.
+
+   The template's entrypoint is `async` and yields streaming events because it is a chat agent.
+   **Grace's is a plain `def` returning a dict**, because a sweep is a batch job with one answer.
+   Both are supported; a sync function returning a dict is the simpler correct form here.
+
+2. **Port 8080 for HTTP mode**, per the Runtime service contract (8000 MCP, 9000 A2A). `EXPOSE` it.
+
+3. **`bedrock-agentcore` provides the runtime app** — the same dependency Task 5 already added for
+   Memory. No new dependency for this task.
+
+4. **The container is built in CodeBuild on ARM64, not locally.** So Podman is needed only for the
+   local smoke test in Step 6, not for the deploy itself. A `Dockerfile` must exist in the agent's
+   `codeLocation`.
+
+5. **`agentcore deploy` deploys through CDK**, and CDK is already bootstrapped in this account
+   (Task 0). `--dry-run` and `--diff` exist and are worth using first.
+
+### Two template defaults Grace deliberately does not copy
+
+- **`aws-opentelemetry-distro`** is in the template's dependencies. CLAUDE.md forbids it: it is for
+  agents hosted *outside* AgentCore Runtime, and Runtime instruments itself. Grace's
+  `grace/observability.py` already handles this correctly by gating on
+  `AGENT_OBSERVABILITY_ENABLED`. Do not add the package, and do not use the template's
+  `CMD ["opentelemetry-instrument", ...]`.
+- **`runtimeVersion: PYTHON_3_14`** is what `agentcore add agent` records by default. Grace targets
+  **3.12**; the Dockerfile pins it, and since the image is what actually runs, the manifest field
+  does not override the base image. Note it and move on.
 
 - [ ] **Step 1: Write the failing handler test**
 
 Create `tests/test_runtime_app.py`:
 
 ```python
-"""The container's handler. Thin on purpose.
+"""The container's entrypoint. Thin on purpose.
 
-All the logic is in `grace.entrypoint`; this asserts the wiring and the two
-environment invariants that must hold in the deployed process.
+All logic lives in `grace.entrypoint`; this asserts the wiring and the one
+environment invariant that must hold in the deployed process.
 """
 
 from __future__ import annotations
@@ -2595,45 +2684,59 @@ from __future__ import annotations
 import runtime_app
 
 
-def test_the_handler_delegates_to_the_entrypoint(monkeypatch):
+def test_the_entrypoint_delegates_to_process_case(monkeypatch):
     seen = {}
 
-    def fake_invoke(payload):
+    def fake_process_case(payload):
         seen.update(payload)
-        return {"status": "acted", "case_id": payload["case_id"]}
+        return {"status": "acted", "case_id": payload["case_id"], "filed": True}
 
-    monkeypatch.setattr(runtime_app, "invoke", fake_invoke)
-    out = runtime_app.handler({"case_id": "c-001", "today": "2026-10-01"})
+    monkeypatch.setattr(runtime_app, "process_case", fake_process_case)
+    out = runtime_app.invoke({"case_id": "c-001", "today": "2026-10-01"}, None)
     assert out["status"] == "acted"
     assert seen["case_id"] == "c-001"
 
 
-def test_the_handler_never_raises_out_of_the_container(monkeypatch):
+def test_the_entrypoint_never_raises_out_of_the_container(monkeypatch):
     """An unhandled exception inside Runtime is an opaque 500 to the caller.
-    Step Functions can act on `{"status": "error"}`; it cannot act on a
-    stack trace it never sees. Fail closed, and stay reportable."""
+    Step Functions can branch on `{"status": "error"}`; it cannot branch on a
+    stack trace it never receives. Fail closed, and stay reportable."""
 
     def boom(payload):
         raise RuntimeError("something deep failed")
 
-    monkeypatch.setattr(runtime_app, "invoke", boom)
-    out = runtime_app.handler({"case_id": "c-001"})
+    monkeypatch.setattr(runtime_app, "process_case", boom)
+    out = runtime_app.invoke({"case_id": "c-001"}, None)
     assert out["status"] == "error"
     assert "something deep failed" in out["detail"]
 
 
-def test_the_redaction_token_is_asserted_at_import_time(monkeypatch):
-    """Hard rule 8, checked where it actually matters — in the deployed
-    process, not in `.env.example`.
+def test_a_non_dict_payload_is_refused_rather_than_forwarded(monkeypatch):
+    """`BedrockAgentCoreApp` passes payloads through **unchanged** — its own
+    docstring says the application must validate before forwarding. A string
+    payload would otherwise reach `.get()` and raise an AttributeError deep in
+    `process_case`."""
+    out = runtime_app.invoke("not a dict", None)
+    assert out["status"] == "error"
 
-    Absence of `gen_ai_unredacted_attributes=` disables span redaction
-    entirely and exports the full household record to CloudWatch. The
-    container therefore refuses to serve rather than leaking: this is one of
-    the few places where failing closed means refusing to start.
-    """
+
+def test_the_app_is_a_bedrock_agentcore_app():
+    """The wiring itself: a plain function that Runtime never calls would look
+    identical to a working agent until the first invocation returns nothing."""
+    from bedrock_agentcore.runtime import BedrockAgentCoreApp
+
+    assert isinstance(runtime_app.app, BedrockAgentCoreApp)
+
+
+def test_the_redaction_guard_rejects_a_missing_token():
+    """Hard rule 8, checked where it matters — in the deployed process, not in
+    `.env.example`. Absence of `gen_ai_unredacted_attributes=` disables span
+    redaction entirely and exports the full household record to CloudWatch."""
     from grace.observability import redaction_is_configured
 
-    assert not redaction_is_configured({"OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"})
+    assert not redaction_is_configured(
+        {"OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental"}
+    )
     assert redaction_is_configured(
         {"OTEL_SEMCONV_STABILITY_OPT_IN":
          "gen_ai_latest_experimental,gen_ai_unredacted_attributes="}
@@ -2648,32 +2751,37 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'runtime_app'`.
 - [ ] **Step 3: Write `runtime_app.py`**
 
 ```python
-"""The container entrypoint for AgentCore Runtime.
+"""AgentCore Runtime entrypoint for Grace.
 
 Deliberately thin: everything of substance is in `grace.entrypoint`, which is
-unit-tested offline. This file exists to adapt a Runtime invocation into a call
-and to guarantee two things about the deployed process.
+unit-tested offline. This module adapts a Runtime invocation into that call and
+guarantees two things about the deployed process.
 
 **It never raises.** An unhandled exception inside Runtime surfaces as an opaque
 500. Step Functions can branch on `{"status": "error"}`; it cannot branch on a
-stack trace it never receives. So the handler catches broadly and returns a
-reportable outcome — fail closed, and stay legible.
+stack trace it never receives.
 
 **It refuses to serve without span redaction.** Hard rule 8: absence of the
 `gen_ai_unredacted_attributes=` token disables redaction entirely and exports
-every prompt and tool result — the full household record — to CloudWatch. This
-is one of the few places where failing closed means refusing to start, because
-the alternative is a silent, continuous PII leak that no test downstream would
-catch.
+every prompt and tool result — the full household record — to CloudWatch. This is
+one of the few places where failing closed means refusing to start, because the
+alternative is a silent, continuous PII leak that nothing downstream would catch.
+
+The entrypoint is a plain `def` returning a dict, not the async generator the
+CLI's template scaffolds. The template streams because it is a chat agent; a
+sweep is a batch job with one answer per case. `BedrockAgentCoreApp` supports
+both, and its docstring is explicit that payloads arrive **unchanged** — so this
+validates the payload shape before forwarding.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 
-from grace.entrypoint import invoke
-from grace.observability import REDACTION_TOKEN, redaction_is_configured
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+
+from grace.entrypoint import process_case
+from grace.observability import REDACTION_TOKEN, redaction_is_configured, setup_telemetry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2687,57 +2795,91 @@ if not redaction_is_configured():
         "to CloudWatch."
     )
 
+app = BedrockAgentCoreApp()
 
-def handler(payload: dict, context: object | None = None) -> dict:
+# No-op on Runtime, which sets AGENT_OBSERVABILITY_ENABLED and owns the tracer
+# provider. Called once at import so a local `python -m runtime_app` still
+# exports traces.
+setup_telemetry()
+
+
+@app.entrypoint
+def invoke(payload, context=None) -> dict:
     """Process one case. Never raises."""
     try:
-        return dict(invoke(payload))
+        if not isinstance(payload, dict):
+            # Payloads arrive unchanged, so validation is this module's job.
+            return {
+                "status": "error",
+                "case_id": "",
+                "detail": f"payload must be a JSON object, got {type(payload).__name__}",
+            }
+        return dict(process_case(payload))
     except Exception as exc:  # noqa: BLE001 — an opaque 500 is unactionable
         logger.exception("unhandled failure processing payload")
         return {
             "status": "error",
-            "case_id": str(payload.get("case_id", "")),
+            "case_id": str(payload.get("case_id", "")) if isinstance(payload, dict) else "",
             "detail": str(exc),
         }
+
+
+if __name__ == "__main__":
+    app.run()
 ```
 
-- [ ] **Step 4: Run the handler tests**
+- [ ] **Step 4: Make the redaction token available to the whole suite**
 
-Run: `OTEL_SEMCONV_STABILITY_OPT_IN='gen_ai_latest_experimental,gen_ai_unredacted_attributes=' .venv/bin/python -m pytest tests/test_runtime_app.py -v`
-Expected: PASS, 3 tests. **The env var is required** — the module refuses to import without it, which
-is the point of Step 3. Add it to `tests/conftest.py` as an autouse fixture so the full suite does not
-need it on the command line:
+`runtime_app` refuses to import without it, so add an autouse session fixture to
+`tests/conftest.py`:
 
 ```python
 @pytest.fixture(autouse=True, scope="session")
 def _span_redaction_configured():
     """`runtime_app` refuses to import without the redaction token (hard rule
-    8). Set it for the suite so importing that module in a test does not need
-    the caller to remember."""
+    8). Set it for the suite so importing that module in a test does not depend
+    on the caller remembering."""
     os.environ.setdefault(
         "OTEL_SEMCONV_STABILITY_OPT_IN",
         "gen_ai_latest_experimental,gen_ai_unredacted_attributes=",
     )
 ```
 
+Add `import os` and `import pytest` to `conftest.py` if absent. **Do not remove or alter any
+existing fixture there.**
+
+Run: `.venv/bin/python -m pytest tests/test_runtime_app.py -v`
+Expected: PASS, 5 tests.
+
 - [ ] **Step 5: Write the `Dockerfile` and `.dockerignore`**
+
+Modelled on the CLI's own reference Dockerfile, minus the two defaults Grace rejects.
 
 `Dockerfile`:
 
 ```dockerfile
-# ARM64: AgentCore Runtime runs arm64, and a silently-built amd64 image fails at
-# deploy with an unhelpful message rather than at build time.
-FROM --platform=linux/arm64 python:3.12-slim
+# From public.ecr.aws, not Docker Hub: the CLI's own template uses the ECR
+# mirror to avoid Docker Hub rate limits in CodeBuild. Python 3.12 to match the
+# local toolchain — `agentcore add agent` records runtimeVersion PYTHON_3_14 by
+# default, but the image is what actually runs.
+FROM public.ecr.aws/docker/library/python:3.12-slim
+
+RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-# uv for installs, matching the local toolchain.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+ENV UV_SYSTEM_PYTHON=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_NO_PROGRESS=1 \
+    PYTHONUNBUFFERED=1
 
 # Dependencies before source, so a code change does not reinstall the world.
 COPY pyproject.toml ./
 RUN uv pip install --system --no-cache .
 
+# `infra/` is required, not optional: grace/cases/dynamo_store.py and
+# grace/memory.py both import infra.naming. Omitting it fails at container
+# start, not at build.
 COPY grace/ ./grace/
 COPY infra/ ./infra/
 COPY fixtures/ ./fixtures/
@@ -2753,8 +2895,16 @@ ENV OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_unredacted_a
 # default `strands-agents` is indistinguishable from any other Strands app.
 ENV OTEL_SERVICE_NAME=grace
 ENV GRACE_STORE=dynamodb
-ENV PYTHONUNBUFFERED=1
 
+RUN useradd -m -u 1000 bedrock_agentcore
+USER bedrock_agentcore
+
+# AgentCore Runtime service contract: 8080 HTTP, 8000 MCP, 9000 A2A.
+EXPOSE 8080
+
+# NOT `opentelemetry-instrument` — that is the CLI template's default and
+# requires aws-opentelemetry-distro, which CLAUDE.md forbids because Runtime
+# instruments itself.
 CMD ["python", "-m", "runtime_app"]
 ```
 
@@ -2769,43 +2919,50 @@ __pycache__/
 docs/
 evals/
 tests/
+agentcore/
 ```
 
-Note `infra/` **is** copied: `grace/cases/dynamo_store.py` and `grace/memory.py` both import
-`infra.naming`. Excluding it would fail at container start, not at build.
-
-- [ ] **Step 6: Build the image locally before involving AWS**
+- [ ] **Step 6: Build and smoke-test locally with Podman**
 
 ```bash
-docker build --platform linux/arm64 -t grace-local-test .
-docker run --rm -e OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_unredacted_attributes= \
-  grace-local-test python -c "import runtime_app; print('handler imports OK')"
+export DOCKER_HOST="$(podman machine inspect \
+  --format '{{.ConnectionInfo.PodmanSocket.Path}}' podman-machine-default)"
+podman build --platform linux/arm64 -t grace-local-test .
+podman run --rm grace-local-test python -c "import runtime_app; print('imports OK')"
 ```
 
-Expected: `handler imports OK`. Then confirm the refusal path actually refuses:
+Expected: `imports OK`. The `ENV` line in the Dockerfile satisfies the redaction guard.
+
+Then confirm the guard actually refuses when the token is absent:
 
 ```bash
-docker run --rm -e OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental \
+podman run --rm -e OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental \
   grace-local-test python -c "import runtime_app" 2>&1 | tail -3
 ```
 
 Expected: a `RuntimeError` naming `gen_ai_unredacted_attributes=`. **A container that starts here is
 a bug** — it means hard rule 8's guard is not wired.
 
-- [ ] **Step 7: Deploy with the `agentcore` CLI**
+- [ ] **Step 7: Register the agent and deploy**
 
-Use the flags you recorded in Task 0 Step 4 — the CLI is 0.28.1 and the appendices were written
-against 0.24.2, so confirm each command against `--help` before running it. The intended sequence:
+Grace is **BYO code**, not a scaffolded template — `--type create` would generate a fresh agent and
+ignore `grace/` entirely. Confirm each flag against `--help` first; these were verified on 0.28.1:
 
 ```bash
-agentcore create grace --region us-east-1
-agentcore add memory --name grace_household_memory   # only if not already provisioned in Task 5
-agentcore deploy --region us-east-1
+agentcore create --project-name grace --no-agent --defaults
+agentcore add agent --name grace --type byo --build Container --language Python \
+  --framework Strands --model-provider Bedrock \
+  --code-location . --entrypoint runtime_app.py --protocol HTTP
+agentcore deploy --diff        # inspect first
+agentcore deploy -y --verbose  # then deploy
 ```
 
-If `agentcore deploy` requires a `pyproject.toml` in the agent folder, one is already at the repo
-root. Record the exact commands that worked in `docs/runbook-deploy.md`, including any flag that
-differed from the above — the next person to deploy reads that file, not this plan.
+`create` writes an `agentcore/` directory containing a TypeScript CDK app and `agentcore.json` (a
+declarative manifest with `managedBy: CDK`). Commit it — it is deployment state, not a build
+artifact. Add `agentcore/cdk/node_modules/` and `agentcore/.env.local` to `.gitignore`.
+
+Record the commands that actually worked in `docs/runbook-deploy.md`, including any flag that
+differed. The next person reads that file, not this plan.
 
 - [ ] **Step 8: Confirm the runtime reached READY**
 
@@ -2814,9 +2971,9 @@ aws bedrock-agentcore-control list-agent-runtimes --region us-east-1 \
   --query 'agentRuntimes[?starts_with(agentRuntimeName, `grace`)]'
 ```
 
-Expected: one entry, `"status": "READY"`. A status of `CREATE_FAILED` means reading the CloudWatch
-log group Runtime created — the failure is almost always a missing file in the image (see Step 5's
-note about `infra/`) or a dependency that does not resolve on arm64.
+Expected: one entry, `"status": "READY"`. On `CREATE_FAILED`, read the CloudWatch log group Runtime
+created; the usual causes are a file missing from the image (see the `infra/` note in Step 5) or a
+dependency that does not resolve on arm64.
 
 - [ ] **Step 9: Invoke the deployed runtime on one case**
 
@@ -2824,13 +2981,12 @@ note about `infra/`) or a dependency that does not resolve on arm64.
 .venv/bin/python -c "
 import boto3, json, uuid
 from infra import naming
+ctl = boto3.client('bedrock-agentcore-control', region_name=naming.REGION)
+arn = next(r['agentRuntimeArn'] for r in ctl.list_agent_runtimes()['agentRuntimes']
+           if r['agentRuntimeName'].startswith('grace'))
 c = boto3.client('bedrock-agentcore', region_name=naming.REGION)
-arn = boto3.client('bedrock-agentcore-control', region_name=naming.REGION) \
-    .list_agent_runtimes()['agentRuntimes']
-arn = next(r['agentRuntimeArn'] for r in arn if r['agentRuntimeName'].startswith('grace'))
-# 33+ characters, per the Runtime constraint.
 session = f'grace-c-010-{uuid.uuid4()}'
-assert len(session) >= 33, len(session)
+assert len(session) >= 33, len(session)   # Runtime requires 33+ characters
 r = c.invoke_agent_runtime(
     agentRuntimeArn=arn, runtimeSessionId=session,
     payload=json.dumps({'case_id': 'c-010', 'today': '2026-10-01'}).encode(),
@@ -2843,8 +2999,8 @@ print('OK: c-010 escalated on the deployed runtime, nothing filed')
 "
 ```
 
-Expected: `status: escalated`. `c-010` is missing `proof_of_residency`, so an `acted` here means the
-gate is not running in the deployed image — stop and investigate before continuing.
+Expected: `status: escalated`. `c-010` is missing `proof_of_residency`, so `acted` here means the gate
+is not running in the deployed image — stop and investigate.
 
 - [ ] **Step 10: Confirm the ledger row landed in DynamoDB**
 
@@ -2855,35 +3011,38 @@ aws dynamodb query --table-name grace-cases --region us-east-1 \
   --query 'Items[].{sk:sk.S,kind:kind.S,trace:d_trace_id.S}' --output table
 ```
 
-Expected: rows with `LEDGER#` sort keys, and at least one `ESCALATION#` row. **The `trace` column
-should show a 32-hex value, not empty** — that is Task 9's correlation working in the deployed
-environment, where a tracer is actually configured (locally it is `None`).
+Expected: `LEDGER#` rows plus at least one `ESCALATION#` row. **The `trace` column should show a
+32-hex value, not empty** — that is Task 9 of Plan 1's correlation working where a tracer is actually
+configured (locally it is `None`).
 
 - [ ] **Step 11: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
-Expected: PASS — **419 tests**. Report the real number.
+Expected: PASS — **421 tests**. Report the real number.
 
 - [ ] **Step 12: Commit**
 
 ```bash
 git add Dockerfile .dockerignore runtime_app.py tests/test_runtime_app.py \
-        tests/conftest.py docs/runbook-deploy.md
+        tests/conftest.py docs/runbook-deploy.md .gitignore agentcore/
 git commit -m "feat: containerize and deploy the harness to AgentCore Runtime"
 ```
 
 ---
+
 ## Task 8: Lambda, Step Functions, EventBridge
 
 The sweep loop moves out of Python. Grace's premise is that it runs unattended in the background, so
 this task is what makes that literally true rather than a description.
 
 **Files:**
+
 - Create: `infra/lambda_src/handler.py`, `infra/provision_lambda.py`,
   `infra/provision_stepfunctions.py`, `infra/provision_eventbridge.py`
 - Test: `tests/test_lambda_handler.py`, `tests/test_state_machine.py`
 
 **Interfaces:**
+
 - Consumes: `infra.naming`, `infra.provision_iam.provision`
 - Produces:
   - `infra.lambda_src.handler.lambda_handler(event: dict, context: object) -> dict`
@@ -3445,13 +3604,16 @@ git commit -m "feat: scheduled Step Functions sweep, one runtime session per hou
 ```
 
 ---
+
 ## Task 9: The alarm that catches the failure metrics cannot see
 
 **Files:**
+
 - Create: `infra/provision_alarm.py`, `infra/provision_all.py`, `infra/teardown.py`
 - Test: `tests/test_infra_alarm.py`
 
 **Interfaces:**
+
 - Consumes: `infra.naming`, every other `provision_*` module
 - Produces: `infra.provision_alarm.provision(...) -> str` (alarm ARN),
   `infra.provision_all.main() -> dict[str, str]`, `infra.teardown.main() -> None`
@@ -3793,10 +3955,12 @@ The last task, and the one the submission is judged on. Nothing new is built; wh
 and described accurately.
 
 **Files:**
+
 - Modify: `README.md`, `CLAUDE.md`, `docs/runbook-deploy.md`
 - Create: `docs/deployed-verification.md`
 
 **Interfaces:**
+
 - Consumes: everything
 - Produces: recorded evidence for the three claims in §7 of the spec
 
