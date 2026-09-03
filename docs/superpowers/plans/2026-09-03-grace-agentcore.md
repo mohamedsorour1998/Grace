@@ -104,7 +104,7 @@ day is the expensive version. This task writes nothing to AWS.
 - Consumes: nothing
 - Produces: a verified-green environment. No code artifacts.
 
-- [ ] **Step 1: Confirm what is already satisfied**
+- [x] **Step 1: Confirm what is already satisfied**
 
 ```bash
 export AWS_PAGER=""
@@ -119,7 +119,7 @@ Expected: an identity in account `<AWS_ACCOUNT_ID>`, and
 one-time account action taking up to ten minutes; it is done. If `Status` is anything other than
 `ACTIVE`, stop and report, because the demo's central query depends on it.
 
-- [ ] **Step 2: Confirm the three Nova profiles**
+- [x] **Step 2: Confirm the three Nova profiles**
 
 ```bash
 for m in global.amazon.nova-2-lite-v1:0 us.amazon.nova-pro-v1:0 us.amazon.nova-micro-v1:0; do
@@ -131,23 +131,33 @@ done
 Expected: `ACTIVE` three times. These are the advocate, verifier, and referee models (hard rule 2 —
 three *different* models). A non-ACTIVE profile means the swarm cannot run and the plan stops.
 
-- [ ] **Step 3: Start the Docker daemon — this is the blocker**
+- [x] **Step 3: Start the container engine — Podman, not Docker**
+
+**This project uses Podman 6.1.0.** Docker's binary is installed but its daemon is not running and
+is not used. Verified working on 2026-09-03:
 
 ```bash
-docker ps
+podman machine start
+export DOCKER_HOST="$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' podman-machine-default)"
+podman ps
+podman info --format '{{.Version.OsArch}}'
 ```
 
-Expected: a table header, not an error. On 2026-09-03 this failed with
-`dial unix /var/run/docker.sock: connect: no such file or directory` — the binary is installed
-(29.7.2) but the daemon is not running.
+Expected: `podman ps` prints a table header, and `podman info` reports **`linux/arm64`**. The VM is
+native arm64, which is what AgentCore Runtime requires — so `--platform linux/arm64` is a no-op
+rather than a slow cross-build under emulation.
 
-**`agentcore deploy` builds a container image and pushes it to ECR, so a stopped daemon is a hard
-stop, not a warning.** Start Docker Desktop and re-run until `docker ps` succeeds. If Docker cannot
-be started in this environment, stop and report: the alternative is a CodeBuild-based deploy path
-that must be verified against CLI 0.28.1 before being relied on, which is a scope change, not a
-workaround.
+**The `DOCKER_HOST` export is required** for any Docker-API client — including the `agentcore` CLI —
+to find Podman. `podman-mac-helper` is not installed, so the conventional
+`/var/run/docker.sock` path does not exist; installing it needs sudo and is deliberately avoided
+because the env var is sufficient and needs no privilege escalation. **Export it in every shell that
+runs a build or a deploy**, including inside any subagent that reaches Task 7.
 
-- [ ] **Step 4: Install the `agentcore` CLI and re-introspect its commands**
+`agentcore deploy` builds a container image and pushes it to ECR, so a stopped machine fails that
+task several minutes in. If `podman machine start` fails, stop and report rather than falling back
+to Docker.
+
+- [x] **Step 4: Install the `agentcore` CLI and re-introspect its commands**
 
 ```bash
 npm install -g @aws/agentcore
@@ -165,7 +175,7 @@ installed.
 Record the actual flags you observe in `docs/runbook-deploy.md`. A later task runs these commands
 for real, and a wrong flag there costs a failed deploy.
 
-- [ ] **Step 5: Confirm no Grace resources exist yet**
+- [x] **Step 5: Confirm no Grace resources exist yet**
 
 ```bash
 aws dynamodb list-tables --region us-east-1 --query 'TableNames[?starts_with(@, `grace`)]'
@@ -178,19 +188,19 @@ in unfiltered output and are unrelated — do not touch them. If a `grace-*` res
 a previous run of this plan got partway; read `infra/` and re-run the provisioning scripts, which are
 idempotent, rather than creating a second copy.
 
-- [ ] **Step 6: Confirm the fast suite is green before changing anything**
+- [x] **Step 6: Confirm the fast suite is green before changing anything**
 
 Run: `.venv/bin/python -m pytest`
 Expected: **360 passed**. This is the baseline every later task is measured against. If it is not
 360, stop — something is wrong before Plan 2 began.
 
-- [ ] **Step 7: Write the preflight section of the runbook**
+- [x] **Step 7: Write the preflight section of the runbook**
 
 Create `docs/runbook-deploy.md` with a `## Preflight` section recording: the four checks above, the
 observed `agentcore` version and its real command flags, and the note that Transaction Search is
 already ACTIVE. This file becomes the deploy sequence; later tasks append to it.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add docs/runbook-deploy.md
