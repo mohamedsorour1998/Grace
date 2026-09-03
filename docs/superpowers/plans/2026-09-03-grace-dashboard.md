@@ -890,6 +890,28 @@ server-side; the browser never sees a credential or a table name.
 
 - [ ] **Step 1: Write the failing test**
 
+**Read `docs/plan3-live-data-findings.md` before you write a single fixture.** The real table was
+measured before this task was written, and five things about it differ from the draft below. Fixtures
+that disagree with reality produce a parser that passes its tests and fails on the live table, which
+is the one failure mode Step 6 exists to catch late and this note exists to prevent early:
+
+1. **Timestamps are `+00:00`, never `Z`** — real values are
+   `2026-09-03T14:17:01.231621+00:00`, i.e. `datetime.isoformat()` with an offset and microseconds.
+   The fixtures below use `Z`. Both parse as dates, but **anything that string-matches or slices a
+   trailing `Z` breaks on every real row.** Prefer at least one fixture in the real shape.
+2. **`d_trace_id` is DynamoDB type `NULL`** on essentially every ledger row — present, not absent,
+   with value `{"NULL": true}`. The only two value types in the whole table are `S` and `NULL`.
+3. **The GSI holds 17 rows for 3 households** (`c-010` 6, `c-012` 6, `c-011` 5). Dedup is not
+   hypothetical.
+4. **Real deadlines are `c-010` → `2026-10-18`, `c-011` → `2026-10-22`, `c-012` → `2026-10-12`.** The
+   ordering fixture below invents `2026-10-05`/`2026-10-12`. Use the real ones: soonest-first is then
+   `c-012`, `c-010`, `c-011`, which is *not* escalation-time order — so the assertion actually
+   distinguishes "sorted by deadline" from "whatever the GSI returned".
+5. **Escalation rows carry `question` as well as `reason`**, and no `program` attribute exists on
+   them at all — so `str(escalation?.program, "—")` in Step 4 always yields the placeholder. Either
+   read the program from somewhere real or drop the field; do not ship a column that is structurally
+   always a dash.
+
 `web/__tests__/cases.test.ts`:
 
 ```ts
@@ -1291,6 +1313,14 @@ export async function readCase(
       if (kind === "renewal_submitted") filed = true;
       ledger.push({ at: str(row.at), kind, detail });
     } else if (sk.startsWith(DECISION)) {
+      // `startsWith(DECISION)` is NOT sufficient on its own — Task 5 writes
+      // Grace's outcome to `DECISION#<ts>#outcome`, which also starts with the
+      // prefix. Counting that row as a decision makes `alreadyDecided` true
+      // from Grace's own write rather than from a human's, so the *first*
+      // caseworker decision would refuse itself as a second one. Distinguish
+      // the two shapes here (an outcome row carries no `decision` attribute) or
+      // give the outcome its own prefix in Task 5. Either way, `readFacts` must
+      // count only rows a human wrote.
       decisions.push({
         decidedAt: str(row.decided_at),
         decidedBy: str(row.decided_by),
@@ -1355,9 +1385,16 @@ console.log("c-011 filed:", d?.summary.filed);
 '
 ```
 
-Expected: exactly **three** queued cases (`c-010`, `c-011`, `c-012`) despite the GSI holding many more
+Expected: exactly **three** queued cases (`c-010`, `c-011`, `c-012`) despite the GSI holding **17**
 rows, and `c-011` showing `filed: false`. **A queue longer than three means the de-duplication is
 wrong** — that is the assertion this step exists for, and the fake cannot make it.
+
+**Also check what the reader hands the pages for `c-012`.** Two pre-fix rows in the live table still
+contain a household surname in `reason`/`question`/`d_question` (see
+`docs/plan3-live-data-findings.md`) — the referee's deliberation prose, from before `read_case`
+stopped returning `display_name`. Newest-wins dedup happens to hide it on the queue, but `readCase`
+returns the whole ledger, so `/case/c-012` would render it. That is a Task 6 rendering concern and a
+Task 8 verification concern; note it here rather than discovering it in the demo.
 
 If `tsx` is unavailable, `npx tsx` will fetch it; otherwise write the snippet to a temporary `.mts`
 file and run it with `node --experimental-strip-types`.
@@ -2143,7 +2180,13 @@ this change adds a field without altering classification. In `process_case`, aft
     caseworker_approved = payload.get("caseworker_approved") is True
 ```
 
-Then, where an escalation reason is assembled, append one clause when the flag is set:
+Then append one clause when the flag is set. **`process_case` has three separate `_escalate` call
+sites, not one** — the gate-reason branch, the "gate is clean but the run did not finish" branch, and
+the "clean case, clean run, but no renewal was filed" branch. A single edit at "where the escalation
+reason is assembled" therefore covers one of three, and the two it misses include the hard-rule-6
+branch. Verify by reading `grace/entrypoint.py` and counting `_escalate(` yourself before editing.
+
+The clause belongs where every path passes through, which is `_escalate` itself:
 
 ```python
         if caseworker_approved:
@@ -2152,6 +2195,12 @@ Then, where an escalation reason is assembled, append one clause when the flag i
                 "the gate still requires a human, so nothing was filed.)"
             )
 ```
+
+If you thread it through `_escalate`, that function's signature gains a keyword-only
+`caseworker_approved: bool = False` and every call site passes it explicitly — an added parameter with
+a default that nobody passes is a clause that never appears. Add a test per call site, and assert the
+clause is absent when the flag is false, or a test that only ever sets it true cannot tell the
+difference between "appended on approval" and "appended always".
 
 **Change nothing else.** Do not pass the flag to `build_case_graph`, `evaluate`, or any tool.
 
@@ -2668,7 +2717,17 @@ export async function recordDecision(
 }
 
 /** Record what Grace did afterwards, on its own row so the decision row itself
- *  is never rewritten — an audit trail that can be edited is not one. */
+ *  is never rewritten — an audit trail that can be edited is not one.
+ *
+ *  **The sort key must not be `DECISION#<ts>#outcome`.** `lib/cases.ts` collects
+ *  decisions with `sk.startsWith("DECISION#")`, so an outcome row under that
+ *  prefix is counted as a second decision and `alreadyDecided` goes true from
+ *  Grace's own write — meaning the first human decision on a case would be
+ *  refused as a duplicate of itself. Use a distinct prefix (`OUTCOME#<ts>`) and
+ *  have `readCase` attach it to the decision it belongs to, or keep the prefix
+ *  and make `readCase` discriminate on the presence of a `decision` attribute.
+ *  Whichever you choose, add a test that a decision followed by its outcome
+ *  leaves `alreadyDecided` true for exactly one human decision. */
 async function writeOutcome(
   dynamo: DynamoDBClient,
   tableName: string,
