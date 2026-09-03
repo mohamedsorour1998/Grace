@@ -233,7 +233,7 @@ string twice.
   - `infra.naming.escalation_sk(at: datetime) -> str` → `"ESCALATION#<iso>"`
   - `infra.provision_dynamodb.provision(client=None) -> str` (returns the table name; idempotent)
 
-- [ ] **Step 1: Write the failing naming test**
+- [x] **Step 1: Write the failing naming test**
 
 Create `tests/test_infra_naming.py`:
 
@@ -328,12 +328,12 @@ def test_the_case_partition_key_is_opaque():
     assert naming.case_pk("c-011") == "CASE#c-011"
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_naming.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'infra'`.
 
-- [ ] **Step 3: Write `infra/naming.py`**
+- [x] **Step 3: Write `infra/naming.py`**
 
 ```python
 """Every Grace resource name and key shape, in one place.
@@ -421,12 +421,12 @@ def escalation_sk(at: datetime) -> str:
 
 Also create an empty `infra/__init__.py`.
 
-- [ ] **Step 4: Run the naming tests**
+- [x] **Step 4: Run the naming tests**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_naming.py -v`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Write `infra/provision_dynamodb.py`**
+- [x] **Step 5: Write `infra/provision_dynamodb.py`**
 
 ```python
 """Create the `grace-cases` table. Idempotent: re-running is the recovery path.
@@ -540,7 +540,7 @@ if __name__ == "__main__":
     print(f"provisioned {provision()}")
 ```
 
-- [ ] **Step 6: Create the table for real and verify it**
+- [x] **Step 6: Create the table for real and verify it**
 
 ```bash
 .venv/bin/python -m infra.provision_dynamodb
@@ -567,12 +567,12 @@ runs: `ENABLED, ENABLED, DISABLED`. The retry-and-verify above is the fix; this 
 independent confirmation, because "the script said it worked" is exactly the evidence that failed
 here.
 
-- [ ] **Step 7: Run the whole suite**
+- [x] **Step 7: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **365 tests** (360 baseline + 5 new). Report the real number.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add infra/__init__.py infra/naming.py infra/provision_dynamodb.py tests/test_infra_naming.py
