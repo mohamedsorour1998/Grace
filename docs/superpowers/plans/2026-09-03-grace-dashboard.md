@@ -240,7 +240,7 @@ logic at once.
     ```
   - npm scripts `dev`, `build`, `lint`, `typecheck`, `test`
 
-- [ ] **Step 1: Create the app with pinned dependencies**
+- [x] **Step 1: Create the app with pinned dependencies**
 
 `web/package.json` — versions are the ones Task 0 observed; pin them exactly rather than using `^`:
 
@@ -259,7 +259,7 @@ logic at once.
   "dependencies": {
     "@aws-sdk/client-bedrock-agentcore": "3.1125.0",
     "@aws-sdk/client-dynamodb": "3.1125.0",
-    "@aws-sdk/util-dynamodb": "3.1125.0",
+    "@aws-sdk/util-dynamodb": "3.996.9",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "jose": "6.2.10",
@@ -277,7 +277,7 @@ logic at once.
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "4.3.3",
-    "typescript": "7.0.2",
+    "typescript": "6.0.3",
     "vitest": "5.0.0"
   }
 }
@@ -293,7 +293,7 @@ Then:
 cd web && npm install --no-audit --no-fund
 ```
 
-- [ ] **Step 2: Configure Next for SSR, not static export**
+- [x] **Step 2: Configure Next for SSR, not static export**
 
 `web/next.config.ts`:
 
@@ -346,12 +346,17 @@ export default nextConfig;
 `noUncheckedIndexedAccess` is deliberate: this app indexes into DynamoDB attribute maps constantly,
 and it forces those accesses to be checked rather than assumed present.
 
-- [ ] **Step 3: Tailwind 4 and the shadcn config**
+- [x] **Step 3: Tailwind 4 and the shadcn config**
 
 `web/postcss.config.mjs`:
 
 ```js
-export default { plugins: { "@tailwindcss/postcss": {} } };
+// Named, not an anonymous object literal: the Next lint config enables
+// `import/no-anonymous-default-export`, which warns on a bare `export default {}`
+// in a `.mjs` config — the config lints itself.
+const config = { plugins: { "@tailwindcss/postcss": {} } };
+
+export default config;
 ```
 
 `web/components.json` — the shape RosettaCloud's working setup uses (`base-nova`, RSC on, lucide):
@@ -389,7 +394,7 @@ export default { plugins: { "@tailwindcss/postcss": {} } };
 body { background-color: var(--color-paper); color: var(--color-ink); }
 ```
 
-- [ ] **Step 4: The shared types, the shell, and a placeholder page**
+- [x] **Step 4: The shared types, the shell, and a placeholder page**
 
 `web/lib/types.ts` — exactly the interfaces listed under **Produces** above. Write them verbatim;
 later tasks import them by name.
@@ -428,7 +433,7 @@ export default function Home() {
 }
 ```
 
-- [ ] **Step 5: A smoke test that can actually fail**
+- [x] **Step 5: A smoke test that can actually fail**
 
 `web/vitest.config.mts`:
 
@@ -436,9 +441,12 @@ export default function Home() {
 import { defineConfig } from "vitest/config";
 import path from "node:path";
 
+// `import.meta.dirname`, not `__dirname`: Vitest 5 warns that `__dirname` in a
+// config file is unsupported by `configLoader: "native"`, which is planned to
+// become Vite's default.
 export default defineConfig({
   test: { environment: "node", include: ["__tests__/**/*.test.ts"] },
-  resolve: { alias: { "@": path.resolve(__dirname, ".") } },
+  resolve: { alias: { "@": path.resolve(import.meta.dirname, ".") } },
 });
 ```
 
@@ -471,7 +479,7 @@ describe("the scaffold", () => {
 });
 ```
 
-- [ ] **Step 6: Prove the whole toolchain is green**
+- [x] **Step 6: Prove the whole toolchain is green**
 
 ```bash
 cd web
@@ -488,16 +496,26 @@ If `eslint` has no config, create `web/eslint.config.mjs`:
 
 ```js
 import next from "eslint-config-next";
-export default [...next(), { ignores: [".next/**", "node_modules/**"] }];
+
+// `...next`, not `...next()`. `eslint-config-next@16.3.4` exports
+// `Linter.Config[]` — an array, per its own `dist/index.d.ts`
+// (`declare const config: Linter.Config[]; export = config`). Spreading a call
+// throws `next is not a function`.
+//
+// Named, not anonymous, for the same `import/no-anonymous-default-export`
+// reason as `postcss.config.mjs`.
+const config = [...next, { ignores: [".next/**", "node_modules/**"] }];
+
+export default config;
 ```
 
-- [ ] **Step 7: Confirm the Python suite is untouched**
+- [x] **Step 7: Confirm the Python suite is untouched**
 
 Run: `.venv/bin/python -m pytest`
 Expected: **622 passed**. Adding `web/` must not affect it. If the count changed, something outside
 `web/` was edited.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add web/ .gitignore

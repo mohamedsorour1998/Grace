@@ -75,6 +75,62 @@ escape hatch.
 
 ---
 
+## Scaffolding `web/` (Task 1)
+
+All four gates pass — `npm run typecheck`, `lint`, `test`, `build`. **`build` is the one that
+matters**, because it is what Amplify runs.
+
+### Two pinned versions had to change
+
+| Package | Plan's pin | Installed | Why |
+|---|---|---|---|
+| `@aws-sdk/util-dynamodb` | 3.1125.0 | **3.996.9** | 3.1125.0 does not exist. This package never entered the `3.1xxx` series at all — its `latest` is 3.996.9 across 568 published versions. Its peer range is `@aws-sdk/client-dynamodb: ^3.1111.0`, which 3.1125.0 satisfies, so the pair is compatible. |
+| `typescript` | 7.0.2 | **6.0.3** | TypeScript 7 is the native Go port, and `typescript-eslint` **refuses to load under it** — an explicit `throw new Error("typescript-eslint does not support TS 7.0.")` guarded by `if (versionMajor >= 7)` in its own `dist/index.js`. `eslint-config-next@16.3.4` depends on `typescript-eslint@^8.46.0`, so `npm run lint` could not run at all. |
+
+**Task 0 validated the `tsconfig.json` options against `tsc@7.0.2` and that finding still holds — it
+was simply the wrong compiler to pin.** `tsc --noEmit` and `next build` both pass identically under
+6.0.3, so nothing was lost by downgrading; what was gained is a working linter. The upstream tracking
+issue for TS >= 7.1 support is `typescript-eslint#10940`. Revisit the pin when that closes; until
+then, TS 7 and `eslint-config-next` cannot both be present.
+
+### Three defects in the plan's own config
+
+1. **`eslint.config.mjs` spread a call, not an array.** The plan's `import next from
+   "eslint-config-next"; export default [...next()]` throws `next is not a function`.
+   `eslint-config-next@16.3.4`'s own `dist/index.d.ts` reads
+   `declare const config: Linter.Config[]; export = config` — it exports the array directly. Fixed to
+   `[...next, ...]`.
+2. **The plan's two `.mjs` configs lint themselves.** `eslint-config-next` enables
+   `import/no-anonymous-default-export`, which warns on both `export default [...]` in
+   `eslint.config.mjs` and `export default { plugins: ... }` in `postcss.config.mjs`. Both now assign
+   to a named `config` first. Lint output is clean, not merely error-free.
+3. **`vitest.config.mts` used `__dirname`.** Vitest 5 / Vite warns on every run that `__dirname` is
+   unsupported by `configLoader: "native"`, which is planned to become the default. Changed to
+   `import.meta.dirname`.
+
+### One file Next rewrote on its own
+
+`next build` **edits `tsconfig.json` in place**: it forces `jsx` from the plan's `"preserve"` to
+`"react-jsx"` (Next 16 uses the React automatic runtime and calls this a mandatory change) and appends
+`.next/dev/types/**/*.ts` to `include`. Next's version is the one committed — reverting it just makes
+the next build rewrite it again.
+
+`*.tsbuildinfo` was added to `.gitignore`: `incremental: true` writes it on every typecheck, and it is
+an absolute-path-keyed cache.
+
+### The smoke test was watched failing
+
+`__tests__/smoke.test.ts` asserts `next.config.ts` does not set `output`. Adding `output: "export"`
+to the config makes it fail with `expected 'export' to be undefined`, confirmed and then reverted. A
+static export has no route handlers and no middleware, so it would silently delete the Cognito gate
+and the decide endpoint — the app would build, serve, and be wrong.
+
+Staged file count after `git add web/`: **14**, so `node_modules/` and `.next/` are correctly ignored.
+(15 before `*.tsbuildinfo` was ignored — `tsconfig.tsbuildinfo` was the fifteenth.)
+Python suite still **622 passed** — `web/` is additive.
+
+---
+
 ## Running locally
 
 Filled in by Task 6.

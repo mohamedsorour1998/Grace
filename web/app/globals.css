@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+/* Grace's palette. Muted and administrative on purpose: this is a work queue a
+   caseworker looks at all day, not a marketing page. The one saturated colour is
+   reserved for "a human must decide", so escalation is the thing the eye finds. */
+@theme {
+  --color-paper: #FAF9F7;
+  --color-ink: #1C1F23;
+  --color-muted: #6B7280;
+  --color-rule: #E5E3DF;
+  --color-acted: #2F6F4E;
+  --color-escalate: #B4530A;
+  --color-error: #9B2C2C;
+}
+
+body { background-color: var(--color-paper); color: var(--color-ink); }

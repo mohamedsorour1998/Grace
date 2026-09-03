@@ -46,3 +46,7 @@ node_modules/
 .next/
 out/
 web/.env.local
+# `incremental: true` in tsconfig.json writes this on every typecheck. It is a
+# cache keyed to absolute paths, so committing it is noise at best and a stale
+# cross-machine cache at worst.
+*.tsbuildinfo
