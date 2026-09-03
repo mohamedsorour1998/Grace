@@ -2266,9 +2266,33 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!login|api/auth|_next/static|_next/image|favicon.ico).*)"],
+  // Anchored on a segment boundary — `login/` and `login$`, not bare `login`.
+  // A negative lookahead on a bare prefix matches a *prefix*, so `/loginx` and
+  // `/api/authorize` both slipped past an earlier version of this matcher
+  // (measured). Neither route exists today, which is what makes it the kind of
+  // bug that ships later: someone adds `/api/authorize` and it is ungated on
+  // arrival. Middleware is not the security boundary here — `verifySession`
+  // still refuses on every page and on the decide route — so this is a redirect
+  // convenience with a latent hole rather than an open door, and it costs one
+  // character per alternative to close.
+  matcher: [
+    "/((?!login$|login/|api/auth$|api/auth/|_next/static/|_next/image/|favicon\\.ico$).*)",
+  ],
 };
 ```
+
+Verify the matcher rather than eyeballing it — the regex is the whole guard:
+
+```bash
+cd web && node -e '
+const m = /^\/((?!login$|login\/|api\/auth$|api\/auth\/|_next\/static\/|_next\/image\/|favicon\.ico$).*)$/;
+for (const p of ["/", "/queue", "/case/c-010", "/api/decide", "/loginx", "/api/authorize",
+                 "/login", "/api/auth/callback", "/_next/static/x.js", "/favicon.ico"])
+  console.log(p.padEnd(22), m.test(p) ? "gated" : "bypassed");'
+```
+
+Expected: everything gated except the last four. `/loginx` and `/api/authorize` **must** read
+`gated`; if either says `bypassed`, the anchors are wrong.
 
 `web/app/login/page.tsx`:
 

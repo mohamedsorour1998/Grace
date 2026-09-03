@@ -1049,6 +1049,15 @@ Invoking `grace_grace-oTyyvo8stE` with `caseworker_approved: true` added returne
 `c-010` **still escalated** on `missing_document` — so the approval flag changes no verdict, and it
 changes nothing on the deployed version 2, which does not know the key yet.
 
+**A Next middleware matcher's negative lookahead matches a *prefix*, not a path segment.** Task 4's
+draft `"/((?!login|api/auth|...).*)"` left `/loginx` and `/api/authorize` **ungated** — measured.
+Neither route exists today, which is exactly what makes it the kind of bug that ships later: someone
+adds `/api/authorize` and it arrives unguarded. Anchor each alternative on a segment boundary
+(`login$|login/`, `api/auth$|api/auth/`, `favicon\.ico$`) and verify the regex with a table of paths
+rather than eyeballing it. This is a *redirect convenience* rather than the security boundary —
+`verifySession` refuses independently on every page and on the decide route, and middleware says so in
+its own docstring — but a guard with a hole in it invites someone to start trusting it.
+
 
 ## The one idea that matters
 

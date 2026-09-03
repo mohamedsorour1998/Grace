@@ -348,3 +348,18 @@ Which is the property that matters twice over: the flag changes nothing about th
 changes nothing about the *deployed* runtime today, because version 2 does not know the key yet. A
 household missing a required document still escalates when a caseworker approves it.
 
+**That probe appended a row, as any invocation does.** Re-derived from the table afterwards:
+
+```text
+rows scanned      : 643            (was 633 before this session's probes)
+renewal_submitted : 9 cases -> c-001 … c-009
+escalation rows   : 18 across 3 households {'c-010': 7, 'c-012': 6, 'c-011': 5}
+9 acted / 3 escalated holds        : True
+no escalating case was ever filed  : True
+```
+
+So the headline claim and hard rule 6 both still hold: `renewal_submitted` exists for exactly
+`c-001`–`c-009`, and for none of the three escalating households. **Task 8 should re-derive these
+numbers rather than quoting them** — the row counts grow with every sweep and every invocation, while
+the two boolean properties are what must never change.
+
