@@ -2323,6 +2323,32 @@ though Identity is deferred in this plan** — it costs one statement now and cl
 exposure. It also rules out the `BedrockAgentCoreFullAccess` managed policy, which the docs warn
 grants that action; do not attach it anywhere.
 
+### The Bedrock ARN shapes are verified — do not "tighten" the wildcard
+
+Checked against the live profiles before this task was written:
+
+```text
+arn:aws:bedrock:us-east-1:<acct>:inference-profile/us.amazon.nova-pro-v1:0
+  fans out to  arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0
+               arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0   <- cross-region
+               arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0
+
+arn:aws:bedrock:us-east-1:<acct>:inference-profile/global.amazon.nova-2-lite-v1:0
+  fans out to  arn:aws:bedrock:::foundation-model/amazon.nova-2-lite-v1:0         <- NO region at all
+               arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0
+```
+
+Two consequences the policy below depends on:
+
+- **Both sides of the indirection need naming.** Granting only the inference-profile ARN is not
+  enough; the call reaches the foundation model behind it.
+- **`arn:aws:bedrock:*::foundation-model/...` is deliberate, not lazy.** A `global.` profile's
+  fan-out has an *empty* region field and a `us.` profile's includes other regions, so pinning
+  `us-east-1` would break both. Verified the wildcard matches the empty, same-region, and
+  cross-region forms. Every ARN still names a specific Nova model, so hard rule 1 holds.
+- `p.split(".", 1)[-1]` is what turns `global.amazon.nova-2-lite-v1:0` into
+  `amazon.nova-2-lite-v1:0` — verified against all three profiles.
+
 - [ ] **Step 1: Write the failing IAM policy test**
 
 Create `tests/test_infra_iam.py`:
