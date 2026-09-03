@@ -20,7 +20,15 @@ credentials
 
 # AgentCore local state
 .bedrock_agentcore.yaml
-agentcore/
+# `agentcore/` itself IS committed — it is deployment state (the CDK app and
+# agentcore.json, which carries the execution role ARN and the redaction token),
+# not a build artifact. Only the generated and secret parts are ignored.
+agentcore/cdk/node_modules/
+agentcore/cdk/cdk.out/
+agentcore/.env.local
+agentcore/.cli/*
+!agentcore/.cli/deployed-state.json
+agentcore/.cache/
 
 # Eval output
 eval/results/

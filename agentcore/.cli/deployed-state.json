@@ -1,0 +1,17 @@
+{
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "grace": {
+            "runtimeId": "grace_grace-oTyyvo8stE",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:339712964409:runtime/grace_grace-oTyyvo8stE",
+            "roleArn": "arn:aws:iam::339712964409:role/grace-runtime-role"
+          }
+        },
+        "stackName": "AgentCore-grace-default",
+        "deployHash": "5be49e3d466af2c1"
+      }
+    }
+  }
+}

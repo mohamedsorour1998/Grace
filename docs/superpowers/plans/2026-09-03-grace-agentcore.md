@@ -3061,7 +3061,7 @@ pass. Recorded so nobody spends time on it.
   **3.12**; the Dockerfile pins it, and since the image is what actually runs, the manifest field
   does not override the base image. Note it and move on.
 
-- [ ] **Step 1: Write the failing handler test**
+- [x] **Step 1: Write the failing handler test**
 
 Create `tests/test_runtime_app.py`:
 
@@ -3136,12 +3136,12 @@ def test_the_redaction_guard_rejects_a_missing_token():
     )
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_runtime_app.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'runtime_app'`.
 
-- [ ] **Step 3: Write `runtime_app.py`**
+- [x] **Step 3: Write `runtime_app.py`**
 
 ```python
 """AgentCore Runtime entrypoint for Grace.
@@ -3221,7 +3221,7 @@ if __name__ == "__main__":
     app.run()
 ```
 
-- [ ] **Step 4: Make the redaction token available to the whole suite**
+- [x] **Step 4: Make the redaction token available to the whole suite**
 
 `runtime_app` refuses to import without it, so add an autouse session fixture to
 `tests/conftest.py`:
@@ -3244,7 +3244,7 @@ existing fixture there.**
 Run: `.venv/bin/python -m pytest tests/test_runtime_app.py -v`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Write the `Dockerfile` and `.dockerignore`**
+- [x] **Step 5: Write the `Dockerfile` and `.dockerignore`**
 
 Modelled on the CLI's own reference Dockerfile, minus the two defaults Grace rejects.
 
@@ -3326,7 +3326,7 @@ tests/
 agentcore/
 ```
 
-- [ ] **Step 6: Build and smoke-test locally with Podman**
+- [x] **Step 6: Build and smoke-test locally with Podman**
 
 ```bash
 export DOCKER_HOST="$(podman machine inspect \
@@ -3347,7 +3347,7 @@ podman run --rm -e OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental \
 Expected: a `RuntimeError` naming `gen_ai_unredacted_attributes=`. **A container that starts here is
 a bug** — it means hard rule 8's guard is not wired.
 
-- [ ] **Step 7: Register the agent and deploy**
+- [x] **Step 7: Register the agent and deploy**
 
 Grace is **BYO code**, not a scaffolded template — `--type create` would generate a fresh agent and
 ignore `grace/` entirely. Confirm each flag against `--help` first; these were verified on 0.28.1:
@@ -3368,7 +3368,7 @@ artifact. Add `agentcore/cdk/node_modules/` and `agentcore/.env.local` to `.giti
 Record the commands that actually worked in `docs/runbook-deploy.md`, including any flag that
 differed. The next person reads that file, not this plan.
 
-- [ ] **Step 8: Confirm the runtime reached READY**
+- [x] **Step 8: Confirm the runtime reached READY**
 
 ```bash
 aws bedrock-agentcore-control list-agent-runtimes --region us-east-1 \
@@ -3379,7 +3379,7 @@ Expected: one entry, `"status": "READY"`. On `CREATE_FAILED`, read the CloudWatc
 created; the usual causes are a file missing from the image (see the `infra/` note in Step 5) or a
 dependency that does not resolve on arm64.
 
-- [ ] **Step 9: Invoke the deployed runtime on one case**
+- [x] **Step 9: Invoke the deployed runtime on one case**
 
 ```bash
 .venv/bin/python -c "
@@ -3406,7 +3406,7 @@ print('OK: c-010 escalated on the deployed runtime, nothing filed')
 Expected: `status: escalated`. `c-010` is missing `proof_of_residency`, so `acted` here means the gate
 is not running in the deployed image — stop and investigate.
 
-- [ ] **Step 10: Confirm the ledger row landed in DynamoDB**
+- [x] **Step 10: Confirm the ledger row landed in DynamoDB**
 
 ```bash
 aws dynamodb query --table-name grace-cases --region us-east-1 \
@@ -3419,12 +3419,12 @@ Expected: `LEDGER#` rows plus at least one `ESCALATION#` row. **The `trace` colu
 32-hex value, not empty** — that is Task 9 of Plan 1's correlation working where a tracer is actually
 configured (locally it is `None`).
 
-- [ ] **Step 11: Run the whole suite**
+- [x] **Step 11: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **421 tests**. Report the real number.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add Dockerfile .dockerignore runtime_app.py tests/test_runtime_app.py \

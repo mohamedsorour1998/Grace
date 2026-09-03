@@ -1,0 +1,38 @@
+# Build context exclusions. Keeping this tight matters for more than speed:
+# `.venv/` is a macOS-arm64 virtualenv that must never shadow the image's own
+# site-packages, and `.env` files carry credentials that have no business in a
+# layer.
+.venv/
+venv/
+.git/
+.gitignore
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Secrets — never in an image layer.
+.env
+.env.*
+*.pem
+*.key
+credentials
+
+# Not needed at runtime. `tests/` and `evals/` would also pull pytest's
+# expectations of a repo layout into the image; `agentcore/` is CDK state.
+docs/
+evals/
+tests/
+agentcore/
+.claude/
+.bedrock_agentcore.yaml
+
+# Local run output.
+offloaded/
+sessions/
+evals/results/
+
+.DS_Store

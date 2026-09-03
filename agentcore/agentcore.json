@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "grace",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "grace"
+  },
+  "runtimes": [
+    {
+      "name": "grace",
+      "build": "Container",
+      "entrypoint": "runtime_app.py",
+      "codeLocation": "./",
+      "dockerfile": "Dockerfile",
+      "runtimeVersion": "PYTHON_3_14",
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP",
+      "executionRoleArn": "arn:aws:iam::339712964409:role/grace-runtime-role",
+      "envVars": [
+        { "name": "GRACE_STORE", "value": "dynamodb" },
+        { "name": "OTEL_SERVICE_NAME", "value": "grace" },
+        {
+          "name": "OTEL_SEMCONV_STABILITY_OPT_IN",
+          "value": "gen_ai_latest_experimental,gen_ai_unredacted_attributes="
+        }
+      ]
+    }
+  ],
+  "memories": [],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "payments": []
+}
