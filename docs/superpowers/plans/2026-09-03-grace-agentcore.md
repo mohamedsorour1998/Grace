@@ -4305,19 +4305,53 @@ from infra import (
 
 
 def _runtime_arn() -> str:
+    """The deployed Grace runtime's ARN.
+
+    **`list_agent_runtimes` paginates, and reading one page is a real bug here.**
+    Measured on this account: page 1 holds 10 runtimes, Grace is not among them,
+    and a `nextToken` is present — so a single-page lookup raises "no Grace
+    runtime found" against a runtime that is `READY`. Same class as the
+    single-page `ListMemories` and `ledger()` defects.
+
+    Matching is anchored on the full name rather than a prefix. `naming.RUNTIME`
+    is `"grace"` and the deployed runtime is `grace_grace`, so a bare
+    `startswith` would also match a future `grace_anything_else` — the same
+    prefix-collision the memory lookup had to fix, in an account that really does
+    hold `name`/`name_v2` pairs.
+
+    A non-READY runtime raises rather than being returned: provisioning the sweep
+    around a runtime that cannot serve would produce a state machine that fails
+    every case.
+    """
     client = boto3.client("bedrock-agentcore-control", region_name=naming.REGION)
-    for runtime in client.list_agent_runtimes().get("agentRuntimes", []):
-        if runtime["agentRuntimeName"].startswith(naming.RUNTIME):
-            if runtime.get("status") != "READY":
-                raise RuntimeError(
-                    f"runtime {runtime['agentRuntimeName']} is "
-                    f"{runtime.get('status')}, not READY — deploy it first "
-                    "with `agentcore deploy`"
-                )
-            return str(runtime["agentRuntimeArn"])
-    raise RuntimeError(
-        "no Grace runtime found. Run `agentcore deploy` (Task 7) before this."
-    )
+    matches = []
+    for page in client.get_paginator("list_agent_runtimes").paginate():
+        for runtime in page.get("agentRuntimes", []):
+            name = str(runtime["agentRuntimeName"])
+            # `agentcore` names the runtime `<project>_<agent>`; both are "grace".
+            if name.split("_")[0] == naming.RUNTIME:
+                matches.append(runtime)
+
+    if not matches:
+        raise RuntimeError(
+            "no Grace runtime found. Run `agentcore deploy` (Task 7) before this."
+        )
+    ready = [r for r in matches if r.get("status") == "READY"]
+    if not ready:
+        raise RuntimeError(
+            "found "
+            + ", ".join(f"{r['agentRuntimeName']} ({r.get('status')})" for r in matches)
+            + " but none is READY — deploy it first with `agentcore deploy`"
+        )
+    if len(ready) > 1:
+        # Ambiguity must not be resolved by pagination order: picking the wrong
+        # runtime would point the whole sweep at the wrong agent.
+        raise RuntimeError(
+            "several READY Grace runtimes: "
+            + ", ".join(r["agentRuntimeName"] for r in ready)
+            + " — delete the extras or pin one explicitly"
+        )
+    return str(ready[0]["agentRuntimeArn"])
 
 
 def main() -> dict[str, str]:
