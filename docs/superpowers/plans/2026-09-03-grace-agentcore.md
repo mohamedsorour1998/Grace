@@ -4232,7 +4232,30 @@ def provision(logs_client=None, cw_client=None) -> str:
     logs_client.put_metric_filter(
         logGroupName=_LOG_GROUP,
         filterName="grace-escalated-cases",
-        filterPattern='{ $.status = "escalated" }',
+        # **Verified against real log events with `logs:test_metric_filter`, which
+        # is ingestion-independent** — `filter_log_events` returns 0 for *every*
+        # pattern, including the empty one, for several minutes after a run, so it
+        # cannot be used to check a pattern promptly.
+        #
+        # Measured match counts on one 12-case sweep:
+        #   { $.status = "escalated" }                        0  <- the draft
+        #   { $.details.output = "*escalated*" }             14
+        #   the pattern below                                 3  correct
+        #
+        # Two things the draft got wrong. There is **no top-level `status`
+        # field**: a Step Functions log event's keys are `type`, `details`,
+        # `execution_arn`, `id`, `previous_event_id`, `redrive_count`,
+        # `event_timestamp`, and the outcome payload sits at `$.details.output` as
+        # an **embedded JSON string**, not a nested object. And without the
+        # `$.type` anchor the same outcome is counted six times — once per event
+        # type the case passes through (`ChoiceStateExited`, `PassStateExited`,
+        # `TaskStateExited`, `TaskSucceeded`, `MapStateExited`,
+        # `ExecutionSucceeded`) — which against `Threshold: 3` would make the
+        # alarm permanently quiet and therefore useless.
+        filterPattern=(
+            '{ $.type = "TaskStateExited" && '
+            '$.details.output = "*\\"status\\":\\"escalated\\"*" }'
+        ),
         metricTransformations=[{
             "metricName": _METRIC,
             "metricNamespace": _NAMESPACE,
