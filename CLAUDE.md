@@ -28,16 +28,19 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 556 unit
+**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 578 unit
 tests passing (`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against
 real Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
 `testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs end to end and reports
 **9 acted / 3 escalated**, and the evals prove the gate ordering holds against five real graph
 invocations.
 
-**Grace is deployed and serving on AgentCore Runtime** (`grace_grace-oTyyvo8stE`, READY): a real
-invocation of `c-010` escalated in 9.1s and wrote 12 rows to the `grace-cases` DynamoDB table —
-paired tool calls, a `family_message_sent`, and a pending escalation row.
+**Grace is deployed and the full sweep runs on AWS.** EventBridge → Step Functions (Map,
+`maxConcurrency` 3) → Lambda → Runtime `grace_grace-oTyyvo8stE`. A real execution **SUCCEEDED in 61s
+reporting 9 acted / 3 escalated**, verified from DynamoDB rather than from a log line:
+`renewal_submitted` appears for exactly `c-001`–`c-009` and for none of `c-010`/`c-011`/`c-012`, and
+the `escalation-queue` GSI holds exactly those three households with their typed gate reasons. Hard
+rule 6 holds on deployed infrastructure.
 
 Every ledger row carries a `trace_id` **key**, but its value is `NULL` in the deployed runtime:
 Runtime injects the OTEL environment variables without installing an in-process tracer provider, so
@@ -61,8 +64,8 @@ with written reasons — say three AgentCore surfaces, never five. Plan 2 task s
 | 5 — AgentCore Memory | **done** — `grace/memory.py`, `infra/provision_memory.py`, 544 tests. Memory `grace_household_memory-TCf1SS708O` ACTIVE, 365-day expiry |
 | 6 — IAM roles | **done** (out of order — no code deps) — `infra/provision_iam.py`, 489 tests. `explicitDeny` on the unverified token path verified live. **The runtime role would have denied every Nova call — see below** |
 | 7 — deploy to Runtime | **done** — `Dockerfile`, `runtime_app.py`, `agentcore/`, 556 tests. **Runtime `grace_grace-oTyyvo8stE` is READY and serving**; `c-010` escalated in 9.1s with real DynamoDB rows |
-| 8 — Lambda/Step Functions/EventBridge | next |
-| 9 — escalation alarm + provisioning | pending |
+| 8 — Lambda/Step Functions/EventBridge | **done** — `infra/{lambda_src,provision_lambda,provision_stepfunctions,provision_eventbridge}.py`, 578 tests. **The deployed sweep reports 9 acted / 3 escalated** |
+| 9 — escalation alarm + provisioning | next |
 | 10 — deployed verification + README | pending |
 
 Plan 1 task state, for reference:
@@ -790,6 +793,38 @@ only if `/.dockerenv` exists *or* `DOCKER_CONTAINER` is set, else `127.0.0.1`. P
 `/.dockerenv`, so without it the server binds loopback inside the container, `/ping` returns nothing,
 and the container still reports healthy. The CLI's own template sets this variable — treat it as the
 explicit portable signal and `/.dockerenv` as a Docker-only fallback.
+
+
+**`invoke_agent_runtime` is not idempotent, and boto3's default client retries it five times.**
+Measured with a black-hole socket (accepts, never replies, so the accept count *is* the number of HTTP
+attempts): default config **5**, `{"mode": "standard", "max_attempts": 1}` still **2**, and only
+`{"total_max_attempts": 1}` gives **1**. `ReadTimeoutError` maps to `GENERAL_CONNECTION_ERROR`, so a
+slow runtime looks like a dropped connection — and each retry re-runs the whole graph against the same
+case, which could file one renewal five times. Reachable, not theoretical: the default `read_timeout`
+is 60s and Plan 1 measured a real run at 512s. `infra/lambda_src/handler.py` sets
+`total_max_attempts=1` and `read_timeout=870`, so the **Lambda's** 900s deadline binds first — that
+ordering matters, because a Lambda timeout trips Step Functions' `Catch` while a returned error does
+not.
+
+**Step Functions' `Catch` cannot see a *returned* `{"status": "error"}`.** Grace's entrypoint and
+Lambda handler never raise, so a politely-reported failure looked to Step Functions like a successful
+task. The two failure paths were exactly inverted: a killed Lambda got an escalation row, a handled
+failure got none — the family who disappeared was the one whose failure was handled *better*. Fixed
+with a `CheckOutcome` Choice state routing `status == "error"` to `RecordEscalation`. **When a
+component reports failure in its payload rather than by raising, the orchestrator needs an explicit
+branch — error handling that only catches exceptions catches the wrong half.**
+
+**A CloudWatch metric filter on Step Functions logs needs `$.type` anchoring and cannot read a
+top-level field that does not exist.** Measured against a real sweep's events:
+`{ $.status = "escalated" }` matches **0** (there is no top-level `status`; the outcome payload is an
+embedded JSON *string* at `$.details.output`), the unanchored
+`{ $.details.output = "*escalated*" }` matches **14** (the same outcome counted once per event type
+the case passes through), and only
+`{ $.type = "TaskStateExited" && $.details.output = "*\"status\":\"escalated\"*" }` matches **3**.
+Against a `Threshold: 3` the unanchored version would keep the alarm permanently quiet — the exact
+failure an escalation-count alarm exists to avoid. Check a pattern with `logs:test_metric_filter`
+(caps at 50 messages per call, so batch); **`filter_log_events` returns 0 for every pattern, including
+the empty one, for minutes after a run**, so it cannot be used to validate one promptly.
 
 
 ## The one idea that matters
