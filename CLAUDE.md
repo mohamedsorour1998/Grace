@@ -47,11 +47,10 @@ with written reasons — say three AgentCore surfaces, never five. Plan 2 task s
 | 0 — preflight | **done** — Podman not Docker, CLI 0.28.1, CDK already bootstrapped, Transaction Search already ACTIVE |
 | 1 — naming + `grace-cases` table | **done** — `infra/{naming,provision_dynamodb}.py`, 367 tests. **Two real defects in the plan's draft; read "What Plan 2 established" below** |
 | 2 — `DynamoDBCaseStore` + store factory | **done** — `grace/cases/dynamo_store.py`, `grace/store_factory.py`, 428 tests. **Six defects in the plan's draft, three of them vacuous tests** |
-| 3 — observability | next |
-| 3 — observability | pending |
-| 4 — Runtime entrypoint | pending |
+| 3 — observability | **done** — `grace/observability.py`, 438 tests at the time. **Found a hard-rule-8 hole: "token present" is not "content redacted"** |
+| 4 — Runtime entrypoint | next |
 | 5 — AgentCore Memory | pending |
-| 6 — IAM roles | pending |
+| 6 — IAM roles | **done** (out of order — no code deps) — `infra/provision_iam.py`, 489 tests. `explicitDeny` on the unverified token path verified live. **The runtime role would have denied every Nova call — see below** |
 | 7 — deploy to Runtime | pending |
 | 8 — Lambda/Step Functions/EventBridge | pending |
 | 9 — escalation alarm + provisioning | pending |
@@ -669,6 +668,50 @@ look like it covers the boundary.
 `tests/test_dynamo_store.py` records the store types a run actually exercised and asserts the set.
 Verified by sabotage: making the fixture return the in-memory store for both parameters leaves 41
 tests passing and fails only that guard.
+
+**A test that asserts by *raising* inside code that catches `Exception` asserts nothing.**
+`AssertionError` is an `Exception`. The Task 3 draft test proved the Runtime guard existed by
+monkeypatching `StrandsTelemetry` to raise — but `setup_telemetry` wraps construction in
+`except Exception`, so the raise was swallowed and logged, and the test passed with the guard
+deleted. Verified both ways. Record the attempt in a sentinel list and assert the list is empty
+instead; no `except` can undo an append.
+
+**`StrandsTelemetry.__init__` sets the global tracer provider unconditionally** —
+`_initialize_tracer()` calls `trace_api.set_tracer_provider` (`telemetry/config.py:114`). So
+*constructing* it is the damage; there is no later call to intercept. A second construction logs
+"Overriding of current TracerProvider is not allowed", leaves the first provider global, and orphans
+the second with a console exporter attached to nothing. `setup_telemetry` therefore latches on a
+module-level flag — set even on failure, so a broken exporter is not retried on every invocation
+(Task 4 calls it per case).
+
+**`strands` invokes Bedrock through `converse`/`converse_stream`, not `InvokeModel`.**
+`strands/models/bedrock.py:1397` chooses between them. A runtime policy granting only
+`bedrock:InvokeModel` leaves every Nova call `implicitDeny` — verified with the IAM simulator against
+the real role — and the symptom is an AccessDenied on the first model call of the first deployed
+sweep, long after every test has passed. Grant all four actions, still scoped to the three Nova
+profiles.
+
+**A Container-build runtime needs ECR pull, or it cannot start.** `ecr:GetAuthorizationToken` is
+account-level and must be `Resource: "*"`; the layer-pull actions can be scoped to the account's
+registry. Runtime also creates its own log group under `/aws/bedrock-agentcore/`, so the role needs
+`CreateLogGroup` on that path. **`theagentorg-shared-agentcore-runtime-role` in this account is a
+known-working reference** for what Runtime actually requires — check it before inventing
+permissions, and add only what is missing.
+
+**IAM policy shape is checkable without deploying: use `simulate-principal-policy`.** It distinguishes
+`explicitDeny` from `implicitDeny`, which is exactly the difference between "this action is blocked
+forever" and "this action is simply not granted yet". Grace's runtime role returns `explicitDeny` for
+`GetWorkloadAccessTokenForUserId` and `implicitDeny` for the safe JWT path — so Appendix D.1 is
+enforced and AgentCore Identity can still be added later without fighting the statement. The
+simulator reflects the identity policy only: it says nothing about resource policies, SCPs, or
+whether a real `Converse` call succeeds.
+
+**`aws:SourceAccount` in a Lambda trust policy is undocumented, and a condition on an unpopulated key
+would make a role permanently unassumable.** Probed with a throwaway role rather than assumed: a
+wrong account value was refused with "The role defined for the function cannot be assumed by
+Lambda", and the identical call succeeded once corrected — so Lambda does populate the key and the
+condition is genuinely evaluated. Both halves of that probe mattered; success alone would not
+distinguish "satisfied" from "ignored".
 
 
 ## The one idea that matters
