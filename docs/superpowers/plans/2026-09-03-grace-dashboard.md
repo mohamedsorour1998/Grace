@@ -560,14 +560,43 @@ implicitly. Everything it needs arrives as an argument, which is what makes it e
   ): Authorisation;
   ```
 
-- [ ] **Step 1: Write the failing test, exhaustively**
+**The signature's types are what a caller promises, not what `authorize` may assume.** Task 5's
+route builds `attempt` from `await request.json()` with a bare `body.decision as "approve"` cast,
+so `decision` and `note` arrive as whatever a client posted. `DecisionAttempt` says `note: string`
+and `authorize` still checks `typeof attempt.note !== "string"` — an assertion in the type system
+is erased at runtime, which is exactly the boundary a `as` cast crosses. Likewise `expiresAt:
+number` admits `Infinity`. Both are checked; see the notes in the corrected draft below.
+
+- [x] **Step 1: Write the failing test, exhaustively**
 
 `web/__tests__/authorize.test.ts`:
+
+> **Corrected after implementation.** The draft below is the shipped file. Four defects were
+> found in the original draft and are fixed here, each with a comment in place so it is not
+> reintroduced:
+> 1. The draft's allowlist loop contained `${bad!r}` — Python `repr` syntax inside a JS template
+>    literal. The whole file failed to parse (`[PARSE_ERROR] Expected `}` but found `Identifier``),
+>    so **zero** of its fourteen tests ran. Use `JSON.stringify(bad)`, which also shows the
+>    trailing space in `"approve "`.
+> 2. Every refusal-code assertion sat inside `if (!r.permitted) expect(r.code)...`, whose body does
+>    not run on a permit — so the code check silently vanished on exactly the outcome it guards.
+>    Measured: with `authorize` rewritten to always refuse, three tests still passed, including
+>    `carries the opaque sub, never a name`, whose entire body is inside `if (r.permitted)`.
+>    `refusalOf`/`permitOf` narrow by throwing, so every assertion is unconditional.
+> 3. The purity guard checked five literal spellings and left three holes, all three measured
+>    passing against it: `from "fs"` (it forbade only `node:fs`), `new Date().getTime()` (only
+>    `Date.now()`), and `globalThis.fetch` (only `fetch(`). It now enumerates the imports that are
+>    actually present and requires each to be type-only and relative — a positive check, not a
+>    denylist of spellings someone remembered.
+> 4. Two reachable inputs bypassed their own guard: a non-finite `expiresAt` (`exp: 1e400` in a JWT
+>    parses to `Infinity`, `jose` verifies such a token, and `Infinity <= nowMs` is `false`, so the
+>    session never expires) and a non-string `note` (`.length` is `undefined`, and
+>    `undefined > 2000` is `false`, so the cap passes silently; `null` throws instead).
 
 ```ts
 import { describe, expect, it } from "vitest";
 import { authorize, CASEWORKER_ROLE, MAX_NOTE_LENGTH } from "@/lib/authorize";
-import type { CaseFacts, DecisionAttempt } from "@/lib/authorize";
+import type { Authorisation, CaseFacts, DecisionAttempt, Permit, Refusal } from "@/lib/authorize";
 import type { SessionIdentity } from "@/lib/types";
 
 const NOW = 1_788_400_000_000;
@@ -585,53 +614,79 @@ const escalated = (over: Partial<CaseFacts> = {}): CaseFacts => ({
 });
 const approve: DecisionAttempt = { decision: "approve", note: "Wage record is stale." };
 
+// The plan's draft asserted refusal codes inside `if (!r.permitted) { ... }`.
+// That body does not run on a permit, so the code assertion silently vanishes
+// on exactly the outcome it was written to catch. These two helpers narrow by
+// *throwing*, so every assertion below is unconditional — the Task 8 vacuity
+// lesson applied to a TypeScript discriminated union.
+function refusalOf(r: Authorisation): Refusal {
+  if (r.permitted) throw new Error(`expected a refusal, got a permit: ${JSON.stringify(r)}`);
+  return r;
+}
+function permitOf(r: Authorisation): Permit {
+  if (!r.permitted) throw new Error(`expected a permit, got ${r.code}: ${r.message}`);
+  return r;
+}
+
 describe("authorize — refusals", () => {
   it("refuses with no session at all", () => {
-    const r = authorize(null, escalated(), approve, NOW);
-    expect(r.permitted).toBe(false);
-    if (!r.permitted) expect(r.code).toBe("no_session");
+    expect(refusalOf(authorize(null, escalated(), approve, NOW)).code).toBe("no_session");
   });
 
-  it("refuses an expired session, even one second past", () => {
-    // Boundary, not a round number: an `>=` written as `>` passes a
+  it("refuses an expired session, even one millisecond past", () => {
+    // Boundary, not a round number: `<=` written as `<` honours a
     // just-expired session, and that is the direction that fails open.
-    const r = authorize(session({ expiresAt: NOW }), escalated(), approve, NOW);
-    expect(r.permitted).toBe(false);
-    if (!r.permitted) expect(r.code).toBe("session_expired");
+    expect(refusalOf(authorize(session({ expiresAt: NOW }), escalated(), approve, NOW)).code)
+      .toBe("session_expired");
+    expect(refusalOf(authorize(session({ expiresAt: NOW - 1 }), escalated(), approve, NOW)).code)
+      .toBe("session_expired");
   });
 
-  it("accepts a session expiring one millisecond from now", () => {
-    const r = authorize(session({ expiresAt: NOW + 1 }), escalated(), approve, NOW);
-    expect(r.permitted).toBe(true);
+  it("refuses an expiry that is not a finite number of milliseconds", () => {
+    // Reachable, not defensive padding: `exp: 1e400` in a JWT payload parses to
+    // `Infinity`, `jose` verifies such a token happily (measured), and Task 4's
+    // `typeof payload.exp !== "number"` check passes it through — `Infinity` is
+    // a number. `Infinity <= nowMs` is `false`, so without this guard the
+    // session never expires. Plan 2's NaN finding in the other direction: a
+    // non-finite number reads back as a number and behaves like nothing.
+    for (const bad of [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NaN]) {
+      expect(refusalOf(authorize(session({ expiresAt: bad }), escalated(), approve, NOW)).code)
+        .toBe("session_expired");
+    }
+    // The same must hold for a clock that arrives unusable.
+    expect(refusalOf(authorize(session(), escalated(), approve, Number.NaN)).code)
+      .toBe("session_expired");
   });
 
   it("refuses a session without the caseworker role", () => {
-    const r = authorize(session({ role: "viewer" }), escalated(), approve, NOW);
-    expect(r.permitted).toBe(false);
-    if (!r.permitted) expect(r.code).toBe("wrong_role");
+    // Exact match, so near-misses refuse too. `"Caseworker"` and `"caseworker "`
+    // are not this role — the same allowlist polarity as the decision word.
+    for (const role of ["viewer", "Caseworker", "CASEWORKER", "caseworker ", ""]) {
+      expect(refusalOf(authorize(session({ role }), escalated(), approve, NOW)).code)
+        .toBe("wrong_role");
+    }
   });
 
   it("refuses a case that does not exist", () => {
     // `null` facts collapse "no such case" and "unreadable case" into one
     // answer on purpose — see the note in lib/cases.ts.
-    const r = authorize(session(), null, approve, NOW);
-    expect(r.permitted).toBe(false);
-    if (!r.permitted) expect(r.code).toBe("unknown_case");
+    expect(refusalOf(authorize(session(), null, approve, NOW)).code).toBe("unknown_case");
   });
 
   it("refuses a case Grace handled itself", () => {
     // Deciding an `acted` case would let a human retroactively "approve"
     // something already filed, which the audit trail would then imply they
-    // authorised.
-    const r = authorize(session(), escalated({ status: "acted" }), approve, NOW);
-    expect(r.permitted).toBe(false);
-    if (!r.permitted) expect(r.code).toBe("not_escalated");
+    // authorised. `error` is not decidable either: a case whose sweep failed has
+    // no measured verdict to approve.
+    for (const status of ["acted", "error"] as const) {
+      expect(refusalOf(authorize(session(), escalated({ status }), approve, NOW)).code)
+        .toBe("not_escalated");
+    }
   });
 
   it("refuses a second decision on the same case", () => {
-    const r = authorize(session(), escalated({ alreadyDecided: true }), approve, NOW);
-    expect(r.permitted).toBe(false);
-    if (!r.permitted) expect(r.code).toBe("already_decided");
+    expect(refusalOf(authorize(session(), escalated({ alreadyDecided: true }), approve, NOW)).code)
+      .toBe("already_decided");
   });
 
   it("refuses any decision word that is not exactly approve or deny", () => {
@@ -639,47 +694,95 @@ describe("authorize — refusals", () => {
     // UNRECOGNISED answer the dangerous one: "Escalate.", "no, hold this one",
     // and "needs review" all resumed a graph and filed a renewal for a
     // household missing a document. Anything unrecognised must refuse.
-    for (const bad of ["Approve", "APPROVE", "approve ", "yes", "file",
-                       "proceed", "needs review", "no, hold this one", "", "escalate"]) {
-      const r = authorize(session(), escalated(),
-        { decision: bad as "approve", note: "x" }, NOW);
-      expect(r.permitted, `${bad!r} must refuse`).toBe(false);
-      if (!r.permitted) expect(r.code).toBe("unknown_decision");
+    const words = ["Approve", "APPROVE", "approve ", " approve", "approved", "yes", "file",
+      "proceed", "needs review", "no, hold this one", "", "escalate", "Escalate.", "deny "];
+    let checked = 0;
+    for (const bad of words) {
+      const r = authorize(session(), escalated(), { decision: bad as "approve", note: "x" }, NOW);
+      expect(refusalOf(r).code, `${JSON.stringify(bad)} must refuse`).toBe("unknown_decision");
+      checked += 1;
     }
+    // A loop that never ran would assert nothing while reporting a pass.
+    expect(checked).toBe(words.length);
   });
 
   it("refuses a note longer than the cap", () => {
-    const r = authorize(session(), escalated(),
-      { decision: "deny", note: "x".repeat(MAX_NOTE_LENGTH + 1) }, NOW);
-    expect(r.permitted).toBe(false);
-    if (!r.permitted) expect(r.code).toBe("note_too_long");
+    expect(refusalOf(authorize(session(), escalated(),
+      { decision: "deny", note: "x".repeat(MAX_NOTE_LENGTH + 1) }, NOW)).code)
+      .toBe("note_too_long");
+    // The boundary itself is allowed; an off-by-one here refuses a legitimate note.
+    expect(permitOf(authorize(session(), escalated(),
+      { decision: "deny", note: "x".repeat(MAX_NOTE_LENGTH) }, NOW)).note.length)
+      .toBe(MAX_NOTE_LENGTH);
+  });
+
+  it("refuses a note that is not a string", () => {
+    // `.length` on a non-string is `undefined`, and `undefined > MAX_NOTE_LENGTH`
+    // is `false` — so the cap passes silently and a non-string reaches the
+    // decision row. `null` is worse: `.length` throws, and an exception out of
+    // the pure gate is a 500 rather than a refusal. Refuse the type; coercing
+    // would invent a note nobody wrote.
+    for (const bad of [null, undefined, 42, {}, [], { length: 99999 }]) {
+      expect(refusalOf(authorize(session(), escalated(),
+        { decision: "deny", note: bad as unknown as string }, NOW)).code)
+        .toBe("note_too_long");
+    }
+  });
+
+  it("orders its checks so a refusal never leaks whether a case exists", () => {
+    // An unauthenticated or wrong-role caller must not learn the difference
+    // between a case that exists and one that does not. Session checks come
+    // first, so both inputs give the same answer.
+    expect(refusalOf(authorize(null, escalated(), approve, NOW)).code)
+      .toBe(refusalOf(authorize(null, null, approve, NOW)).code);
+    expect(refusalOf(authorize(session({ role: "viewer" }), escalated(), approve, NOW)).code)
+      .toBe(refusalOf(authorize(session({ role: "viewer" }), null, approve, NOW)).code);
   });
 });
 
 describe("authorize — permits", () => {
   it("permits an approve from a valid caseworker on an escalated case", () => {
-    const r = authorize(session(), escalated(), approve, NOW);
-    expect(r.permitted).toBe(true);
-    if (r.permitted) {
-      expect(r.decision).toBe("approve");
-      expect(r.decidedBy).toBe(session().sub);
-      expect(r.note).toBe("Wage record is stale.");
-    }
+    const p = permitOf(authorize(session(), escalated(), approve, NOW));
+    expect(p.decision).toBe("approve");
+    expect(p.decidedBy).toBe(session().sub);
+    expect(p.note).toBe("Wage record is stale.");
+  });
+
+  it("permits a session expiring one millisecond from now", () => {
+    expect(permitOf(authorize(session({ expiresAt: NOW + 1 }), escalated(), approve, NOW)).decision)
+      .toBe("approve");
   });
 
   it("permits a deny just as readily", () => {
-    const r = authorize(session(), escalated(), { decision: "deny", note: "" }, NOW);
-    expect(r.permitted).toBe(true);
+    expect(permitOf(authorize(session(), escalated(), { decision: "deny", note: "" }, NOW)).decision)
+      .toBe("deny");
   });
 
   it("carries the opaque sub, never a name", () => {
     // Hard rule 9's reasoning applied to the caseworker: the JWT `sub` is
     // logged to CloudTrail, which is outside every redaction Grace has.
-    const r = authorize(session(), escalated(), approve, NOW);
-    if (r.permitted) {
-      expect(r.decidedBy).toMatch(/^[0-9a-f-]{36}$/);
-      expect(r.decidedBy).not.toMatch(/@/);
-    }
+    const p = permitOf(authorize(session(), escalated(), approve, NOW));
+    expect(p.decidedBy).toMatch(/^[0-9a-f-]{36}$/);
+    expect(p.decidedBy).not.toMatch(/@/);
+  });
+
+  it("carries nothing beyond the four fields a decision row needs", () => {
+    // A permit is what `recordDecision` writes from. If `caseId`, a name, or a
+    // whole session object rode along, hard rule 9's surface would widen without
+    // anyone choosing to widen it.
+    const p = permitOf(authorize(session(), escalated(), approve, NOW));
+    expect(Object.keys(p).sort()).toEqual(["decidedBy", "decision", "note", "permitted"]);
+  });
+
+  it("permits without filing anything — a permit is not a filing", () => {
+    // Stated as a test because it is the property most easily misread. Approving
+    // `c-010`, a household missing a required document, is permitted here; the
+    // authority gate re-evaluates the case record afterwards and still refuses
+    // to file. This function authorises writing a decision row and re-invoking
+    // the runtime, nothing more, which is why its result carries no verdict.
+    const p = permitOf(authorize(session(), escalated({ caseId: "c-010" }), approve, NOW));
+    expect(Object.keys(p)).not.toContain("filed");
+    expect(Object.keys(p)).not.toContain("caseId");
   });
 });
 
@@ -693,25 +796,61 @@ describe("authorize — purity", () => {
     expect(a).toEqual(b);
   });
 
-  it("imports nothing that performs I/O", async () => {
+  it("imports nothing that performs I/O, and reads no clock", async () => {
     // Structural, so the purity survives a future edit. `authority.py` is
     // guarded the same way with a pkgutil walk; this is the TypeScript
     // equivalent, and it is why every refusal above needs no AWS.
-    const src = await import("node:fs").then(fs =>
-      fs.readFileSync(new URL("../lib/authorize.ts", import.meta.url), "utf8"));
-    for (const forbidden of ["@aws-sdk", "fetch(", "node:fs", "Date.now()", "process.env"]) {
-      expect(src, `authorize.ts must not reference ${forbidden}`).not.toContain(forbidden);
+    //
+    // The plan's draft checked five literal spellings, which left three holes —
+    // all three measured passing against it: `from "fs"` (it only forbade
+    // `node:fs`), `new Date().getTime()` (it only forbade `Date.now()`), and
+    // `globalThis.fetch` (it only forbade `fetch(`). A denylist of spellings
+    // someone remembered is the same mistake Task 4's model-ID guard fixed by
+    // discovering modules from disk. So: enumerate the imports that ARE there
+    // and require every one to be type-only and relative.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../lib/authorize.ts", import.meta.url), "utf8");
+
+    const imports = [...src.matchAll(/^\s*import\s+([^;]+?)\s+from\s+["']([^"']+)["']/gm)]
+      .map(m => ({ clause: m[1] ?? "", specifier: m[2] ?? "" }));
+    expect(imports.length, "authorize.ts should import something, or this guard is vacuous")
+      .toBeGreaterThan(0);
+    for (const { clause, specifier } of imports) {
+      // Type-only: erased at compile time, so it cannot execute I/O even if the
+      // module it names would.
+      expect(clause, `${specifier} must be imported as \`import type\``).toMatch(/^type\b/);
+      // Relative: a bare specifier is a package, and no package in this
+      // dependency tree is I/O-free.
+      expect(specifier, `${specifier} must be a relative sibling`).toMatch(/^\.\.?\//);
+    }
+
+    // Anything that reaches outside the arguments, whatever its spelling.
+    const forbidden: [RegExp, string][] = [
+      [/@aws-sdk/, "an AWS SDK client"],
+      [/\bfetch\b/, "fetch"],
+      [/\brequire\s*\(/, "require()"],
+      [/\bimport\s*\(/, "a dynamic import"],
+      [/\bprocess\b/, "process"],
+      [/\bDate\b/, "a clock read (Date)"],
+      [/\bperformance\s*\./, "a clock read (performance)"],
+      [/\bMath\.random\b/, "randomness"],
+      [/\bglobalThis\b/, "globalThis"],
+    ];
+    for (const [pattern, what] of forbidden) {
+      expect(pattern.test(src), `authorize.ts must not reference ${what}`).toBe(false);
     }
   });
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd web && npm run test`
-Expected: FAIL — `Cannot find module '@/lib/authorize'`.
+Expected: FAIL — `Cannot find package '@/lib/authorize'` (Vitest 5's wording; the draft said
+"Cannot find module"). Watch for the *right* failure: the draft's own parse error also fails,
+and a parse error is not a red step — it means none of the tests ran at all.
 
-- [ ] **Step 3: Write `web/lib/authorize.ts`**
+- [x] **Step 3: Write `web/lib/authorize.ts`**
 
 ```ts
 /**
@@ -719,10 +858,9 @@ Expected: FAIL — `Cannot find module '@/lib/authorize'`.
  *
  * This is the dashboard's `grace/authority.py`: it maps a session, a case's
  * facts, and an attempted decision onto `Permit` or `Refusal`, and it touches
- * nothing. No AWS client, no `fetch`, no `Date.now()` — the current time
- * arrives as an argument. `lib/cases.ts` measures the facts; this file decides
- * over them, and `__tests__/authorize.test.ts` proves the import graph stays
- * clean.
+ * nothing. No AWS client, no HTTP, no clock read — the current time arrives as
+ * an argument. `lib/cases.ts` measures the facts; this file decides over them,
+ * and `__tests__/authorize.test.ts` proves the import graph stays clean.
  *
  * Two properties worth stating outright, both inherited from Plan 1:
  *
@@ -801,6 +939,14 @@ export function authorize(
   if (session === null) {
     return refuse("no_session", "Sign in to decide a case.");
   }
+  // Refuse anything that is not a finite number of milliseconds. `expiresAt`
+  // arrives from a decoded JWT claim, and `NaN <= nowMs` is `false` — so a
+  // malformed expiry would slip past the comparison below and be treated as a
+  // session that never expires. Same reasoning as Plan 2's NaN finding: a NaN
+  // reads back as a number and behaves like nothing.
+  if (!Number.isFinite(session.expiresAt) || !Number.isFinite(nowMs)) {
+    return refuse("session_expired", "Your session expired. Sign in again.");
+  }
   // `<=` and not `<`: a session expiring exactly now is expired. Written the
   // other way, a just-expired session is honoured, which is the fail-open
   // direction.
@@ -828,6 +974,14 @@ export function authorize(
   if (!DECISIONS.has(attempt.decision)) {
     return refuse("unknown_decision", "Choose approve or deny.");
   }
+  // A route handler builds `attempt` from a JSON body, so `note` can arrive as
+  // anything a client sends. `.length` on a non-string is `undefined`, and
+  // `undefined > MAX_NOTE_LENGTH` is `false` — the cap would pass silently and
+  // an object would reach the decision row. Refuse the type, do not coerce it:
+  // coercion invents a note nobody wrote.
+  if (typeof attempt.note !== "string") {
+    return refuse("note_too_long", `Keep the note under ${MAX_NOTE_LENGTH} characters.`);
+  }
   if (attempt.note.length > MAX_NOTE_LENGTH) {
     return refuse("note_too_long", `Keep the note under ${MAX_NOTE_LENGTH} characters.`);
   }
@@ -840,23 +994,39 @@ export function authorize(
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cd web && npm run test && npm run typecheck`
-Expected: PASS, 14 tests.
+Expected: PASS, **19** `authorize.test.ts` tests (21 including Task 1's two smoke tests). The
+draft said 14 — that was the count before the vacuity and reachability fixes above added five.
 
-- [ ] **Step 5: Prove the allowlist test is not vacuous**
+- [x] **Step 5: Prove the allowlist test is not vacuous**
 
 Temporarily replace the `DECISIONS.has(...)` check with a denylist —
 `if (attempt.decision === "escalate") { ... }` — and re-run. The
-`refuses any decision word that is not exactly approve or deny` test **must fail**, naming one of
-`"yes"`, `"file"`, `"proceed"`, or `"needs review"`. Those are the exact strings Plan 1 measured
-filing a renewal. Restore the allowlist and confirm green again.
+`refuses any decision word that is not exactly approve or deny` test **must fail**.
+
+**It names `"Approve"`, not one of the four strings the draft predicted.** The loop asserts in
+order and Vitest stops the test at the first failed assertion, so the string reported is simply
+the first in the array — capitalisation, not one of Plan 1's measured words. The draft's
+prediction of `"yes"`/`"file"`/`"proceed"`/`"needs review"` would have looked like a failed
+sabotage to anyone checking the output against it, when in fact the guard fired correctly. What
+matters is that all of them get through the denylist; the test proves that by asserting each,
+which is why the loop ends with `expect(checked).toBe(words.length)`.
+
+Measured output:
+
+```text
+AssertionError: "Approve" must refuse: expected true to be false // Object.is equality
+❯ __tests__/authorize.test.ts:79:65
+```
+
+Restore the allowlist and confirm green again.
 
 Record in your report that you did this and what failed. A guard nobody has watched fail is a guard
 nobody has tested.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/lib/authorize.ts web/__tests__/authorize.test.ts
@@ -904,9 +1074,10 @@ is the one failure mode Step 6 exists to catch late and this note exists to prev
 3. **The GSI holds 17 rows for 3 households** (`c-010` 6, `c-012` 6, `c-011` 5). Dedup is not
    hypothetical.
 4. **Real deadlines are `c-010` → `2026-10-18`, `c-011` → `2026-10-22`, `c-012` → `2026-10-12`.** The
-   ordering fixture below invents `2026-10-05`/`2026-10-12`. Use the real ones: soonest-first is then
-   `c-012`, `c-010`, `c-011`, which is *not* escalation-time order — so the assertion actually
-   distinguishes "sorted by deadline" from "whatever the GSI returned".
+   fixtures below now use these (the draft invented `2026-10-05`), and the ordering test carries a
+   third row so that deadline order, escalation-time order, and GSI order all differ — which is what
+   makes it distinguish "sorted by deadline" from "whatever the GSI returned". Soonest-first is
+   `c-012`, `c-010`, `c-011`.
 5. **Escalation rows carry `question` as well as `reason`**, and no `program` attribute exists on
    them at all — so `str(escalation?.program, "—")` in Step 4 always yields the placeholder. Either
    read the program from somewhere real or drop the field; do not ship a column that is structurally
@@ -978,17 +1149,26 @@ describe("listQueue", () => {
   });
 
   it("orders by soonest deadline, because that is the caseworker's urgency", async () => {
+    // Real deadlines, and one row in the real `+00:00` shape rather than `Z`.
+    // Escalation time here is c-012 first, deadline order is c-012 first too —
+    // so a third row (c-010, escalated earliest, deadline in between) is what
+    // makes the two orderings disagree and the assertion meaningful.
     const rows = [
-      { pk: S("CASE#c-012"), sk: S("ESCALATION#2026-09-03T00:00:00Z"), case_id: S("c-012"),
-        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T00:00:00Z"),
+      { pk: S("CASE#c-010"), sk: S("ESCALATION#2026-09-03T04:20:03.568119+00:00"), case_id: S("c-010"),
+        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T04:20:03.568119+00:00"),
+        reason: S("missing_document"), deadline: S("2026-10-18") },
+      { pk: S("CASE#c-011"), sk: S("ESCALATION#2026-09-03T05:00:01Z"), case_id: S("c-011"),
+        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T05:00:01Z"),
+        reason: S("material_income_change"), deadline: S("2026-10-22") },
+      { pk: S("CASE#c-012"), sk: S("ESCALATION#2026-09-03T06:00:00Z"), case_id: S("c-012"),
+        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T06:00:00Z"),
         reason: S("source_conflict"), deadline: S("2026-10-12") },
-      { pk: S("CASE#c-011"), sk: S("ESCALATION#2026-09-03T00:00:01Z"), case_id: S("c-011"),
-        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T00:00:01Z"),
-        reason: S("material_income_change"), deadline: S("2026-10-05") },
     ];
     const fake = new FakeDynamo([{ Items: rows }]);
     const queue = await listQueue(fake as never);
-    expect(queue.map(c => c.caseId)).toEqual(["c-011", "c-012"]);
+    // Deadline order, not GSI order and not escalation-time order — all three
+    // differ on this input, which is the point.
+    expect(queue.map(c => c.caseId)).toEqual(["c-012", "c-010", "c-011"]);
   });
 
   it("collapses repeat escalations of one household to a single row", async () => {
@@ -1074,7 +1254,7 @@ describe("readFacts", () => {
     const fake = new FakeDynamo([{ Items: [
       { pk: S("CASE#c-011"), sk: S("ESCALATION#2026-09-03T00:00:00Z"), case_id: S("c-011"),
         status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T00:00:00Z"),
-        reason: S("material_income_change"), deadline: S("2026-10-05") },
+        reason: S("material_income_change"), deadline: S("2026-10-22") },
     ] }]);
     const facts = await readFacts("c-011", fake as never);
     expect(facts).toEqual({ caseId: "c-011", status: "escalated", alreadyDecided: false });
@@ -1084,7 +1264,7 @@ describe("readFacts", () => {
     const fake = new FakeDynamo([{ Items: [
       { pk: S("CASE#c-011"), sk: S("ESCALATION#2026-09-03T00:00:00Z"), case_id: S("c-011"),
         status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T00:00:00Z"),
-        reason: S("r"), deadline: S("2026-10-05") },
+        reason: S("r"), deadline: S("2026-10-22") },
       { pk: S("CASE#c-011"), sk: S("DECISION#2026-09-03T01:00:00Z"), case_id: S("c-011"),
         decided_by: S("7f3a91"), decided_at: S("2026-09-03T01:00:00Z"),
         decision: S("approve"), note: S("ok") },
@@ -1955,11 +2135,20 @@ type KeyResolver = Parameters<typeof jwtVerify>[1];
 
 let cachedKeys: KeyResolver | undefined;
 function keys(): KeyResolver {
-  // Tests inject a key set so no test reaches the network. In production this
-  // is Cognito's published JWKS, cached by `jose` between calls.
-  const injected = process.env.COGNITO_TEST_JWKS;
+  // Tests inject a key set so no test reaches the network. The `NODE_ENV`
+  // guard is the load-bearing part: without it, setting COGNITO_TEST_JWKS on
+  // the deployed app replaces Cognito's real key set with an attacker-supplied
+  // one, and every forged token verifies. An env var that swaps out the trust
+  // anchor must never be readable in production. Verified: vitest sets
+  // NODE_ENV="test" (and VITEST="true"); `next build`/`next start` set
+  // "production".
+  const injected =
+    process.env.NODE_ENV === "test" ? process.env.COGNITO_TEST_JWKS : undefined;
   if (injected) {
     const parsed = JSON.parse(injected) as { keys: Record<string, unknown>[] };
+    // `createLocalJWKSet(parsed)` is the supported equivalent and was verified
+    // to refuse a wrong key, alg:"none", and HS256 confusion identically; a
+    // resolver is used here only to keep the shape parallel to the remote one.
     return (async (header: { kid?: string }) => {
       const { importJWK } = await import("jose");
       const jwk = parsed.keys.find(k => k.kid === header.kid) ?? parsed.keys[0];
@@ -2003,7 +2192,13 @@ export async function verifySession(
 
   const sub = payload.sub;
   if (typeof sub !== "string" || sub === "") return null;
-  if (typeof payload.exp !== "number") return null;
+  // `Number.isFinite`, not `typeof === "number"`: `exp: 1e400` in a JWT payload
+  // parses to `Infinity`, which IS a number, and `jose` verifies such a token —
+  // both measured during Task 2. `Infinity` then becomes an `expiresAt` that no
+  // `<=` comparison can ever call expired. `authorize` refuses a non-finite
+  // expiry independently (defence in depth, since this file is not its only
+  // caller), but the token should not get this far.
+  if (!Number.isFinite(payload.exp)) return null;
 
   // Only these three. Email and name are dropped on purpose.
   return { sub, role: CASEWORKER_ROLE, expiresAt: payload.exp * 1000 };
@@ -2124,13 +2319,43 @@ cd web && npm run test && npm run typecheck && npm run build
 cd .. && .venv/bin/python -m pytest
 ```
 
-Expected: the 12 `cognito.test.ts` assertions pass, the build succeeds, and Python is **622 passed**.
+Expected: the 13 `cognito.test.ts` assertions pass, the build succeeds, and Python is **622 passed**.
+
+Add this thirteenth test, which pins the guard that makes the injection mechanism safe:
+
+```ts
+it("ignores an injected key set outside a test environment", async () => {
+  // COGNITO_TEST_JWKS swaps out the trust anchor. If production code reads it,
+  // setting it on the deployed app makes every forged token verify. Proving the
+  // guard means proving the *same* token stops verifying when NODE_ENV changes.
+  const token = await sign({ sub: "s", "custom:role": CASEWORKER_ROLE });
+  expect(await verifySession(token, NOW)).not.toBeNull();
+
+  const original = process.env.NODE_ENV;
+  try {
+    // A network fetch to the fake issuer cannot succeed, so the only way this
+    // returns a session is by reading the injected keys it must now ignore.
+    Object.defineProperty(process.env, "NODE_ENV", { value: "production", configurable: true });
+    vi.resetModules();
+    const { verifySession: prod } = await import("@/lib/cognito");
+    expect(await prod(token, NOW)).toBeNull();
+  } finally {
+    Object.defineProperty(process.env, "NODE_ENV", { value: original, configurable: true });
+    vi.resetModules();
+  }
+});
+```
+
+`vi.resetModules()` matters both times: `cachedKeys` is module-level, so a stale remote resolver
+cached under one `NODE_ENV` would answer for the other. Import `vi` from `vitest`.
 
 - [ ] **Step 9: Prove the verifier's refusals are real**
 
 Delete the `payload.token_use !== "id"` check and re-run: the access-token test **must fail**. Then
 loosen the role comparison to `String(role).toLowerCase().trim() === CASEWORKER_ROLE` and re-run: the
-close-but-not-exact test **must fail** on `"Caseworker"`. Restore both.
+close-but-not-exact test **must fail** on `"Caseworker"`. Then drop the `NODE_ENV === "test"` guard
+back to a bare `process.env.COGNITO_TEST_JWKS` and re-run: the injected-key-set test **must fail**.
+Restore all three.
 
 Report what failed. A verifier whose refusals have never been watched to fail is a decoder.
 
@@ -2921,12 +3146,23 @@ shadcn docs; they are small, and `cn` is `twMerge(clsx(...))`.
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { formatCaseRow, statusTone, escapeNote } from "@/components/case-table";
+import { formatCaseRow, statusTone, noteIsInert } from "@/components/case-table";
 import type { CaseSummary } from "@/lib/types";
+
+// Every fixture surname, so the guard cannot pass by naming the wrong three.
+// The plan's draft listed Mensah/Rivera/Okonkwo — and the two households most
+// likely to carry a name in a reason are c-010 and c-011, Fitzgerald and
+// Yamamoto, neither of which was in it. Keep this in sync with
+// fixtures/households.yaml; Task 8 re-derives it from the file.
+const FIXTURE_NAMES = [
+  "Rivera", "Okonkwo", "Nguyen", "Haddad", "Delacroix", "Torres",
+  "Abebe", "Silva", "Kowalski", "Fitzgerald", "Yamamoto", "Mensah",
+];
+const IDENTITY = new RegExp(`${FIXTURE_NAMES.join("|")}|\\+1555|Household`, "i");
 
 const escalated: CaseSummary = {
   caseId: "c-011", status: "escalated", program: "medicaid",
-  deadline: "2026-10-05", reason: "material_income_change: Income moved 30.0%", filed: false,
+  deadline: "2026-10-22", reason: "material_income_change: Income moved 30.0%", filed: false,
 };
 
 describe("the case row", () => {
@@ -2934,7 +3170,16 @@ describe("the case row", () => {
     // Hard rule 9. The row is the one place a name would look natural to add.
     const row = formatCaseRow(escalated);
     expect(row.title).toBe("c-011");
-    expect(JSON.stringify(row)).not.toMatch(/Mensah|Rivera|Okonkwo|\+1555/);
+    expect(JSON.stringify(row)).not.toMatch(IDENTITY);
+  });
+
+  it("passes a name through only if one is in the input, and there is nowhere for one to be", () => {
+    // Proves the guard above can fail rather than being true of every input:
+    // feeding a name in via `reason` — the exact path that put one into
+    // CloudWatch — must be caught. `CaseSummary` has no name field, so `reason`
+    // is the only carrier, which is why this is the shape the test uses.
+    const leaked: CaseSummary = { ...escalated, reason: "source_conflict: The Yamamoto Household disagrees" };
+    expect(JSON.stringify(formatCaseRow(leaked))).toMatch(IDENTITY);
   });
 
   it("surfaces the gate's typed reason, not a generic label", () => {
@@ -2962,18 +3207,28 @@ describe("the case row", () => {
 });
 
 describe("the caseworker's note", () => {
-  it("escapes markup rather than rendering it", () => {
-    // The note is free text a human typed and DynamoDB stored verbatim. Same
-    // posture authority.py takes for source_conflicts: whoever renders it
-    // escapes it.
-    const escaped = escapeNote('<img src=x onerror="alert(1)">');
-    expect(escaped).not.toContain("<img");
-    expect(escaped).toContain("&lt;img");
+  it("renders markup as text rather than as an element", async () => {
+    // The note is free text a human typed and DynamoDB stored verbatim. React
+    // escapes text children itself, so the assertion is about the rendered
+    // output, not about a helper: verified that renderToStaticMarkup turns
+    // `<img src=x onerror="alert(1)">` into `&lt;img ...` with no live tag.
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const html = renderToStaticMarkup(
+      createElement("p", null, '<img src=x onerror="alert(1)">'));
+    expect(html).not.toMatch(/<img\s/);
+    expect(html).toContain("&lt;img");
   });
 
-  it("leaves ordinary prose alone", () => {
-    expect(escapeNote("Wage record is stale; the family re-filed.")).toBe(
-      "Wage record is stale; the family re-filed.");
+  it("does not double-escape ordinary prose", () => {
+    // The apostrophe is the whole point of this test. An escape helper applied
+    // before JSX turns `the family's record` into `the family&#39;s record` on
+    // screen, and the plan's original fixture had no apostrophe in it, so it
+    // passed against the buggy version. `noteIsInert` is a check, not a
+    // transform — nothing rewrites the caseworker's words.
+    const note = "The family's wage record is stale; they re-filed.";
+    expect(noteIsInert(note)).toBe(true);
+    expect(noteIsInert('<img src=x onerror="alert(1)">')).toBe(false);
   });
 });
 ```
@@ -3018,15 +3273,18 @@ export function statusTone(status: CaseStatus): string {
   }
 }
 
-/** A caseworker's note is untrusted free text. React escapes by default, but this
- *  is explicit so a future `dangerouslySetInnerHTML` cannot creep in silently. */
-export function escapeNote(note: string): string {
-  return note
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+/** A caseworker's note is untrusted free text, and this asserts what protects it
+ *  rather than adding a second layer. React escapes text children itself —
+ *  verified: `<img src=x onerror="alert(1)">` renders as `&lt;img ...` with no
+ *  live tag through `renderToStaticMarkup`. Escaping again before handing the
+ *  string to JSX double-escapes it: a note reading `the family's record` would
+ *  display as `the family&#39;s record` to the caseworker.
+ *
+ *  So this function exists to be *checked*, not applied. It answers "would this
+ *  note be safe if someone reached for `dangerouslySetInnerHTML`?", which is the
+ *  only way markup could reach the page. Callers render `note` directly. */
+export function noteIsInert(note: string): boolean {
+  return !/[<>]/.test(note);
 }
 
 export function CaseTable({ cases }: { cases: CaseSummary[] }) {
@@ -3117,7 +3375,7 @@ export default async function Queue() {
 ```tsx
 import { notFound } from "next/navigation";
 import { readCase } from "@/lib/cases";
-import { escapeNote, statusTone } from "@/components/case-table";
+import { statusTone } from "@/components/case-table";
 import { DecisionForm } from "@/components/decision-form";
 
 export const dynamic = "force-dynamic";
@@ -3156,7 +3414,9 @@ export default async function Case({ params }: { params: Promise<{ id: string }>
                     {d.decidedAt} · by {d.decidedBy}
                   </span>
                 </p>
-                {d.note && <p className="mt-1">{escapeNote(d.note)}</p>}
+                {/* Rendered directly: React escapes text children, and escaping again
+                    would show `&#39;` to the caseworker. See `noteIsInert`. */}
+                {d.note && <p className="mt-1">{d.note}</p>}
                 {d.outcome && (
                   <p className="mt-1 text-[var(--color-muted)]">{d.outcome}</p>
                 )}
@@ -3807,7 +4067,7 @@ is a value that does not exist until the API returns it — not a placeholder.
 `SessionIdentity` (T1 → T3, T6), `CaseFacts` / `Permit` / `Refusal` / `authorize` (T2 → T3, T5),
 `readEnv` / `Env` (T3 → T5), `listCases` / `listQueue` / `readCase` / `readFacts` (T3 → T5, T6),
 `verifySession` / `SESSION_COOKIE` / `hostedUiUrl` / `exchangeCode` (T4 → T5), `recordDecision` /
-`DecisionOutcome` (T5 → route), `formatCaseRow` / `statusTone` / `escapeNote` (T6 → its test).
+`DecisionOutcome` (T5 → route), `formatCaseRow` / `statusTone` / `noteIsInert` (T6 → its test).
 `CASEWORKER_ROLE` is defined once in T2 and imported by T4 rather than restated.
 
 **Test-count arithmetic.** Python: 622 → 628 (T5's six) → 634 (T7's six), plus T4's seven Cognito

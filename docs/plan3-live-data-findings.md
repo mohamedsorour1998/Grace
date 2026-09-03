@@ -163,6 +163,64 @@ absence is deliberate and is now commented as such in the plan — the client ca
 that authorises it, because it was never granted the ability to try. Same reasoning as layer 1 of the
 escalation boundary.
 
+### The ID token, minted and read rather than assumed
+
+A fourth throwaway pool was created on 2026-09-04 with `ALLOW_ADMIN_USER_PASSWORD_AUTH` so a **real
+Cognito ID token** could be minted without a browser and its claims read. Deleted afterwards. Every
+claim `verifySession` depends on is present and has the value the draft expects:
+
+```text
+custom:role   caseworker      ← reaches the ID token with ReadAttributes set
+token_use     id
+aud           <client id>     ← equals the client id exactly
+iss           https://cognito-idp.us-east-1.amazonaws.com/<pool>
+sub           34881488-d081-70d2-61d6-fca70fe529b4   ← opaque UUID, hard rule 9
+email         absent          ← nothing to drop, because nothing is sent
+JWKS          .well-known/jwks.json → 2 keys, both RS256
+```
+
+**The access token is a genuinely different shape**, which is what makes the `token_use` check worth
+having rather than defensive: `token_use: "access"`, **no `custom:role`, and no `aud` claim at all**.
+So an access token presented as an ID token would authenticate a session with no authorisation basis —
+and `jwtVerify`'s own `audience` check would also refuse it, giving two independent barriers.
+
+### `jose` refuses all nine attacks, verified against 6.2.10
+
+Every refusal the plan asserts was executed against the installed `jose` rather than trusted. Both
+key-resolution paths were tested — `createLocalJWKSet` and the plan's hand-rolled resolver — because a
+custom resolver is a different code path and could plausibly have bypassed the algorithm allowlist:
+
+| Attack | Result |
+|---|---|
+| Wrong signing key | `ERR_JWS_SIGNATURE_VERIFICATION_FAILED` |
+| Expired, via `currentDate` | `ERR_JWT_EXPIRED` |
+| Wrong issuer / wrong audience | `ERR_JWT_CLAIM_VALIDATION_FAILED` |
+| `alg: "none"` — the classic bypass | `ERR_JOSE_ALG_NOT_ALLOWED` |
+| HS256 algorithm confusion, signing with the public key's `n` as an HMAC secret | `ERR_JOSE_ALG_NOT_ALLOWED` |
+| Not a JWT at all | `ERR_JWS_INVALID` |
+| `currentDate` honoured in the *other* direction (a valid token, verified at a later date) | `ERR_JWT_EXPIRED` |
+
+`alg: none` and HS256 confusion also fail identically through the custom resolver, so the
+`algorithms: ["RS256"]` allowlist is enforced by `jwtVerify` before any key is fetched.
+
+One resolver quirk, benign: the `?? parsed.keys[0]` fallback means an **unknown `kid` still verifies**
+if the signature is genuinely from the injected key. It refuses a wrong key regardless, so it cannot
+accept a forgery — it is a test convenience, not a hole.
+
+### The defect: `COGNITO_TEST_JWKS` had no environment gate
+
+The draft read `process.env.COGNITO_TEST_JWKS` from production code. That variable **replaces the trust
+anchor** — setting it on the deployed app substitutes an attacker-supplied key set for Cognito's
+published one, and every forged token then verifies with a valid signature. Nothing else in the request
+path would notice: the session looks correctly authenticated because, against that key set, it is.
+
+Fixed to `process.env.NODE_ENV === "test" ? process.env.COGNITO_TEST_JWKS : undefined`. Verified that
+vitest sets `NODE_ENV="test"` (and `VITEST="true"`), so one condition is enough, and a thirteenth test
+was added that flips `NODE_ENV` to `"production"`, re-imports the module, and asserts the *same* token
+stops verifying. It resets modules on both sides because `cachedKeys` is module-level and a resolver
+cached under one environment would otherwise answer for the other. Task 4's sabotage step now includes
+removing the guard and watching that test fail.
+
 ---
 
 ## Amplify: the plan was missing the one thing that makes SSR work (Task 7)

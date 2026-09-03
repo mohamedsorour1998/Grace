@@ -892,12 +892,12 @@ Task state:
 |---|---|
 | 0 — preflight | **done** — eight of the plan's dependency pins were wrong; corrected from real registry data |
 | 1 — scaffold `web/` | **done** — commit `e3ea347`, four gates green (`typecheck`, `lint`, `test`, `build`), Python suite unchanged at 622. **Two more version pins and three config defects; read below** |
-| 2 — `lib/authorize.ts` | not started |
-| 3 — `lib/cases.ts` | not started |
-| 4 — Cognito + session verification | not started |
-| 5 — `lib/decide.ts` + the write route | not started |
-| 6 — pages | not started |
-| 7 — Amplify | not started |
+| 2 — `lib/authorize.ts` | **done** — `web/lib/authorize.ts`, 19 tests (21 with Task 1's smoke), four gates green, Python unchanged at 622. **Four defects in the plan's draft, three of them vacuous or dead tests; read below** |
+| 3 — `lib/cases.ts` | not started — **pre-verified against the live table; read `docs/plan3-live-data-findings.md` before writing a fixture** |
+| 4 — Cognito + session verification | not started — **pre-verified against a real minted ID token and `jose` 6.2.10; the draft's JWKS injection had no environment gate. Read below** |
+| 5 — `lib/decide.ts` + the write route | not started — **the draft edits one of `_escalate`'s three call sites; read below** |
+| 6 — pages | not started — **`escapeNote` double-escaped and its own test was vacuous; read below** |
+| 7 — Amplify | not started — **the draft sets no SSR compute role, so every read fails after a green deploy; read below** |
 | 8 — verification + docs | not started |
 
 **`web/` runs its own toolchain, and `npm run build` is the gate that matters** — it is what Amplify
@@ -949,6 +949,83 @@ decision and **re-invokes so the gate re-evaluates**, it never resumes a paused 
 resume response approves the blocked tool; see Task 6 of Plan 1). No `NEXT_PUBLIC_` variable exists
 either, because anything so prefixed is inlined into the client bundle, and every value this app holds
 is either a credential or a household-scoped identifier.
+
+**A TypeScript type is a promise a caller makes, not a fact `authorize` may assume — and an `as`
+cast is where the promise stops being checked.** Task 5's decide route builds its `DecisionAttempt`
+from `await request.json()` with a bare `body.decision as "approve"`, so both fields arrive as
+whatever a client posted, and `DecisionAttempt.note: string` is erased at compile time. Two
+consequences, both measured and both now guarded in `web/lib/authorize.ts`: a **non-string `note`**
+passes the length cap silently (`undefined > 2000` is `false`) or throws `TypeError` if it is `null`,
+turning a refusal into a 500 out of the pure gate; and a **non-finite `expiresAt`** defeats the
+expiry check entirely, because `Infinity <= nowMs` is `false`. The second is reachable, not
+theoretical: `JSON.parse('{"exp":1e400}').exp` is `Infinity`, `typeof` it is `"number"`, and `jose`
+**verifies such a token** — confirmed against a real RS256 key pair. So `cognito.ts` must use
+`Number.isFinite(payload.exp)`, not `typeof payload.exp !== "number"`. Refuse the type; never
+coerce it, because coercion invents a note nobody wrote.
+
+**A discriminated union invites the `if` that deletes the assertion.** Plan 3's Task 2 draft wrote
+every refusal-code check as `if (!r.permitted) expect(r.code).toBe(...)`, and one whole test body as
+`if (r.permitted) { ... }`. Measured by rewriting `authorize` to always refuse: **10 of 14 tests
+failed and 4 passed**, including `carries the opaque sub, never a name`, whose body never ran.
+Narrow by **throwing** on the wrong variant (`refusalOf`/`permitOf`) so every assertion is
+unconditional — the Task 8 vacuity lesson, in the shape TypeScript encourages.
+
+**A purity guard that greps for literal spellings is a denylist, and leaked three ways.** The draft
+forbade `node:fs`, `Date.now()`, `fetch(`, `@aws-sdk`, and `process.env`; `from "fs"`,
+`new Date().getTime()`, and `globalThis.fetch` were each added to `authorize.ts` and **passed**.
+The guard now enumerates the `import` statements actually present and requires each to be type-only
+and relative, which is a positive check — the same discovery-from-disk discipline as Task 4's
+model-ID `pkgutil` walk, for the same reason.
+
+**Session checks must precede fact checks.** Otherwise the difference between `no_session` and
+`unknown_case` tells an unauthenticated caller which case IDs exist. Pinned by a test that compares
+the two refusal codes for real and null facts.
+
+**An env var that swaps out a trust anchor must never be readable in production.** Task 4's draft read
+`process.env.COGNITO_TEST_JWKS` from `verifySession`'s key resolver with no environment guard — so
+setting that one variable on the deployed app replaces Cognito's published key set with an
+attacker-supplied one, and every forged token then verifies with a *valid signature*. Nothing
+downstream would notice, because against that key set the session genuinely is authentic. Gated on
+`process.env.NODE_ENV === "test"` (vitest sets `NODE_ENV="test"` and `VITEST="true"` — measured), with
+a test that flips `NODE_ENV` to `"production"`, re-imports the module, and asserts the *same* token
+stops verifying. `vi.resetModules()` on both sides, because `cachedKeys` is module-level and a
+resolver cached under one environment would answer for the other.
+
+**Cognito's real ID token was minted and read, and `jose`'s refusals were executed.** A throwaway pool
+with `ALLOW_ADMIN_USER_PASSWORD_AUTH` produced a genuine token: `custom:role` **is** present with
+`ReadAttributes` set, `token_use` is exactly `"id"`, `aud` equals the client id, `sub` is an opaque
+UUID, and there is no `email`. The **access token is a different shape** — `token_use: "access"`, no
+`custom:role`, and **no `aud` at all** — so the `token_use` check guards a real distinction rather than
+being defensive. Separately, `jose` 6.2.10 was verified to refuse a wrong key, an expired token via
+`currentDate` (in both directions), a wrong issuer, a wrong audience, a non-JWT, **`alg: "none"`**, and
+**HS256 algorithm confusion** signing with the public key's `n` as an HMAC secret — the last two with
+`ERR_JOSE_ALG_NOT_ALLOWED`, through both `createLocalJWKSet` and a hand-rolled resolver, so the
+`algorithms: ["RS256"]` allowlist binds before any key is fetched.
+
+**Never escape a string before handing it to JSX — React already escapes text children, and doing it
+twice is visible to the user.** Task 6's draft ran a caseworker's note through an HTML-escaping helper
+and then rendered `{escapeNote(d.note)}`. Measured with `renderToStaticMarkup`: a note reading
+`The family's wage record is stale.` renders as `The family&#39;s wage record is stale.` on screen,
+while React alone turns `<img src=x onerror="alert(1)">` into `&lt;img ...` with no live tag. The
+draft's own "leaves ordinary prose alone" test used a fixture with **no apostrophe**, so it passed
+against the bug. Replaced with `noteIsInert`, a **check** rather than a transform — it answers "would
+this note be safe if someone reached for `dangerouslySetInnerHTML`?", which is the only path markup
+could take. Nothing rewrites the caseworker's words. (`authority.py`'s "whoever renders it escapes it"
+still holds; here the renderer *is* React.)
+
+**A hard-rule-9 name assertion must list every fixture surname, and must be proven able to fail.**
+Task 6's draft matched `Mensah|Rivera|Okonkwo` — three of twelve — and the two households most likely
+to carry a name in an escalation reason are `c-010` and `c-011`, **Fitzgerald** and **Yamamoto**,
+neither of which was in the pattern. All twelve are listed now, plus `+1555` and `Household`, and a
+companion test feeds a name in through `reason` (the exact path that reached CloudWatch) and asserts
+the guard catches it — otherwise "no name in this row" is true of every input and proves nothing.
+
+**Fixture data in a plan must match the live table, or the instruction and the code contradict each
+other.** Plan 3's Task 3 carried a findings block saying to use the real deadlines and a fixture below
+it still using invented ones, leaving the implementor to guess. The ordering test now uses the real
+`c-010`/`c-011`/`c-012` deadlines **plus a third row**, so deadline order, escalation-time order, and
+GSI order all differ on the same input — which is what makes the assertion distinguish "sorted by
+deadline" from "whatever the GSI returned".
 
 
 ## The one idea that matters
