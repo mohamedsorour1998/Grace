@@ -3601,10 +3601,35 @@ import os
 import uuid
 
 import boto3
+from botocore.config import Config
 
 _REGION = os.getenv("AWS_REGION", "us-east-1")
 _RUNTIME_ARN_ENV = "GRACE_RUNTIME_ARN"
 _DEFAULT_TODAY = "2026-10-01"
+
+# **`invoke_agent_runtime` must never be retried, and the default client retries
+# it five times.** Measured with a black-hole socket (accepts, never replies):
+# the default client made 5 HTTP attempts on a read timeout; `total_max_attempts:
+# 1` makes exactly 1. Note `{"mode": "standard", "max_attempts": 1}` still makes
+# **2** — only `total_max_attempts` means "do not retry".
+#
+# This is a correctness issue, not a cost one. The call is not idempotent: each
+# retry re-runs the entire graph against the same case, so a case that times out
+# once could file a renewal more than once. Hard rule 6 forbids claiming an
+# unconfirmed action; filing twice is the same harm from the other side.
+#
+# `read_timeout` is 900s to match the Lambda's own deadline, so the Lambda times
+# out before the socket does. That ordering matters: a Lambda timeout trips Step
+# Functions' `Catch` and writes the escalation row, whereas a swallowed
+# `{"status": "error"}` does not — which would be the silent-disappearance
+# failure the Catch branch exists to prevent. The graph's own budget is
+# `node_timeout=420` within `execution_timeout=900`, so 60s (the boto3 default)
+# is far too tight for a swarm-routed case.
+_CLIENT_CONFIG = Config(
+    read_timeout=900,
+    connect_timeout=10,
+    retries={"total_max_attempts": 1},
+)
 
 
 def lambda_handler(event: dict, context: object, client=None, runtime_arn: str | None = None) -> dict:
@@ -3615,7 +3640,9 @@ def lambda_handler(event: dict, context: object, client=None, runtime_arn: str |
     """
     case_id = str(event.get("case_id", "")).strip()
     today = str(event.get("today") or _DEFAULT_TODAY)
-    client = client or boto3.client("bedrock-agentcore", region_name=_REGION)
+    client = client or boto3.client(
+        "bedrock-agentcore", region_name=_REGION, config=_CLIENT_CONFIG
+    )
     runtime_arn = runtime_arn or os.environ[_RUNTIME_ARN_ENV]
 
     # A fresh session per case. `runtimeSessionId` must be 33+ characters — a
