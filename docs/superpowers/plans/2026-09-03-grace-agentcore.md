@@ -1527,6 +1527,20 @@ the advocate's unchecked argument to a caseworker as though a verifier had confi
 private name across modules is a smell; reimplementing this logic is a safety defect. Promote the
 names.
 
+**The aliases are mandatory, not politeness.** Six existing tests call `run._deliberation_note(...)`
+directly — two in `tests/test_swarm.py`, four in `tests/test_graph.py` — and Global Constraints
+forbid editing an existing test file. Verified by grep before this task was written:
+
+```text
+tests/test_swarm.py:300,320       run._deliberation_note(...)
+tests/test_graph.py:1600,1623,1643,1781,1782  run._deliberation_note(...)
+```
+
+So `_deliberation_note = deliberation_note` must exist, or Task 3's green suite goes red for a reason
+that has nothing to do with the entrypoint. The other three helpers have no external callers today,
+but keep their aliases too — symmetry costs one line each and the next task to reach for one will not
+have to check.
+
 - [ ] **Step 1: Promote the four helpers in `grace/run.py`**
 
 Rename the four functions and add aliases immediately after each definition. Example for the first:
