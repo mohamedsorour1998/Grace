@@ -40,3 +40,9 @@ sessions/
 .DS_Store
 .idea/
 *.swp
+
+# Plan 3 dashboard (web/)
+node_modules/
+.next/
+out/
+web/.env.local
