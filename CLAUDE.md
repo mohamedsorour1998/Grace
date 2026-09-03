@@ -28,13 +28,21 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 544 unit
+**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 556 unit
 tests passing (`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against
 real Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
 `testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs end to end and reports
-**9 acted / 3 escalated**, the evals prove the gate ordering holds against five real graph
-invocations, and every ledger row now carries the OTEL trace ID that joins it to its
-CloudWatch trace.
+**9 acted / 3 escalated**, and the evals prove the gate ordering holds against five real graph
+invocations.
+
+**Grace is deployed and serving on AgentCore Runtime** (`grace_grace-oTyyvo8stE`, READY): a real
+invocation of `c-010` escalated in 9.1s and wrote 12 rows to the `grace-cases` DynamoDB table —
+paired tool calls, a `family_message_sent`, and a pending escalation row.
+
+Every ledger row carries a `trace_id` **key**, but its value is `NULL` in the deployed runtime:
+Runtime injects the OTEL environment variables without installing an in-process tracer provider, so
+no spans are produced. See "Runtime instruments itself is wrong" below. Do not describe Grace as
+joining ledger rows to CloudWatch traces until that is actually true.
 
 - Plan 2 spec: `docs/superpowers/specs/2026-09-03-grace-agentcore-design.md`
 - Plan 2 tasks: `docs/superpowers/plans/2026-09-03-grace-agentcore.md`
@@ -52,8 +60,8 @@ with written reasons — say three AgentCore surfaces, never five. Plan 2 task s
 | 4 — Runtime entrypoint | **done** — `grace/entrypoint.py`, `grace/run.py` (rename only). The deployed path invokes the graph **once** and never resumes |
 | 5 — AgentCore Memory | **done** — `grace/memory.py`, `infra/provision_memory.py`, 544 tests. Memory `grace_household_memory-TCf1SS708O` ACTIVE, 365-day expiry |
 | 6 — IAM roles | **done** (out of order — no code deps) — `infra/provision_iam.py`, 489 tests. `explicitDeny` on the unverified token path verified live. **The runtime role would have denied every Nova call — see below** |
-| 7 — deploy to Runtime | next |
-| 8 — Lambda/Step Functions/EventBridge | pending |
+| 7 — deploy to Runtime | **done** — `Dockerfile`, `runtime_app.py`, `agentcore/`, 556 tests. **Runtime `grace_grace-oTyyvo8stE` is READY and serving**; `c-010` escalated in 9.1s with real DynamoDB rows |
+| 8 — Lambda/Step Functions/EventBridge | next |
 | 9 — escalation alarm + provisioning | pending |
 | 10 — deployed verification + README | pending |
 
