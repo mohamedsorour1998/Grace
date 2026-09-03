@@ -97,6 +97,7 @@ the documentation this project's research was based on.
 ```
 
 Must be **360 passed** before Plan 2 begins. This is the number every later task is measured against.
+Plan 2 finished at **622 passed** — Plan 1's 360 unchanged, plus 262 added by Plan 2's own tasks.
 
 ---
 
@@ -399,4 +400,26 @@ inconsistently against each other bytewise, so the escalation GSI's range key is
 across the two writers. **Deliberately not fixed:** the caseworker queue's meaningful order is by
 `deadline`, rows from either writer sort correctly among themselves, and normalizing would mean
 reformatting a timestamp inside a `States.Format` intrinsic — more risk than the defect.
+
+### Task 10 — a redeploy is outstanding
+
+**The deployed image predates the PII fix.** Runtime `grace_grace-oTyyvo8stE` is version 1, built
+`2026-09-03T03:04:55Z`. Task 10's verification scan found a household name in
+`/aws/vendedlogs/states/grace-sweep-Logs` (`Mensah`, 16 times in 302 events) and the fix —
+`read_case` no longer returning `display_name` — landed in the repository afterwards. See
+`docs/deployed-verification.md` §5 for the path and the reasoning.
+
+So **the next deploy is not optional**, and it is the one step of this runbook still to run:
+
+```bash
+export DOCKER_HOST="$(podman machine inspect \
+  --format '{{.ConnectionInfo.PodmanSocket.Path}}' podman-machine-default)"
+agentcore deploy -y --verbose
+```
+
+Then re-run the scan from `docs/deployed-verification.md` §5 against events written *after* the
+redeploy and confirm zero hits. Pre-fix events cannot be unwritten; they age out with the log group's
+retention. Until the redeploy, "no household identity reaches CloudWatch" is true of the repository
+and not of the running system — do not state it unqualified.
+
 

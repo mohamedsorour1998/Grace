@@ -15,9 +15,13 @@ for tests" would therefore remove the protection with no visible failure.
 
 Two things these tools deliberately do NOT do:
 
-1. They do not report the household's phone number. The model never needs it —
-   `send_family_message` reads it from the bound case itself — and a tool result
-   ends up in the model transcript, and from there in whatever captures one.
+1. They do not report any household identity — not the phone number and not the
+   display name. The model needs neither (`send_family_message` reads the phone
+   from the bound case itself), and a tool result ends up in the model
+   transcript, and from there in whatever captures one. The name was learned the
+   hard way: it used to be in `read_case`'s first line, a referee quoted it into
+   its deliberation, and it reached CloudWatch inside a Step Functions payload —
+   a path hard rule 8's span redaction does not cover. See `read_case`.
 2. They do not let an `InvalidRulePack` escape. strands converts a tool
    exception into an error tool-result the model reads, so a raw
    `InvalidRulePack` would put an absolute filesystem path into the prompt.
@@ -76,8 +80,28 @@ def make_read_tools(store: CaseStore, case_id: str, today: date) -> list:
         No arguments needed — identity is determined from the session.
         """
         c = store.get(case_id)
+        # No `display_name`, and no phone. Both are PII and nothing downstream
+        # needs either: `authority.py` never reads them, the action tools never
+        # use them, and `send_family_message` takes the phone from the bound
+        # case server-side rather than from anything a model said.
+        #
+        # This is a fix for a real leak, not a precaution. `read_case` used to
+        # open with the household's name; on a deployed sweep the referee quoted
+        # "the Mensah Household" into its deliberation prose, `_deliberation_note`
+        # appended that conclusion to the escalation reason, the reason became
+        # the Lambda's return payload, and Step Functions logged it —
+        # `"Mensah"` appeared 16 times in `/aws/vendedlogs/states/grace-sweep-Logs`.
+        # Hard rule 8's span redaction does not cover that path at all: it
+        # protects `gen_ai.*` span content, and an execution payload is not span
+        # content.
+        #
+        # So do not re-add the name as a nicety for the caseworker's brief. The
+        # caseworker reads the escalation row, which is keyed by `case_id`, and
+        # the dashboard can join the name from the store where it belongs. A
+        # model that can read a name will eventually quote it somewhere nothing
+        # is redacting — capability absence, not filtering.
         return (
-            f"Case {c.case_id}: {c.household.display_name}\n"
+            f"Case {c.case_id}\n"
             f"Program: {c.program} ({c.state})\n"
             f"Household size on record: {c.household.size}, "
             f"reported: {_reported(c.reported_size)}\n"

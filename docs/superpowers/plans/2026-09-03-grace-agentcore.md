@@ -4510,7 +4510,7 @@ and described accurately.
 - Consumes: everything
 - Produces: recorded evidence for the three claims in §7 of the spec
 
-- [ ] **Step 1: Confirm Plan 1's suite is still untouched in spirit**
+- [x] **Step 1: Confirm Plan 1's suite is still untouched in spirit**
 
 ```bash
 git diff --stat 0e9de29 -- grace/authority.py grace/steering.py grace/graph.py grace/swarm.py
@@ -4520,7 +4520,7 @@ Expected: **empty output.** The whole premise of this plan is that the decision 
 If any of those four files differ from the Plan 1 commit, stop and explain why before continuing —
 this is the plan's headline claim and it must be true, not approximately true.
 
-- [ ] **Step 2: Run the trajectory evals against the deployed store**
+- [x] **Step 2: Run the trajectory evals against the deployed store**
 
 ```bash
 GRACE_STORE=dynamodb .venv/bin/python -m pytest evals/ -v 2>&1 | tail -20
@@ -4532,7 +4532,7 @@ submission; a failure in `test_a_clean_case_is_filed` or
 `test_an_escalating_case_does_something_rather_than_nothing` is liveness-shaped — re-run once before
 concluding anything, since Plan 1 recorded one timeout in five runs under real Bedrock latency.
 
-- [ ] **Step 3: The Transaction Search query — expect it to return nothing, and say so**
+- [x] **Step 3: The Transaction Search query — expect it to return nothing, and say so**
 
 **Read this before running it.** Task 7 established on the deployed runtime that no spans are being
 produced at all: zero traces in the account, no `aws/spans` log group, and no other deployed project
@@ -4573,7 +4573,7 @@ aws dynamodb query --table-name grace-cases --region us-east-1 \
   --query 'Items[].{case:case_id.S,reason:reason.S,deadline:deadline.S}' --output table
 ```
 
-- [ ] **Step 4: Confirm no household identity reached a span**
+- [x] **Step 4: Confirm no household identity reached a span**
 
 ```bash
 aws logs start-query --region us-east-1 --log-group-names "aws/spans" \
@@ -4588,7 +4588,17 @@ deployed image (Task 7 Step 6 proves the guard works locally; this proves it is 
 Substitute the real fixture surnames from `fixtures/households.yaml` into the query rather than
 guessing them.
 
-- [ ] **Step 5: Write `docs/deployed-verification.md`**
+**OUTCOME: this step failed, and it was right to run it.** The `aws/spans` version cannot run at all
+(Step 3 — the log group does not exist), so the scan ran against the two log groups Grace actually
+writes to. Result: **`Mensah` 16 times in 302 events** in `/aws/vendedlogs/states/grace-sweep-Logs`,
+**0 hits in 360 events** in the runtime's own log group, 0 phone numbers anywhere. The carrier was the
+Lambda's return payload, via `read_case` → referee prose → `_deliberation_note` → escalation reason →
+Step Functions task output. Fixed at the source: `read_case` no longer returns `display_name`. Full
+write-up in `docs/deployed-verification.md` §5, transferable lesson in CLAUDE.md. Note the step's own
+framing — "confirm no household identity reached **a span**" — was too narrow; the leak was never
+going to be in a span, and checking only spans would have missed it.
+
+- [x] **Step 5: Write `docs/deployed-verification.md`**
 
 Record, with actual command output pasted in:
 
@@ -4602,7 +4612,7 @@ Record, with actual command output pasted in:
 This file is what a judge reads when they want to know whether the claims are real. Paste output;
 do not paraphrase it.
 
-- [ ] **Step 6: Update `README.md` — what shipped, what did not, and why**
+- [x] **Step 6: Update `README.md` — what shipped, what did not, and why**
 
 Add a deployment section that is accurate about scope. Specifically:
 
@@ -4617,7 +4627,7 @@ Add a deployment section that is accurate about scope. Specifically:
 - Keep the newly-created-work disclosure: patterns and API knowledge were reused as knowledge from
   prior projects; no files were copied in.
 
-- [ ] **Step 7: Update `CLAUDE.md`**
+- [x] **Step 7: Update `CLAUDE.md`**
 
 Add a "Plan 2 is complete" state block in the same style as Plan 1's, plus a
 **"What Plan 2 established — follow these"** section carrying at minimum:
@@ -4634,12 +4644,17 @@ Add a "Plan 2 is complete" state block in the same style as Plan 1's, plus a
 - Both stores are tested by one parametrized test body; a separate test file is how they drift.
 - `runtime_app` refuses to start without the span-redaction token.
 
-- [ ] **Step 8: Run the fast suite one final time**
+- [x] **Step 8: Run the fast suite one final time**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **431 tests**, and Plan 1's original 360 among them unchanged.
 
-- [ ] **Step 9: Tick every checkbox in this plan**
+**OUTCOME: 622 passed.** The 431 estimate was stale by 191, as every task in this plan predicted its
+own estimate would be — the tasks accumulated more tests than the arithmetic anticipated. 621 existed
+before this task; the 622nd is `test_read_case_leaks_no_household_identity_for_any_fixture`, added
+with Step 4's PII fix. Plan 1's original 360 are present and unchanged.
+
+- [x] **Step 9: Tick every checkbox in this plan**
 
 Go back through this document and mark each completed step. An unticked box in a finished plan is
 indistinguishable from work that was skipped — Plan 1 ended with two such boxes, and reconstructing

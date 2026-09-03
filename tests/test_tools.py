@@ -111,8 +111,13 @@ def test_an_injected_identity_argument_cannot_redirect_a_read(store):
     result = asyncio.run(run())
     assert result["status"] == "success"
     text = result["content"][0]["text"]
-    assert "Rivera" in text
-    assert "Okonkwo" not in text
+    # Discriminated on `case_id`, not on the household name. `read_case`
+    # deliberately no longer returns a name (see grace/tools/read.py — a
+    # referee quoted one into an escalation reason that reached CloudWatch),
+    # and `case_id` is the better marker anyway: it is the exact identity this
+    # test is about, and it is opaque.
+    assert "c-001" in text
+    assert "c-002" not in text
 
     # The direct-call path is stricter; both are safe, for different reasons.
     with pytest.raises(TypeError):
@@ -151,8 +156,10 @@ def test_an_injected_phone_cannot_redirect_an_outbound_message(store):
 def test_read_case_returns_the_bound_case_only(store):
     tools = _by_name(make_read_tools(store, "c-001", TODAY))
     out = tools["read_case"]()
-    assert "Rivera" in out
-    assert "Okonkwo" not in out
+    # `case_id`, not the household name — see the note in
+    # `test_an_injected_identity_argument_cannot_redirect_a_read`.
+    assert "c-001" in out
+    assert "c-002" not in out
 
 
 def test_read_case_does_not_leak_the_household_phone_number(store):
@@ -162,6 +169,43 @@ def test_read_case_does_not_leak_the_household_phone_number(store):
     that captures one."""
     out = _by_name(make_read_tools(store, "c-001", TODAY))["read_case"]()
     assert store.get("c-001").household.phone not in out
+
+
+def test_read_case_leaks_no_household_identity_for_any_fixture(store):
+    """No household name or phone reaches a model, for any of the 12 fixtures.
+
+    Not defensive padding — this is a regression test for a real leak found in
+    deployed CloudWatch logs. `read_case` used to return `display_name`; the
+    referee quoted "the Mensah Household" into its deliberation prose,
+    `_deliberation_note` appended that conclusion to the escalation reason, the
+    reason became the Lambda's return payload, and Step Functions logged the
+    payload. `"Mensah"` was found 16 times in
+    `/aws/vendedlogs/states/grace-sweep-Logs`.
+
+    Hard rule 8's span redaction does not cover that path — it protects
+    `gen_ai.*` span content, and a Step Functions execution payload is not span
+    content. So the check has to be at the source: whatever a tool returns, a
+    model may quote anywhere, including surfaces nothing is redacting.
+
+    Parametrized over every fixture rather than `c-001` alone because the leak
+    was found on `c-012`, and `c-001` (which the neighbouring tests use) is a
+    clean case that never reaches the swarm at all.
+    """
+    checked = 0
+    for case in load_fixture_cases():
+        out = _by_name(make_read_tools(store, case.case_id, TODAY))["read_case"]()
+        # The bare surname, not the full display_name: a model quoting "the
+        # Mensah Household" would not match "The Mensah Household" exactly, and
+        # that near-miss is what an equality check would let through.
+        surname = case.household.display_name.removeprefix("The ").removesuffix(
+            " Household"
+        )
+        assert surname not in out, f"{case.case_id}: household name {surname!r} in output"
+        assert case.household.phone not in out, f"{case.case_id}: phone in output"
+        checked += 1
+    # Task 8's vacuity lesson: a loop that never ran asserts nothing, and reads
+    # identically to a pass in every report.
+    assert checked == 12, f"expected 12 fixtures, checked {checked}"
 
 
 def test_read_case_says_no_change_rather_than_none(store):

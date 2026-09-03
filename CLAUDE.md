@@ -21,38 +21,54 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 - Spec: `docs/superpowers/specs/2026-08-28-grace-design.md`
 - Plan 1 (core, local): `docs/superpowers/plans/2026-08-28-grace-core.md`
-- Plan 2 (AgentCore deploy): `docs/superpowers/plans/2026-09-03-grace-agentcore.md` — in progress
+- Plan 2 (AgentCore deploy): `docs/superpowers/plans/2026-09-03-grace-agentcore.md` — **complete**
 - Plan 3 (dashboard) to follow.
 
 ---
 
 ## Current state
 
-**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 621 unit
-tests passing (`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against
-real Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
-`testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs end to end and reports
-**9 acted / 3 escalated**, and the evals prove the gate ordering holds against five real graph
-invocations.
+**Plans 1 and 2 are both complete.** Plan 1's 9 tasks and Plan 2's 11 tasks are done. **622 unit tests
+pass** (`.venv/bin/python -m pytest`), and 23 trajectory evals pass against real Bedrock
+(`.venv/bin/python -m pytest evals/` — `testpaths = ["tests"]` excludes `evals/` from the fast suite).
+`grace sweep` runs end to end locally and reports **9 acted / 3 escalated**.
+
+**The evals needed two runs to reach 23/23, and that is expected for exactly one of them.**
+`test_an_escalating_case_does_something_rather_than_nothing[c-011]` is liveness, not safety — the gate
+only permits or refuses a tool call, never forces one, so a model that deliberates inside the swarm and
+answers from `decide` in prose fails it while every safety property holds. Re-running is the correct
+response to *that* failure and the wrong response to any safety failure. **Never re-run
+`test_an_escalating_case_is_never_filed` to get a pass; a failure there is a real regression.**
 
 **Grace is deployed and the full sweep runs on AWS.** EventBridge → Step Functions (Map,
-`maxConcurrency` 3) → Lambda → Runtime `grace_grace-oTyyvo8stE`. A real execution **SUCCEEDED in 61s
-reporting 9 acted / 3 escalated**, verified from DynamoDB rather than from a log line:
-`renewal_submitted` appears for exactly `c-001`–`c-009` and for none of `c-010`/`c-011`/`c-012`, and
-the `escalation-queue` GSI holds exactly those three households with their typed gate reasons. Hard
-rule 6 holds on deployed infrastructure.
+`maxConcurrency` 3) → Lambda → Runtime `grace_grace-oTyyvo8stE`. Two consecutive executions
+**SUCCEEDED in ~61s reporting 9 acted / 3 escalated**, verified from DynamoDB rather than from a log
+line: `renewal_submitted` appears for exactly `c-001`–`c-009` and for none of `c-010`/`c-011`/`c-012`,
+and the `escalation-queue` GSI holds exactly those three households with their typed gate reasons.
+Hard rule 6 holds on deployed infrastructure. `docs/deployed-verification.md` is the pasted evidence.
 
-Every ledger row carries a `trace_id` **key**, but its value is `NULL` in the deployed runtime:
-Runtime injects the OTEL environment variables without installing an in-process tracer provider, so
-no spans are produced. See "Runtime instruments itself is wrong" below. Do not describe Grace as
-joining ledger rows to CloudWatch traces until that is actually true.
+**Scope is three AgentCore surfaces, not five** — Runtime, Memory, and the deploy harness. Gateway and
+Identity are deferred with written reasons (spec §8, README). **Never describe Grace as using five.**
+
+**Two deployed facts that must not be overclaimed:**
+
+1. Every ledger row carries a `trace_id` **key**, but its value is `NULL` in the deployed runtime, and
+   **zero traces exist in the account**. Runtime injects the OTEL env vars without installing an
+   in-process tracer provider. So a Transaction Search query on `grace.gate_decision` returns nothing,
+   and the DynamoDB escalation queue is the demo's evidence instead. See "Runtime instruments itself is
+   wrong" below.
+2. A household name **did** reach CloudWatch before it was fixed (see the PII finding below). The fix
+   is in the repository; the deployed image is version 1, built before it. Pre-fix log events still
+   contain the name. "No household identity reaches CloudWatch" is true of the repo and **not yet** of
+   the running system — it needs a redeploy.
 
 - Plan 2 spec: `docs/superpowers/specs/2026-09-03-grace-agentcore-design.md`
 - Plan 2 tasks: `docs/superpowers/plans/2026-09-03-grace-agentcore.md`
 - Deploy runbook (verified CLI flags): `docs/runbook-deploy.md`
+- Deployed evidence: `docs/deployed-verification.md`
 
-**Plan 2 scope: Runtime + DynamoDB + Memory.** Gateway and Identity are deliberately deferred
-with written reasons — say three AgentCore surfaces, never five. Plan 2 task state:
+Plan 2 task state:
+
 
 | Task | State |
 |---|---|
@@ -66,7 +82,7 @@ with written reasons — say three AgentCore surfaces, never five. Plan 2 task s
 | 7 — deploy to Runtime | **done** — `Dockerfile`, `runtime_app.py`, `agentcore/`, 556 tests. **Runtime `grace_grace-oTyyvo8stE` is READY and serving**; `c-010` escalated in 9.1s with real DynamoDB rows |
 | 8 — Lambda/Step Functions/EventBridge | **done** — `infra/{lambda_src,provision_lambda,provision_stepfunctions,provision_eventbridge}.py`, 578 tests. **The deployed sweep reports 9 acted / 3 escalated** |
 | 9 — escalation alarm + provisioning | **done** — `infra/{provision_alarm,provision_all,teardown}.py`, 621 tests. **The alarm went OK on a real sweep's Sum=3.0** |
-| 10 — deployed verification + README | next |
+| 10 — deployed verification + README | **done** — `docs/deployed-verification.md`, honest README scope. **A PII scan of the deployed log groups found a household name in CloudWatch — read the PII finding below before touching `read_case`** |
 
 Plan 1 task state, for reference:
 
@@ -828,8 +844,11 @@ the empty one, for minutes after a run**, so it cannot be used to validate one p
 
 
 **A household name reached CloudWatch, and hard rule 8's redaction does not cover the path it took.**
-Found by scanning 412 real log events: `"Mensah"` appeared 8 times in
-`/aws/vendedlogs/states/grace-sweep-Logs`. No Grace code logged it. The chain was
+Found by scanning real log events across a 24-hour window: `"Mensah"` appeared **16 times in 302
+events** in `/aws/vendedlogs/states/grace-sweep-Logs`, and **zero times in 360 events** in the
+runtime's own log group `/aws/bedrock-agentcore/runtimes/grace_grace-oTyyvo8stE-DEFAULT` — so the
+carrier is the Step Functions payload, not the agent's stdout. Zero `+1555` hits anywhere. No Grace
+code logged it. The chain was
 `read_case` handing `display_name` to every model → the **referee quoting it in its deliberation
 prose** → `_deliberation_note` appending that conclusion to the escalation reason → the reason being
 the Lambda's return payload → Step Functions logging the payload. Span redaction protects `gen_ai.*`
@@ -843,6 +862,16 @@ than scrubbing each consumer, which is the same reasoning as layer 1 of the esca
 **Never put a household's name, phone, or address into a tool's returned text** — a model will
 eventually quote it somewhere you are not redacting, and hard rule 9's "never in a span attribute" is
 necessary but not sufficient.
+
+**Two consequences to keep straight.** First, the fix is in the repository but **not in the deployed
+image**: runtime `grace_grace-oTyyvo8stE` is version 1, built `2026-09-03T03:04:55Z`, from code where
+`read_case` still leaked. Pre-fix log events cannot be unwritten and remain until retention expires,
+so "no household identity reaches CloudWatch" is true of the repo and needs a redeploy to be true of
+the running system. Second, **two existing tests used the surname as their marker** for "the bound
+case was read" (`test_read_case_returns_the_bound_case_only` and, more importantly,
+`test_an_injected_identity_argument_cannot_redirect_a_read` — the load-bearing layer-2 test). Both now
+discriminate on `case_id`, which tests the identical property with an opaque value. If you add a test
+that needs to prove *which* case was read, use `case_id`; never reintroduce a name as a fixture marker.
 
 
 ## The one idea that matters
