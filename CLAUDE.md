@@ -716,6 +716,48 @@ Lambda", and the identical call succeeded once corrected — so Lambda does popu
 condition is genuinely evaluated. Both halves of that probe mattered; success alone would not
 distinguish "satisfied" from "ignored".
 
+**Renaming a function whose name is also a local variable inside a caller breaks the caller.**
+`sweep` binds `gate_reason = _gate_reason(...)`. Rewriting that call site to the promoted public name
+gives `gate_reason = gate_reason(...)`, and Python then treats the name as local for the whole
+function — `UnboundLocalError` on every case with a non-clean verdict, i.e. all three demo
+escalations, from a change intended as a no-op. The aliases (`_gate_reason = gate_reason`) make every
+existing call site correct, so **promote the definition and leave the call sites alone.**
+
+**The deployed entrypoint invokes the graph exactly once and carries no resume vocabulary.** Two
+assertions, because one is not enough: a call count on a counting fake, *and* an AST check that
+`interruptResponse` / `APPROVE_DECISIONS` / `MAX_RESUME_ROUNDS` appear nowhere in the module. A
+call-count assertion is only as good as the fake it counts. Verified by sabotage — adding a bounded
+resume loop fails four tests, and an *unbounded* one hangs the suite, reproducing Task 6's finding 3
+live.
+
+**A failed escalation-row write is recorded in the reason, not swallowed and not raised.** Swallowing
+keeps the outcome payload but makes the *missing* durable row invisible — Plan 3's dashboard reads
+the escalation GSI, so it would show two escalations while the payload claimed three. Raising is
+worse: a returned `{"status": "error"}` does **not** trip Step Functions' `Catch`, so no replacement
+row gets written by anyone. Appending the failure to the reason keeps the family escalating and makes
+the gap explicit.
+
+**`PersistenceMode` is `FULL`/`NONE` only, so "write to memory selectively" (spec §3.7) is not
+expressible as configuration.** It is handled by *scope*: `build_session_manager` is a factory the
+caller attaches to the orchestrator, and it is never wired into `build_case_graph` — so the nodes
+carrying raw tool output and model errors have nothing to persist through. Pass `FULL` explicitly
+rather than by default, because `NONE` leaves retrieval working while writing nothing, which is
+indistinguishable from `FULL` in any test that only reads.
+
+**A `Swarm` carrying its own `session_manager` is accepted as a graph node — an SDK gap, not a Grace
+bug.** `Graph._validate_node_executor` guards only `isinstance(executor, Agent)`;
+`Swarm._validate_swarm` guards only each *member's* `_session_manager`. Neither covers a Swarm
+holding its own, and a Swarm inside a Graph is exactly Grace's topology. Grace never attaches one
+there, so this is asserted structurally in `tests/test_memory.py` rather than defended against in
+`graph.py`. A second test pins the gap so it fails (and can be deleted) if a future SDK closes it.
+
+**Memory strategy names reject hyphens** (`[a-zA-Z][a-zA-Z0-9_]{0,47}`) — `household-facts` was
+refused live, which matters because every other Grace resource is `grace-something`. Also verified:
+`ListMemories` paginates, `CreateMemory` returns `CREATING` (use the `memory_created` waiter — real
+creation took 2m31s), `ValidationException` must not be treated as "already exists" (it would report
+success while silently dropping an invalid strategy), and an id prefix match needs anchoring because
+this account holds `name` and `name_v2` pairs.
+
 
 ## The one idea that matters
 
