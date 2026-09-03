@@ -128,7 +128,37 @@ PY
 ## Access confirmed for later tasks
 
 - **Cognito** (Task 4): `list-user-pools` works; two unrelated pools already exist in the account, so
-  the API and permissions are proven. No Grace pool yet.
+  the API and permissions are proven. No Grace pool yet. See below for what was probed.
 - **Amplify** (Task 7): `list-apps` returns `[]` — reachable, and genuinely new ground here.
 - Caller identity is currently the account **root** principal. CLAUDE.md prefers the `grace-dev` IAM
   user; provisioning ran as root in Plan 2 as well, so this is a consistency note, not a blocker.
+
+---
+
+## Cognito, probed rather than assumed (Task 4)
+
+Three throwaway pools were created and deleted on 2026-09-04 to check Task 4's draft before writing
+it. All three were confirmed gone afterwards — `list_user_pools` shows only the two unrelated
+projects. Five assumptions held and one gap was found.
+
+| Probed | Result |
+|---|---|
+| `Schema` entry named `role` | Round-trips as **`custom:role`** in `SchemaAttributes`. The `custom:` prefix is Cognito's; do not write it into the schema name. |
+| `ReadAttributes: ["email", "custom:role"]` | Accepted and echoed back verbatim, so the claim reaches the ID token. |
+| `ReadAttributes` omitted entirely | Echoes back **empty**, which per the API docs means standard attributes only — `custom:role` would be unreadable and `verifySession` would refuse every legitimate caseworker. This is the defect already fixed in commit `0e07f04`, now confirmed against the live API rather than from the docs alone. |
+| `admin_create_user` with an immutable custom attribute | Accepted; `custom:role` is set and `sub` is a UUID. **The user lands in `FORCE_CHANGE_PASSWORD` and cannot sign in.** |
+| `admin_set_user_password(Permanent=True)` | Moves the user to **`CONFIRMED`**. So that call is required for an unattended demo, not a convenience — without it the seeded account exists and cannot be used. |
+| Re-creating the same user / same domain | `UsernameExistsException`; `InvalidParameterException` with message `Domain already exists.` Both are already in the draft's `except` clauses. |
+
+### The gap: `WriteAttributes`
+
+Cognito **accepts `custom:role` in `WriteAttributes` even though the schema marks it
+`Mutable: False`** — verified, the client was created and echoed the attribute back. Granting it would
+let a signed-in caseworker call `UpdateUserAttributes` against the very claim that authorises them.
+The immutable flag would still refuse the write, but that leaves one guard where there should be two.
+
+Omitting `WriteAttributes` yields an empty list, which is the safe state, and nothing legitimate needs
+it: the role is set once by `admin_create_user`, an admin API that this list does not constrain. So the
+absence is deliberate and is now commented as such in the plan — the client cannot rewrite the claim
+that authorises it, because it was never granted the ability to try. Same reasoning as layer 1 of the
+escalation boundary.

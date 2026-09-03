@@ -1551,6 +1551,17 @@ Expected: FAIL — `ImportError: cannot import name 'provision_cognito' from 'in
 
 - [ ] **Step 3: Write `infra/provision_cognito.py`**
 
+**Five of this draft's assumptions were probed on throwaway pools on 2026-09-04 and all five hold** —
+do not re-derive them, and do not "simplify" any of them away:
+
+| Probed | Result |
+|---|---|
+| `Schema` name `role` → claim name | Round-trips as `custom:role` in `SchemaAttributes`. The `custom:` prefix is Cognito's, not something to write yourself. |
+| `ReadAttributes: ["email", "custom:role"]` | Accepted and echoed back verbatim. Omitting it leaves `ReadAttributes` **empty**, which per the API docs means standard attributes only — so `custom:role` would be unreadable and `verifySession` would refuse every caseworker. |
+| `admin_create_user` with an immutable custom attribute | Accepted. The user lands in **`FORCE_CHANGE_PASSWORD`**, which cannot sign in — so the `admin_set_user_password(Permanent=True)` call below is **required**, not a convenience. After it, status is `CONFIRMED`. |
+| Re-creating the same user | `UsernameExistsException`, exactly as the `except` expects. |
+| Re-creating the same domain on the same pool | `InvalidParameterException` with message `Domain already exists.` — the code the `except` already allows. `AliasExistsException` was not observed, but leave it listed; it is the documented code for a domain taken by *another* pool. |
+
 ```python
 """The caseworker user pool. Idempotent: re-running is the recovery path.
 
@@ -1615,6 +1626,15 @@ CLIENT_SPEC: dict = {
     # broken" rather than "one attribute is unreadable". Fails closed, which is
     # the right direction and still unusable.
     "ReadAttributes": ["email", ROLE_CLAIM],
+    # **`WriteAttributes` is deliberately absent, and must stay absent.** Probed
+    # on a throwaway pool: Cognito *accepts* `custom:role` in `WriteAttributes`
+    # even though the schema marks it `Mutable: False`. Granting it would let a
+    # signed-in caseworker call `UpdateUserAttributes` against their own role —
+    # the immutable flag would still refuse, but that is one guard where there
+    # should be two. The role is set once by `admin_create_user`, which is an
+    # admin API and not bound by this list, so nothing legitimate needs write
+    # access. Capability absence again: the client cannot rewrite the claim that
+    # authorises it, because it was never granted the ability to try.
     # An hour. Long enough for a caseworker's session, short enough that a
     # leaked token expires before it is useful.
     "IdTokenValidity": 60,
