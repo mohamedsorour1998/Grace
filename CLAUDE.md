@@ -827,6 +827,24 @@ failure an escalation-count alarm exists to avoid. Check a pattern with `logs:te
 the empty one, for minutes after a run**, so it cannot be used to validate one promptly.
 
 
+**A household name reached CloudWatch, and hard rule 8's redaction does not cover the path it took.**
+Found by scanning 412 real log events: `"Mensah"` appeared 8 times in
+`/aws/vendedlogs/states/grace-sweep-Logs`. No Grace code logged it. The chain was
+`read_case` handing `display_name` to every model → the **referee quoting it in its deliberation
+prose** → `_deliberation_note` appending that conclusion to the escalation reason → the reason being
+the Lambda's return payload → Step Functions logging the payload. Span redaction protects `gen_ai.*`
+span content; a Step Functions execution payload is not span content.
+
+**The fix is capability absence, not filtering:** `read_case` no longer returns `display_name` at
+all. Nothing needed it — `authority.py` never reads it, the action tools never use it, and the
+outreach SMS does not address the family by name. Removing it at the source closes every downstream
+path at once (model prose, escalation reasons, Step Functions logs, the ledger, future spans) rather
+than scrubbing each consumer, which is the same reasoning as layer 1 of the escalation boundary.
+**Never put a household's name, phone, or address into a tool's returned text** — a model will
+eventually quote it somewhere you are not redacting, and hard rule 9's "never in a span attribute" is
+necessary but not sufficient.
+
+
 ## The one idea that matters
 
 Grace's defining property is an **escalation boundary**: it acts alone on the routine and
@@ -892,9 +910,14 @@ These are not stylistic preferences. Breaking one is a bug.
    redaction "enabled" while exporting the full household record. So "the token is present" is not
    the same claim as "content is redacted"; `grace/observability.py`'s
    `redaction_is_configured` checks emptiness, not presence.
-9. **Never put household identity in a span attribute.** `trace_attributes` are exported
-   verbatim — the rule-8 policy covers only the five `gen_ai.*` content attributes, not custom
-   ones. `grace.case_id` yes; name, phone, or address never. Same rule as the JWT `sub`.
+9. **Never put household identity anywhere a model or a log can reach it.** Not in a span
+   attribute — `trace_attributes` are exported verbatim, and the rule-8 policy covers only the five
+   `gen_ai.*` content attributes, not custom ones. **And not in a tool's returned text**, which is
+   the wider version of this rule, learned the hard way: `read_case` used to return
+   `display_name`, a referee quoted it into its deliberation, that text became an escalation reason,
+   and the reason reached CloudWatch as a Step Functions payload — a path span redaction does not
+   cover. `grace.case_id` yes; name, phone, or address never, in any surface a model reads or a
+   service logs. Same rule as the JWT `sub`.
 
 ---
 
