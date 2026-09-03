@@ -28,7 +28,7 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 578 unit
+**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 621 unit
 tests passing (`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against
 real Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
 `testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs end to end and reports
@@ -65,8 +65,8 @@ with written reasons — say three AgentCore surfaces, never five. Plan 2 task s
 | 6 — IAM roles | **done** (out of order — no code deps) — `infra/provision_iam.py`, 489 tests. `explicitDeny` on the unverified token path verified live. **The runtime role would have denied every Nova call — see below** |
 | 7 — deploy to Runtime | **done** — `Dockerfile`, `runtime_app.py`, `agentcore/`, 556 tests. **Runtime `grace_grace-oTyyvo8stE` is READY and serving**; `c-010` escalated in 9.1s with real DynamoDB rows |
 | 8 — Lambda/Step Functions/EventBridge | **done** — `infra/{lambda_src,provision_lambda,provision_stepfunctions,provision_eventbridge}.py`, 578 tests. **The deployed sweep reports 9 acted / 3 escalated** |
-| 9 — escalation alarm + provisioning | next |
-| 10 — deployed verification + README | pending |
+| 9 — escalation alarm + provisioning | **done** — `infra/{provision_alarm,provision_all,teardown}.py`, 621 tests. **The alarm went OK on a real sweep's Sum=3.0** |
+| 10 — deployed verification + README | next |
 
 Plan 1 task state, for reference:
 
