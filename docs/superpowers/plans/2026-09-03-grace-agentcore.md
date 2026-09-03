@@ -609,7 +609,7 @@ drift here breaks the trajectory evals in a way that reads as a gate regression.
 case data to drift, and hard rule 3 needs no new enforcement surface). This store is a DynamoDB
 implementation of the *ledger*, reading cases from the same fixtures the local store does.
 
-- [ ] **Step 1: Write the failing parametrized store test**
+- [x] **Step 1: Write the failing parametrized store test**
 
 Create `tests/test_dynamo_store.py`:
 
@@ -909,14 +909,14 @@ def test_an_escalation_row_lands_on_the_queue_index():
     assert row["pk"]["S"] == "CASE#c-011"
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_dynamo_store.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.cases.dynamo_store'`. Note the
 `memory`-parametrized cases fail on the same import, which is expected: the import is at module
 scope.
 
-- [ ] **Step 3: Write `grace/cases/dynamo_store.py`**
+- [x] **Step 3: Write `grace/cases/dynamo_store.py`**
 
 ```python
 """DynamoDB case store. The deployed ledger.
@@ -1139,12 +1139,12 @@ class DynamoDBCaseStore:
         )
 ```
 
-- [ ] **Step 4: Run the store tests**
+- [x] **Step 4: Run the store tests**
 
 Run: `.venv/bin/python -m pytest tests/test_dynamo_store.py -v`
 Expected: PASS — 22 tests (9 conformance × 2 stores, plus 4 DynamoDB-specific).
 
-- [ ] **Step 5: Write the failing store-factory test**
+- [x] **Step 5: Write the failing store-factory test**
 
 Create `tests/test_store_factory.py`:
 
@@ -1192,12 +1192,12 @@ def test_whatever_it_returns_satisfies_the_protocol(monkeypatch):
     assert isinstance(build_store(), CaseStore)
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_store_factory.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'grace.store_factory'`.
 
-- [ ] **Step 7: Write `grace/store_factory.py`**
+- [x] **Step 7: Write `grace/store_factory.py`**
 
 ```python
 """Which `CaseStore` this process uses.
@@ -1246,18 +1246,18 @@ def build_store(cases: list[Case] | None = None) -> CaseStore:
     )
 ```
 
-- [ ] **Step 8: Run the factory tests**
+- [x] **Step 8: Run the factory tests**
 
 Run: `.venv/bin/python -m pytest tests/test_store_factory.py -v`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 9: Run the whole suite**
+- [x] **Step 9: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **391 tests** (365 + 22 + 4). Report the real number; every prior estimate in
 Plan 1 proved stale once written.
 
-- [ ] **Step 10: Verify the new store against the real table, once**
+- [x] **Step 10: Verify the new store against the real table, once**
 
 ```bash
 GRACE_STORE=dynamodb .venv/bin/python -c "
@@ -1278,7 +1278,7 @@ Expected: the row prints and the assertion passes. This is the one check the fak
 make — that the wire format is actually accepted by DynamoDB. Leave the row in place; it is
 synthetic and harmless.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add grace/cases/dynamo_store.py grace/store_factory.py \
