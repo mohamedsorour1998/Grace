@@ -151,7 +151,23 @@ def runtime_policy(account_id: str) -> dict:
             {
                 "Sid": "NovaOnly",
                 "Effect": "Allow",
-                "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+                # `Converse`/`ConverseStream` are **required**, not optional
+                # extras. `strands.models.bedrock` calls
+                # `self.client.converse_stream if streaming else
+                # self.client.converse` (bedrock.py:1397), so a policy granting
+                # only `InvokeModel` leaves every Nova call implicitly denied.
+                # Confirmed with the IAM simulator against this very role before
+                # the fix: InvokeModel `allowed`, Converse `implicitDeny`. The
+                # symptom would have been an AccessDenied on the first model
+                # call of the first deployed sweep, long after the tests passed.
+                # Cross-checked against a runtime already working in this
+                # account, whose role grants all four.
+                "Action": [
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                    "bedrock:Converse",
+                    "bedrock:ConverseStream",
+                ],
                 "Resource": [
                     f"arn:aws:bedrock:{region}:{account_id}:inference-profile/{p}"
                     for p in _NOVA_PROFILES
@@ -213,11 +229,41 @@ def runtime_policy(account_id: str) -> dict:
                 "Sid": "OwnLogs",
                 "Effect": "Allow",
                 "Action": [
+                    "logs:CreateLogGroup",
                     "logs:CreateLogStream",
                     "logs:PutLogEvents",
                     "logs:DescribeLogStreams",
                 ],
-                "Resource": f"arn:aws:logs:{region}:{account_id}:log-group:/aws/*",
+                # Runtime creates its own log group under
+                # /aws/bedrock-agentcore/runtimes/, so `CreateLogGroup` is needed
+                # and the ARN must cover that path. Confirmed against a runtime
+                # already working in this account, whose role grants the three
+                # write actions.
+                "Resource": [
+                    f"arn:aws:logs:{region}:{account_id}:log-group:/aws/bedrock-agentcore/*",
+                    f"arn:aws:logs:{region}:{account_id}:log-group:/aws/bedrock-agentcore/*:*",
+                ],
+            },
+            {
+                "Sid": "EcrPullOwnImage",
+                "Effect": "Allow",
+                # Required for a Container build: Runtime pulls the image from
+                # ECR before it can start the process. Without this the deploy
+                # fails at container start, not at build, and the message is not
+                # obviously about IAM.
+                #
+                # `GetAuthorizationToken` genuinely cannot be resource-scoped —
+                # it is an account-level operation that returns a registry token
+                # and AWS documents it as `Resource: "*"`. The two pull actions
+                # are scoped to this account's registry rather than left open.
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*",
+            },
+            {
+                "Sid": "EcrPullLayers",
+                "Effect": "Allow",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": f"arn:aws:ecr:{region}:{account_id}:repository/*",
             },
         ],
     }
