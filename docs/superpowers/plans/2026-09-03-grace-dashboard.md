@@ -257,12 +257,12 @@ logic at once.
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-agentcore": "3.735.0",
-    "@aws-sdk/client-dynamodb": "3.735.0",
-    "@aws-sdk/util-dynamodb": "3.735.0",
+    "@aws-sdk/client-bedrock-agentcore": "3.1125.0",
+    "@aws-sdk/client-dynamodb": "3.1125.0",
+    "@aws-sdk/util-dynamodb": "3.1125.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "jose": "6.1.0",
+    "jose": "6.2.10",
     "lucide-react": "1.30.0",
     "next": "16.3.4",
     "react": "19.2.8",
@@ -270,15 +270,15 @@ logic at once.
     "tailwind-merge": "3.6.0"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "4.1.18",
+    "@tailwindcss/postcss": "4.3.3",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.4",
-    "tailwindcss": "4.1.18",
-    "typescript": "5.9.3",
-    "vitest": "4.1.11"
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
   }
 }
 ```
