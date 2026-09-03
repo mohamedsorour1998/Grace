@@ -70,17 +70,38 @@ so no new row can carry a name, and the fixtures are synthetic throughout — no
 involved. But it has two concrete consequences for Plan 3:
 
 1. **Newest-wins dedup happens to hide it on `/queue`.** The newest escalation row for each of
-   `c-010`, `c-011`, `c-012` is post-fix and carries no name — verified. So the queue page is clean
+   `c-010`, `c-011`, `c-012` is post-fix and carries no name — verified. So the queue page was clean
    *as a side effect* of a rule chosen for a different reason.
-2. **`/case/[id]` renders the full ledger, so it would display the name.** That page reads every
-   `LEDGER#` row including the pre-fix one. Depending on a dedup rule for a PII property is exactly
-   the "scrub each consumer" posture CLAUDE.md rejects in favour of capability absence — so the fix
-   belongs at the source: **delete the three stale values, or leave them and state plainly that
-   pre-fix rows exist.** Deleting is a destructive write to the demo's evidence table and needs the
-   maintainer's explicit go-ahead; it is recorded here rather than done.
+2. **`/case/[id]` renders the full ledger, so it would have displayed the name.** That page reads
+   every `LEDGER#` row including the pre-fix one. Depending on a dedup rule for a PII property is
+   exactly the "scrub each consumer" posture CLAUDE.md rejects in favour of capability absence.
 
-Task 6 must not render a household name. Task 8's verification should re-run this scan and report
-the count rather than asserting zero.
+### Resolved: the three values were stripped on 2026-09-04
+
+On the maintainer's explicit instruction, the surname was removed from the three fields rather than
+filtered at render. The rows themselves are kept — they are real evidence of a real sweep — and only
+the identity phrase changed, `the Mensah Household` → `this household`, so the referee's argument
+still reads as it did.
+
+What was and was not touched, because the table *is* the demo's evidence:
+
+- Both rows backed up verbatim to `/tmp/grace-c012-prefix-rows-backup.json` before any write.
+- `UpdateItem` with `ConditionExpression="attribute_exists(pk)"`, setting only the named fields. No
+  key attribute, no `status`, no `escalated_at`, no `deadline`, and no `renewal_submitted` row was
+  modified. `pk`/`sk` are unchanged, so nothing moved in the GSI.
+- The substitution asserted both that it changed something and that no `Mensah` survived, so a silent
+  no-op could not report success.
+
+Verified after: a scan of all **633** rows for every fixture surname and for `+1555` returns
+**clean**; the escalation GSI still holds **17** rows across `c-010` (6), `c-012` (6), `c-011` (5);
+`c-012`'s row still reads `PENDING_CASEWORKER` with deadline `2026-10-12`. The 9/3 counts are
+untouched because they are derived from `renewal_submitted` rows and the GSI, neither of which this
+edit reached.
+
+Task 8's verification should re-run the scan and report the count. **Pre-fix CloudWatch log events
+still contain the name and cannot be unwritten** — they age out with retention. So the honest claim is
+now: fixed at the source, fixed in the running system, and fixed in durable storage; historical log
+events remain.
 
 ## Reproducing the scan
 

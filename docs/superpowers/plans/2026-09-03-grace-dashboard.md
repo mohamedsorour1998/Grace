@@ -1389,12 +1389,13 @@ Expected: exactly **three** queued cases (`c-010`, `c-011`, `c-012`) despite the
 rows, and `c-011` showing `filed: false`. **A queue longer than three means the de-duplication is
 wrong** — that is the assertion this step exists for, and the fake cannot make it.
 
-**Also check what the reader hands the pages for `c-012`.** Two pre-fix rows in the live table still
-contain a household surname in `reason`/`question`/`d_question` (see
-`docs/plan3-live-data-findings.md`) — the referee's deliberation prose, from before `read_case`
-stopped returning `display_name`. Newest-wins dedup happens to hide it on the queue, but `readCase`
-returns the whole ledger, so `/case/c-012` would render it. That is a Task 6 rendering concern and a
-Task 8 verification concern; note it here rather than discovering it in the demo.
+**Also check what the reader hands the pages for `c-012`.** Two pre-fix rows in the live table used to
+contain a household surname in `reason`/`question`/`d_question` — the referee's deliberation prose,
+from before `read_case` stopped returning `display_name`. **Those three values were stripped on
+2026-09-04** (see `docs/plan3-live-data-findings.md` for exactly what was and was not touched), so a
+table-wide scan of all 633 rows for every fixture surname and for `+1555` now returns clean. Do not
+build a render-time name filter on the strength of that history; the fix is at the source, which is
+where CLAUDE.md requires it. Task 8 re-runs the scan as a check rather than as a hope.
 
 If `tsx` is unavailable, `npx tsx` will fetch it; otherwise write the snippet to a temporary `.mts`
 file and run it with `node --experimental-strip-types`.
