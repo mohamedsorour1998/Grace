@@ -1618,7 +1618,7 @@ that has nothing to do with the entrypoint. The other three helpers have no exte
 but keep their aliases too — symmetry costs one line each and the next task to reach for one will not
 have to check.
 
-- [ ] **Step 1: Promote the four helpers in `grace/run.py`**
+- [x] **Step 1: Promote the four helpers in `grace/run.py`**
 
 Rename the four functions and add aliases immediately after each definition. Example for the first:
 
@@ -1641,13 +1641,13 @@ _gate_reason = gate_reason
 Do the same for `renewal_filed`, `outreach_sent`, and `deliberation_note`. **Do not change any
 function body.** Update the four internal call sites inside `sweep` to the new names.
 
-- [ ] **Step 2: Confirm nothing broke**
+- [x] **Step 2: Confirm nothing broke**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **396 tests**, unchanged from Task 3. A rename that changes a count means a body
 changed too.
 
-- [ ] **Step 3: Write the failing entrypoint test**
+- [x] **Step 3: Write the failing entrypoint test**
 
 Create `tests/test_entrypoint.py`:
 
@@ -1822,12 +1822,12 @@ def test_the_default_today_is_pinned():
     assert entrypoint.DEFAULT_TODAY == "2026-10-01"
 ```
 
-- [ ] **Step 4: Run it to verify it fails**
+- [x] **Step 4: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_entrypoint.py -v`
 Expected: FAIL — `ImportError: cannot import name 'entrypoint' from 'grace'`.
 
-- [ ] **Step 5: Write `grace/entrypoint.py`**
+- [x] **Step 5: Write `grace/entrypoint.py`**
 
 ```python
 """The AgentCore Runtime handler. One case per invocation.
@@ -2041,17 +2041,17 @@ def invoke(payload: dict[str, Any]) -> CaseOutcome:
     return process_case(payload)
 ```
 
-- [ ] **Step 6: Run the entrypoint tests**
+- [x] **Step 6: Run the entrypoint tests**
 
 Run: `.venv/bin/python -m pytest tests/test_entrypoint.py -v`
 Expected: PASS, 9 tests.
 
-- [ ] **Step 7: Run the whole suite**
+- [x] **Step 7: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **405 tests**. Report the real number.
 
-- [ ] **Step 8: Verify the entrypoint against a real graph, one case**
+- [x] **Step 8: Verify the entrypoint against a real graph, one case**
 
 ```bash
 .venv/bin/python -c "
@@ -2067,7 +2067,7 @@ print('OK: c-010 escalated against a real Bedrock run, nothing filed')
 Expected: `status: escalated` for `c-010` (missing `proof_of_residency`). This is one real graph
 invocation, roughly 9 Bedrock calls.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add grace/entrypoint.py grace/run.py tests/test_entrypoint.py
@@ -2133,7 +2133,7 @@ RetrievalConfig(*, top_k: int = 10, relevance_score: float = 0.2,
                 strategy_id: str | None = None, initialization_query: str | None = None)
 ```
 
-- [ ] **Step 1: Add the dependency and record why**
+- [x] **Step 1: Add the dependency and record why**
 
 In `pyproject.toml`, add to `dependencies` with this comment:
 
@@ -2148,7 +2148,7 @@ In `pyproject.toml`, add to `dependencies` with this comment:
 
 Then: `uv pip install -e ".[dev]"` (or `uv pip install bedrock-agentcore` into `.venv`).
 
-- [ ] **Step 2: Confirm the marginal cost was really 2 packages**
+- [x] **Step 2: Confirm the marginal cost was really 2 packages**
 
 ```bash
 .venv/bin/python -c "import bedrock_agentcore, websockets; print('importable')"
@@ -2164,12 +2164,12 @@ Expected: `importable`, then `PersistenceMode: ['FULL', 'NONE']` — confirming 
 taking it on trust. If more than `bedrock-agentcore` and `websockets` were installed, stop and
 report: the dependency budget was part of the approval.
 
-- [ ] **Step 3: Run the whole suite before writing anything**
+- [x] **Step 3: Run the whole suite before writing anything**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **405 tests**. A new dependency must not change a single existing result.
 
-- [ ] **Step 4: Write the failing memory test**
+- [x] **Step 4: Write the failing memory test**
 
 Create `tests/test_memory.py`:
 
@@ -2258,12 +2258,12 @@ def test_memory_is_never_attached_to_a_node_inside_the_graph():
         assert_clean(node, name)
 ```
 
-- [ ] **Step 5: Run it to verify it fails**
+- [x] **Step 5: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_memory.py -v`
 Expected: FAIL — `ImportError: cannot import name 'memory' from 'grace'`.
 
-- [ ] **Step 6: Write `grace/memory.py`**
+- [x] **Step 6: Write `grace/memory.py`**
 
 ```python
 """AgentCore Memory wiring: per-household facts across the annual gap.
@@ -2358,13 +2358,13 @@ def build_session_manager(
         return None
 ```
 
-- [ ] **Step 7: Run the memory tests**
+- [x] **Step 7: Run the memory tests**
 
 Run: `.venv/bin/python -m pytest tests/test_memory.py -v`
 Expected: PASS, 5 tests. Note the last one builds a real graph but makes no Bedrock call — building
 is free; invoking is not.
 
-- [ ] **Step 8: Write `infra/provision_memory.py`**
+- [x] **Step 8: Write `infra/provision_memory.py`**
 
 ```python
 """Create the AgentCore Memory resource and its namespace strategies.
@@ -2472,7 +2472,7 @@ if __name__ == "__main__":
     print(f"GRACE_MEMORY_ID={provision()}")
 ```
 
-- [ ] **Step 9: Provision the memory and confirm the namespaces agree**
+- [x] **Step 9: Provision the memory and confirm the namespaces agree**
 
 ```bash
 .venv/bin/python -m infra.provision_memory
@@ -2511,12 +2511,12 @@ print('OK: namespaces agree')
 Expected: the two sets match. If they do not, fix `provision_memory.py` and
 `grace/memory.py` together — never one alone.
 
-- [ ] **Step 10: Run the whole suite**
+- [x] **Step 10: Run the whole suite**
 
 Run: `.venv/bin/python -m pytest`
 Expected: PASS — **410 tests**. Report the real number.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add pyproject.toml grace/memory.py infra/provision_memory.py tests/test_memory.py

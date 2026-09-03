@@ -171,8 +171,14 @@ def _strip_thinking(text: str) -> str:
         rest = rest[end + len("</thinking>") :]
 
 
-def _deliberation_note(result: object) -> str | None:
+def deliberation_note(result: object) -> str | None:
     """The referee's conclusion, if this case went through the swarm.
+
+    Public because `grace/entrypoint.py` must brief a deployed case identically
+    to the local sweep. A second implementation would drift, and Task 7
+    documented exactly what that costs when the drifting function is the one
+    choosing what a caseworker reads: an earlier version reported a CLEAR
+    verdict on a case the referee had called AMBIGUOUS, and every test passed.
 
     Briefing text only — it never decides anything. `sweep` classifies from
     `evaluate()` and the ledger (see the module docstring), and this function
@@ -256,6 +262,13 @@ def _deliberation_note(result: object) -> str | None:
         return None
 
 
+# Retained so nothing that already imports the private name breaks. Six existing
+# tests call `run._deliberation_note(...)` directly (two in `tests/test_swarm.py`,
+# four in `tests/test_graph.py`), and Plan 2's Global Constraints forbid editing
+# an existing test file — so this alias is load-bearing, not politeness.
+_deliberation_note = deliberation_note
+
+
 @dataclass(frozen=True)
 class SweepReport:
     acted: tuple[str, ...] = ()
@@ -297,8 +310,13 @@ def _reason_text(interrupt: object) -> str:
     return str(reason)
 
 
-def _gate_reason(store: CaseStore, case_id: str, today: date) -> str | None:
+def gate_reason(store: CaseStore, case_id: str, today: date) -> str | None:
     """Why this case needs a human, or `None` if it does not.
+
+    Public because `grace/entrypoint.py` must classify a deployed case
+    identically to the local sweep. A second implementation would drift, and
+    Task 7 documented what that costs when the drifting function is the one
+    choosing what a caseworker reads.
 
     Runs the same deterministic `evaluate` the steering handler runs, directly
     on the case. This is what makes the 9/3 split a property of the data rather
@@ -325,8 +343,20 @@ def _gate_reason(store: CaseStore, case_id: str, today: date) -> str | None:
     return "; ".join(f"{r.code}: {r.detail}" for r in verdict.reasons)
 
 
-def _renewal_filed(store: CaseStore, case_id: str) -> bool:
+# Retained so nothing that already imports the private name breaks — and
+# `sweep` deliberately still calls *this* spelling. Its body binds a local
+# variable named `gate_reason`, so rewriting that call site to the public name
+# would read the local before assignment: `UnboundLocalError` on every
+# escalating case, i.e. all three of the demo's escalations, from a rename that
+# was supposed to change nothing. The alias keeps `sweep`'s body untouched.
+_gate_reason = gate_reason
+
+
+def renewal_filed(store: CaseStore, case_id: str) -> bool:
     """Whether the ledger confirms a renewal was actually filed.
+
+    Public for the same reason as `gate_reason`: the deployed entrypoint must
+    answer this question from the same source the local sweep does.
 
     The ledger, not the model transcript and not the absence of an interrupt,
     is the ground truth for what executed. `submit_renewal` writes
@@ -339,10 +369,14 @@ def _renewal_filed(store: CaseStore, case_id: str) -> bool:
         return False
 
 
-def _outreach_sent(store: CaseStore, case_id: str) -> bool:
+# Retained so nothing that already imports the private name breaks.
+_renewal_filed = renewal_filed
+
+
+def outreach_sent(store: CaseStore, case_id: str) -> bool:
     """Whether the ledger confirms the family was messaged.
 
-    Same ledger-as-ground-truth discipline as `_renewal_filed`. Surfaced in the
+    Same ledger-as-ground-truth discipline as `renewal_filed`. Surfaced in the
     escalation reason so a caseworker picking up the case knows the family has
     already been asked for the document and does not ask a second time.
     """
@@ -350,6 +384,10 @@ def _outreach_sent(store: CaseStore, case_id: str) -> bool:
         return any(e.kind == "family_message_sent" for e in store.ledger(case_id))
     except Exception:  # noqa: BLE001 — an unreadable ledger confirms nothing
         return False
+
+
+# Retained so nothing that already imports the private name breaks.
+_outreach_sent = outreach_sent
 
 
 def sweep(

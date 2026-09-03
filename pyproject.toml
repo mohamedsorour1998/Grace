@@ -18,6 +18,12 @@ dependencies = [
     # is for agents hosted outside AgentCore Runtime, and Runtime instruments
     # itself.
     "strands-agents[otel]==1.54.0",
+    # AgentCore Memory's Strands session manager lives here, NOT in
+    # strands-agents — `strands.session` ships only file/s3/repository/snapshot.
+    # Measured marginal cost against the existing venv: 2 packages
+    # (bedrock-agentcore, websockets); everything else is already satisfied by
+    # strands-agents. Smaller than the [otel] extra's 10, and first-party AWS.
+    "bedrock-agentcore>=1.22",
     "boto3>=1.43",
     "pyyaml>=6.0",
 ]
