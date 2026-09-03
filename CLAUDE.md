@@ -21,13 +21,14 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 - Spec: `docs/superpowers/specs/2026-08-28-grace-design.md`
 - Plan 1 (core, local): `docs/superpowers/plans/2026-08-28-grace-core.md`
-- Plans 2 (AgentCore deploy) and 3 (dashboard) to follow.
+- Plan 2 (AgentCore deploy): `docs/superpowers/plans/2026-09-03-grace-agentcore.md` — in progress
+- Plan 3 (dashboard) to follow.
 
 ---
 
 ## Current state
 
-**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 367 unit
+**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 544 unit
 tests passing (`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against
 real Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
 `testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs end to end and reports
@@ -48,13 +49,15 @@ with written reasons — say three AgentCore surfaces, never five. Plan 2 task s
 | 1 — naming + `grace-cases` table | **done** — `infra/{naming,provision_dynamodb}.py`, 367 tests. **Two real defects in the plan's draft; read "What Plan 2 established" below** |
 | 2 — `DynamoDBCaseStore` + store factory | **done** — `grace/cases/dynamo_store.py`, `grace/store_factory.py`, 428 tests. **Six defects in the plan's draft, three of them vacuous tests** |
 | 3 — observability | **done** — `grace/observability.py`, 438 tests at the time. **Found a hard-rule-8 hole: "token present" is not "content redacted"** |
-| 4 — Runtime entrypoint | next |
-| 5 — AgentCore Memory | pending |
+| 4 — Runtime entrypoint | **done** — `grace/entrypoint.py`, `grace/run.py` (rename only). The deployed path invokes the graph **once** and never resumes |
+| 5 — AgentCore Memory | **done** — `grace/memory.py`, `infra/provision_memory.py`, 544 tests. Memory `grace_household_memory-TCf1SS708O` ACTIVE, 365-day expiry |
 | 6 — IAM roles | **done** (out of order — no code deps) — `infra/provision_iam.py`, 489 tests. `explicitDeny` on the unverified token path verified live. **The runtime role would have denied every Nova call — see below** |
-| 7 — deploy to Runtime | pending |
+| 7 — deploy to Runtime | next |
 | 8 — Lambda/Step Functions/EventBridge | pending |
 | 9 — escalation alarm + provisioning | pending |
 | 10 — deployed verification + README | pending |
+
+Plan 1 task state, for reference:
 
 | Task | State |
 |---|---|
