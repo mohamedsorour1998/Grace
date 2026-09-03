@@ -3288,6 +3288,17 @@ ENV OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_unredacted_a
 # default `strands-agents` is indistinguishable from any other Strands app.
 ENV OTEL_SERVICE_NAME=grace
 ENV GRACE_STORE=dynamodb
+# **Required, and the CLI's own template sets it too.**
+# `BedrockAgentCoreApp.run()` auto-detects its bind host: `0.0.0.0` only if
+# `/.dockerenv` exists *or* `DOCKER_CONTAINER` is set, else `127.0.0.1`. Podman
+# does not create `/.dockerenv`, so without this the server binds loopback inside
+# the container and nothing outside can reach it — the container reports "Up",
+# `/ping` returns nothing, and no error explains why. Confirmed by reading the
+# SDK and reproducing it. Treat `DOCKER_CONTAINER` as the explicit portable
+# signal and `/.dockerenv` as a Docker-only fallback; relying on the fallback is
+# what broke. A runtime missing this would deploy, report READY, and fail every
+# invoke.
+ENV DOCKER_CONTAINER=1
 
 RUN useradd -m -u 1000 bedrock_agentcore
 USER bedrock_agentcore
