@@ -2382,19 +2382,51 @@ from infra import naming
 
 
 def provision(client=None) -> str:
-    """Create the memory if absent; return its id. Idempotent."""
+    """Create the memory if absent; return its id. Idempotent.
+
+    Four things the obvious version gets wrong, all verified against the live
+    API model:
+
+    - **`ListMemories` paginates** (`maxResults`/`nextToken`). Reading one page
+      means an existing Grace memory on page 2 is invisible and this creates a
+      duplicate. Same class as a single-page DynamoDB Query.
+    - **`CreateMemory` returns `CREATING`**, not `ACTIVE` (the status enum is
+      `CREATING|ACTIVE|FAILED|DELETING|UPDATING`). The client ships a
+      `memory_created` waiter — use it, or the namespace check that follows can
+      read an incomplete resource.
+    - **`ValidationException` is not "already exists".** Only `ConflictException`
+      earns the re-list fallback. Treating a malformed request as a conflict
+      would find the existing id, return it, and report success while silently
+      dropping whatever was invalid.
+    - **`eventExpiryDuration` is days, max 365, and 90 is wrong here.** A
+      recertification cycle is annual; the eleven-month gap between contacts is
+      the entire reason Memory exists for Grace (spec §3.7). 90 days would expire
+      the facts before the next cycle needs them.
+    """
     client = client or boto3.client("bedrock-agentcore-control", region_name=naming.REGION)
 
-    existing = client.list_memories()
-    for memory in existing.get("memories", []):
-        if memory["id"].startswith(naming.MEMORY):
-            return str(memory["id"])
+    def _find_existing() -> str | None:
+        token: str | None = None
+        while True:
+            kwargs = {"nextToken": token} if token else {}
+            page = client.list_memories(**kwargs)
+            for memory in page.get("memories", []):
+                if str(memory["id"]).startswith(naming.MEMORY):
+                    return str(memory["id"])
+            token = page.get("nextToken")
+            if not token:
+                return None
+
+    existing = _find_existing()
+    if existing:
+        return existing
 
     try:
         response = client.create_memory(
             name=naming.MEMORY,
             description="Per-household facts and preferences across annual recert cycles",
-            eventExpiryDuration=90,
+            # Days. 365 because a recert cycle is annual — see the docstring.
+            eventExpiryDuration=365,
             memoryStrategies=[
                 {
                     "semanticMemoryStrategy": {
@@ -2420,14 +2452,20 @@ def provision(client=None) -> str:
             tags=naming.TAGS,
         )
     except ClientError as exc:
-        if exc.response["Error"]["Code"] not in {"ConflictException", "ValidationException"}:
+        # Only a genuine conflict means another run won the race. A
+        # ValidationException is a malformed request and must surface.
+        if exc.response["Error"]["Code"] != "ConflictException":
             raise
-        # Another run created it between the list and the create.
-        for memory in client.list_memories().get("memories", []):
-            if memory["id"].startswith(naming.MEMORY):
-                return str(memory["id"])
+        raced = _find_existing()
+        if raced:
+            return raced
         raise
-    return str(response["memory"]["id"])
+
+    memory_id = str(response["memory"]["id"])
+    # CREATING -> ACTIVE. Without this the namespace-agreement check below can
+    # read a half-built resource and report a mismatch that is really a race.
+    client.get_waiter("memory_created").wait(memoryId=memory_id)
+    return memory_id
 
 
 if __name__ == "__main__":
