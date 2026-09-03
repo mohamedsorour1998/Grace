@@ -46,7 +46,8 @@ with written reasons — say three AgentCore surfaces, never five. Plan 2 task s
 |---|---|
 | 0 — preflight | **done** — Podman not Docker, CLI 0.28.1, CDK already bootstrapped, Transaction Search already ACTIVE |
 | 1 — naming + `grace-cases` table | **done** — `infra/{naming,provision_dynamodb}.py`, 367 tests. **Two real defects in the plan's draft; read "What Plan 2 established" below** |
-| 2 — `DynamoDBCaseStore` + store factory | next |
+| 2 — `DynamoDBCaseStore` + store factory | **done** — `grace/cases/dynamo_store.py`, `grace/store_factory.py`, 428 tests. **Six defects in the plan's draft, three of them vacuous tests** |
+| 3 — observability | next |
 | 3 — observability | pending |
 | 4 — Runtime entrypoint | pending |
 | 5 — AgentCore Memory | pending |
@@ -631,6 +632,43 @@ and both accept the same list, which is what makes it dangerous — writing the 
 and a retrieval namespace that does not match what was set at creation **retrieves nothing,
 silently**. Any agreement check must read both spellings and assert the result is non-empty, or it
 passes vacuously when the service echoes the other field.
+
+**Ledger rows prefix every `detail` key with `d_`, and that is structural, not cosmetic.** A row
+carries its own `pk`/`sk`/`case_id`/`at`/`kind` columns, and `detail` is caller-supplied. Merging
+`detail` in unprefixed lets `detail={"kind": ...}` overwrite the row's own `kind` — the field
+`sweep` classifies a case from (`renewal_submitted`). Verified: the naive merge destroys it silently.
+`ledger()` also filters on the `LEDGER#` sort-key prefix, or an escalation row surfaces as a ledger
+entry and fails on a missing `at`.
+
+**`ledger()` paginates, because a DynamoDB Query caps at 1MB and signals more via
+`LastEvaluatedKey`.** Truncation drops the *newest* rows, which is exactly where
+`renewal_submitted` lives, so a single-page read would report a filed renewal as unfiled with no
+error. The test fake pages at 3 rows so the loop genuinely iterates — a pagination loop that never
+iterates in any test is not tested.
+
+**`os.getenv(name, default)` only defaults on *absence*, not on an empty value.** `GRACE_STORE=`
+(set but blank) bypassed the in-memory default and would have had a deployed runtime write its
+ledger to memory and discard it at process exit, with the dashboard showing an empty ledger and
+nothing saying why. Both stores now raise on an unrecognized value, including blank — the same
+allowlist polarity as `APPROVE_DECISIONS`.
+
+**Non-finite floats never reach the ledger.** DynamoDB rejects Infinity and NaN, and
+`Decimal("Infinity")` serializes cleanly then raises out of the *read* path later. The sharper
+reason is the Task 1 finding above: a NaN disables every comparison it appears in, so it reads back
+as a number and behaves like nothing. `math.isfinite()` guards it at the boundary. Real DynamoDB
+additionally rejects >38 significant digits, which is what catches `Decimal(1.1)`'s 52-digit binary
+noise if anyone reintroduces it.
+
+**A test fake must be able to fail the way the real service fails.** `FakeTable`'s original float
+check could never fire, because the serializer stringifies every number before it gets there. It now
+enforces the three things the live table enforces (non-finite, >38 digits, exponent overflow) and
+pages its queries. A fake that only ever succeeds is worse than no fake, because it makes the suite
+look like it covers the boundary.
+
+**Parametrizing over two implementations proves nothing unless you check both ran.**
+`tests/test_dynamo_store.py` records the store types a run actually exercised and asserts the set.
+Verified by sabotage: making the fixture return the in-memory store for both parameters leaves 41
+tests passing and fails only that guard.
 
 
 ## The one idea that matters
