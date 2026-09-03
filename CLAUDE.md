@@ -759,6 +759,31 @@ success while silently dropping an invalid strategy), and an id prefix match nee
 this account holds `name` and `name_v2` pairs.
 
 
+**"Runtime instruments itself" is wrong in a specific and consequential way — verified on the
+deployed runtime.** Runtime injects the OTEL environment variables and creates a log group, but it
+does **not** install an in-process tracer provider. So `setup_telemetry()` correctly skips (it gates
+on `AGENT_OBSERVABILITY_ENABLED`, which Runtime sets), nothing else fills the gap,
+`_current_trace_id()` returns `None`, and every deployed ledger row carries `trace_id: NULL`.
+Measured after a successful deployed invocation: **zero traces in the account**, no `aws/spans` log
+group, and no other deployed project in this account exports spans either — so this is not something
+Grace broke. Transaction Search is ACTIVE, so the destination exists; nothing is producing spans to
+send to it.
+
+**Do not "fix" this by adding `aws-opentelemetry-distro`, switching the CMD to
+`opentelemetry-instrument`, or removing the `AGENT_OBSERVABILITY_ENABLED` guard.** Task 9 of Plan 1
+established that losing the trace ID must never cost a ledger row, and the deployed rows are all
+present with correct sequence numbers and UTC-normalized sort keys. `trace_id: NULL` is *honest* —
+tracing genuinely was not configured for that run. The consequence to be honest about instead: a
+Transaction Search query on `grace.gate_decision` returns nothing until spans exist, so that claim
+cannot be made in the README as written.
+
+**`DOCKER_CONTAINER=1` is required in the Dockerfile.** `BedrockAgentCoreApp.run()` binds `0.0.0.0`
+only if `/.dockerenv` exists *or* `DOCKER_CONTAINER` is set, else `127.0.0.1`. Podman creates no
+`/.dockerenv`, so without it the server binds loopback inside the container, `/ping` returns nothing,
+and the container still reports healthy. The CLI's own template sets this variable — treat it as the
+explicit portable signal and `/.dockerenv` as a Docker-only fallback.
+
+
 ## The one idea that matters
 
 Grace's defining property is an **escalation boundary**: it acts alone on the routine and

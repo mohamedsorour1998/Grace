@@ -4448,7 +4448,16 @@ submission; a failure in `test_a_clean_case_is_filed` or
 `test_an_escalating_case_does_something_rather_than_nothing` is liveness-shaped — re-run once before
 concluding anything, since Plan 1 recorded one timeout in five runs under real Bedrock latency.
 
-- [ ] **Step 3: Prove the demo's central claim with the Transaction Search query**
+- [ ] **Step 3: The Transaction Search query — expect it to return nothing, and say so**
+
+**Read this before running it.** Task 7 established on the deployed runtime that no spans are being
+produced at all: zero traces in the account, no `aws/spans` log group, and no other deployed project
+in this account exports spans either. Runtime injects the OTEL environment variables and creates a
+log group, but does **not** install an in-process tracer provider — so `setup_telemetry()` correctly
+skips on `AGENT_OBSERVABILITY_ENABLED` and nothing fills the gap. Every deployed ledger row therefore
+carries `trace_id: NULL`.
+
+So run the query, and record the real result:
 
 ```bash
 aws logs start-query --region us-east-1 \
@@ -4457,17 +4466,28 @@ aws logs start-query --region us-east-1 \
   --query-string 'fields @timestamp, attributes.grace.case_id | filter attributes.grace.gate_decision = "escalate" | stats count() by attributes.grace.case_id'
 ```
 
-Then fetch the results with `aws logs get-query-results --query-id <id>`.
+Expected, honestly: **an error that the log group does not exist**, or zero rows.
 
-Expected: exactly **three** distinct case ids — `c-010`, `c-011`, `c-012`. This is the demo's central
-claim executed rather than narrated. Record the query and its output in
-`docs/deployed-verification.md`.
+**Do not make this pass by weakening anything.** Adding `aws-opentelemetry-distro`, switching the CMD
+to `opentelemetry-instrument`, or removing the `AGENT_OBSERVABILITY_ENABLED` guard would each trade a
+verified safety property for a nice-to-have, and Task 9 of Plan 1 established that losing a trace ID
+must never cost a ledger row. `trace_id: NULL` is honest.
 
-If the query returns nothing, the span attributes are not reaching CloudWatch. Check
-`OTEL_SERVICE_NAME=grace` and that `trace_attributes` are set on the agents — but **do not** move
-this assertion to the ledger to make it pass. The ledger already proves what executed; this query is
-specifically about the traces, and Appendix E is explicit that an eval assertion never migrates from
-the ledger to a span.
+**What replaces this as the demo's central evidence:** the DynamoDB escalation queue. Query the
+`escalation-queue` GSI for `status = PENDING_CASEWORKER` and assert it holds exactly the three cases.
+That is the same claim — three escalations, each with a reason — read from the store that is ground
+truth rather than from sampled spans, which is the ordering Appendix E already prefers ("never move an
+eval assertion from the ledger to a span"). Record both: the query that works, and the one that does
+not yet, with the reason.
+
+```bash
+aws dynamodb query --table-name grace-cases --region us-east-1 \
+  --index-name escalation-queue \
+  --key-condition-expression '#s = :s' \
+  --expression-attribute-names '{"#s":"status"}' \
+  --expression-attribute-values '{":s":{"S":"PENDING_CASEWORKER"}}' \
+  --query 'Items[].{case:case_id.S,reason:reason.S,deadline:deadline.S}' --output table
+```
 
 - [ ] **Step 4: Confirm no household identity reached a span**
 
