@@ -4660,7 +4660,7 @@ Go back through this document and mark each completed step. An unticked box in a
 indistinguishable from work that was skipped — Plan 1 ended with two such boxes, and reconstructing
 whether the work had happened cost real time.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add README.md CLAUDE.md docs/runbook-deploy.md docs/deployed-verification.md \
