@@ -2645,6 +2645,38 @@ function withEnv<T>(run: () => Promise<T>): Promise<T> {
 }
 
 describe("recordDecision", () => {
+  it("builds a runtime client that cannot retry a non-idempotent invocation", () =>
+    withEnv(async () => {
+      // Not tuning — a safety property, and asserted because a config value
+      // nobody checks can be deleted silently. `InvokeAgentRuntime` re-runs the
+      // whole graph per attempt, so a retry could file one renewal twice.
+      // Measured against a black-hole socket: the JS SDK default is **3**
+      // attempts, `maxAttempts: 1` is exactly 1. (boto3 differs: `max_attempts:
+      // 1` still gave 2 there, only `total_max_attempts` gave 1.)
+      //
+      // No client is injected here, so the module builds its own — which is the
+      // path the deployed route takes and the only path this config is on.
+      const { BedrockAgentCoreClient } = await import("@aws-sdk/client-bedrock-agentcore");
+      const built: unknown[] = [];
+      const spy = vi.spyOn(BedrockAgentCoreClient.prototype, "send")
+        .mockImplementation(async function (this: unknown) {
+          built.push(this);
+          return { response: new TextEncoder().encode(JSON.stringify({ status: "escalated" })) };
+        } as never);
+      try {
+        await recordDecision(permit(), "c-010", { dynamo: new FakeDynamo() as never });
+        expect(built.length).toBe(1);
+        const client = built[0] as { config: { maxAttempts: unknown } };
+        // `maxAttempts` is a provider on a resolved client config.
+        const attempts = typeof client.config.maxAttempts === "function"
+          ? await (client.config.maxAttempts as () => Promise<number>)()
+          : client.config.maxAttempts;
+        expect(attempts).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+    }));
+
   it("writes the decision row BEFORE invoking the runtime", () =>
     withEnv(async () => {
       // The opposite ordering to action.py, and deliberately so: the row claims
@@ -2928,7 +2960,26 @@ export async function recordDecision(
 
   // 3. An approve re-invokes Grace with the flag. The gate re-evaluates the case
   //    record; the flag affects only wording, never the verdict.
-  const runtime = clients.runtime ?? new BedrockAgentCoreClient({ region: env.region });
+  //
+  // `maxAttempts: 1` is a safety property, not tuning. `InvokeAgentRuntime` is
+  // NOT idempotent — each attempt re-runs the whole graph against the same case,
+  // so a retried invocation could file one renewal more than once. Measured
+  // against a black-hole socket (accepts, never replies, so the accept count IS
+  // the number of HTTP attempts): the **JS SDK default makes 3 attempts**;
+  // `maxAttempts: 1` makes exactly 1. Note this differs from boto3, where
+  // `max_attempts: 1` still gave 2 and only `total_max_attempts` gave 1 (Plan 2)
+  // — do not carry that finding across verbatim, the knobs are not the same.
+  //
+  // `throwOnRequestTimeout` is the second half. Without it the SDK logs
+  // "a request has exceeded the configured requestTimeout" and **hangs** rather
+  // than throwing — measured. A hung request handler in an SSR route holds the
+  // caseworker's browser open with no error to report. 870s mirrors the Lambda's
+  // budget from Plan 2 and clears the 512s a real run has been measured at.
+  const runtime = clients.runtime ?? new BedrockAgentCoreClient({
+    region: env.region,
+    maxAttempts: 1,
+    requestHandler: { requestTimeout: 870_000, throwOnRequestTimeout: true },
+  });
   let graceOutcome: string;
   let filed = false;
   try {
@@ -3653,9 +3704,16 @@ worst way.** Verified against the live API and the Amplify documentation on 2026
   green build and a successful deploy.** The app would serve, the pages would render their empty and
   error states, and nothing in the build log would say why. That is the same class of failure as the
   wrong platform value: wrong rather than broken.
-- The role needs a **custom trust policy naming `amplify.amazonaws.com`** as the service principal. The
-  documentation states outright that attaching a role whose trust relationship is wrong is refused with
-  an error, so this is checkable rather than a guess.
+- The role needs a **custom trust policy naming `amplify.amazonaws.com`** as the service principal, and
+  this was **probed both ways** on 2026-09-04 rather than taken from the docs. A role trusting
+  `lambda.amazonaws.com` is refused at `CreateApp` with
+  `BadRequestException: The compute role provided cannot be assumed by Amplify.`; the identical call
+  with `amplify.amazonaws.com` is **accepted and echoes `computeRoleArn` back** on the app. Both halves
+  mattered: a refusal alone would not prove the correct principal works, and an acceptance alone would
+  not prove the parameter is validated rather than ignored. Practical consequence: a wrong role fails
+  during provisioning, not after a green deploy — so `provision_amplify` must not swallow a
+  `BadRequestException` here (Plan 2's "a provisioning script that swallows a not-ready error reports
+  success while the control is absent").
 - Grant least privilege, scoped to what the dashboard actually does: `dynamodb:Query` and
   `dynamodb:GetItem` on the `grace-cases` table **and its `escalation-queue` index** (an index needs
   its own ARN — `table/grace-cases/index/escalation-queue` — or the GSI query is denied while the table

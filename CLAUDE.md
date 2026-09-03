@@ -1027,6 +1027,28 @@ it still using invented ones, leaving the implementor to guess. The ordering tes
 GSI order all differ on the same input — which is what makes the assertion distinguish "sorted by
 deadline" from "whatever the GSI returned".
 
+**The JS SDK retries `InvokeAgentRuntime` three times by default, and the knob is not boto3's.**
+Plan 2 established the hazard — the call is **not idempotent**, so each attempt re-runs the whole graph
+against the same case and could file one renewal more than once. Task 5's draft built
+`new BedrockAgentCoreClient({ region })` with no retry config, reintroducing it in a different SDK.
+Measured against a black-hole socket (accepts, never replies, so the accept count *is* the attempt
+count): **default 3, `maxAttempts: 1` exactly 1** — and confirmed off the client's own resolved config,
+where `maxAttempts` is a provider function. **Do not carry Plan 2's boto3 finding across verbatim:**
+there `max_attempts: 1` still gave 2 and only `total_max_attempts` gave 1; here `maxAttempts: 1` is
+sufficient and `total_max_attempts` does not exist. Same hazard, different knob.
+
+**`requestTimeout` alone does not bound a JS SDK call — it warns and hangs.** Measured:
+`@smithy/node-http-handler - [WARN] a request has exceeded the configured requestTimeout. Init client
+requestHandler with throwOnRequestTimeout=true to turn this into an error.` The promise stays pending,
+which in an SSR route holds the caseworker's browser open with no error to report. Always pass
+`throwOnRequestTimeout: true` alongside it.
+
+**An extra payload key is harmless on the deployed runtime, verified live rather than by reading.**
+`process_case` validates the container type and reads `case_id`/`today` by key with no allowlist.
+Invoking `grace_grace-oTyyvo8stE` with `caseworker_approved: true` added returned 200 in 10.2s and
+`c-010` **still escalated** on `missing_document` — so the approval flag changes no verdict, and it
+changes nothing on the deployed version 2, which does not know the key yet.
+
 
 ## The one idea that matters
 

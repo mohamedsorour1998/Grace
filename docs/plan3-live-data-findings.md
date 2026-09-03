@@ -246,6 +246,26 @@ Confirmed from the Amplify documentation:
   auto-branch creation or PR previews. Grace's app has one branch and neither feature enabled, so
   app-level is the simpler correct choice — and keeping those two features off is what keeps it correct.
 
+### Probed both ways, not read
+
+Two throwaway IAM roles and two throwaway Amplify apps on 2026-09-04, all deleted afterwards
+(`list_apps` → `(none)`, no `grace-probe` roles remain):
+
+```text
+WRONG trust (lambda.amazonaws.com)   REFUSED   BadRequestException: The compute role
+                                               provided cannot be assumed by Amplify.
+RIGHT trust (amplify.amazonaws.com)  ACCEPTED  appId=d13gywd03jb8ct
+                                               computeRoleArn echoed back on the app
+```
+
+Both halves were necessary. The refusal alone would not show that the correct principal works; the
+acceptance alone would not show that the parameter is **validated** rather than silently ignored — which
+is the failure mode that would put this right back where it started, an app that deploys green and
+cannot read DynamoDB. The practical consequence is good news: a wrong compute role fails during
+provisioning with a legible message, so `provision_amplify` must **not** catch `BadRequestException`
+here. Plan 2's rule applies unchanged — a provisioning script that swallows an error reports success
+while the control is absent.
+
 Least privilege for what the dashboard actually does, with the real ARNs:
 
 ```text
@@ -265,3 +285,66 @@ a bug in the queue page rather than a missing permission.
 **No `Scan` and no `DeleteItem`.** `lib/cases.ts` queries rather than scans, and granting `Scan` would
 let a bug read every ledger row in the table. Nothing in the app deletes, and a dashboard that can
 delete a ledger row can destroy the audit trail the entire project rests on.
+
+---
+
+## The runtime invocation: the JS SDK retries by default, and the numbers differ from boto3 (Task 5)
+
+Plan 2 established that `invoke_agent_runtime` is **not idempotent** and that boto3's default retried it
+five times — each attempt re-running the whole graph against the same case, which could file one renewal
+five times. Task 5's draft constructed `new BedrockAgentCoreClient({ region })` with no retry config at
+all, so the same class of bug was about to be reintroduced in a different SDK.
+
+Measured the same way Plan 2 measured boto3 — a black-hole HTTP server that accepts the connection and
+never replies, so the accept count **is** the number of HTTP attempts:
+
+```text
+default (no maxAttempts)       attempts=3   1.7s  TimeoutError
+maxAttempts: 1                 attempts=1   0.5s  TimeoutError
+```
+
+Confirmed independently off the client's own resolved config, where `maxAttempts` is a provider
+function: `default → 3`, `maxAttempts: 1 → 1`.
+
+**Do not carry Plan 2's boto3 finding across verbatim.** There, `{"mode": "standard", "max_attempts": 1}`
+still produced **2** attempts and only `total_max_attempts` gave 1. In the JS SDK `maxAttempts: 1` is
+sufficient and `total_max_attempts` does not exist. The hazard is identical; the knob is not.
+
+### The second half: `requestTimeout` warns and hangs rather than throwing
+
+The first probe run timed out at two minutes with the SDK logging:
+
+```text
+@smithy/node-http-handler - [WARN] a request has exceeded the configured 1200 ms
+requestTimeout. Init client requestHandler with throwOnRequestTimeout=true to
+turn this into an error.
+```
+
+So a `requestTimeout` alone does not bound anything — it warns and the promise stays pending. In an SSR
+route that holds the caseworker's browser open with no error to report and no row to explain it. Both
+`requestTimeout` and `throwOnRequestTimeout: true` are now in the plan, at 870s to mirror the Lambda's
+budget from Plan 2 and to clear the 512s a real run has actually been measured at.
+
+A test asserting `maxAttempts` resolves to 1 was added to Task 5, because a config value nobody checks
+is one a later edit can delete silently. It spies on `BedrockAgentCoreClient.prototype.send` so the
+module builds its **own** client — the path the deployed route takes, and the only path this config is on.
+
+### Verified: an unknown payload key is harmless on the deployed runtime
+
+The dashboard's approve path adds `caseworker_approved` to the invocation payload. `process_case`
+validates the container type and reads `case_id`/`today` by key with no allowlist, so an extra key is
+ignored. Confirmed against the **live** runtime rather than only by reading: invoking
+`grace_grace-oTyyvo8stE` with `{"case_id": "c-010", "today": "2026-10-01", "caseworker_approved": true}`
+returned HTTP 200 in 10.2s and still escalated:
+
+```text
+status    escalated
+reason    missing_document: proof_of_residency is not on file (Grace has already messaged the family.)
+deadline  2026-10-18        ← matches the real deadline, not the plan's invented one
+trace_id  null              ← the documented tracing gap, unchanged
+```
+
+Which is the property that matters twice over: the flag changes nothing about the verdict, and it
+changes nothing about the *deployed* runtime today, because version 2 does not know the key yet. A
+household missing a required document still escalates when a caseworker approves it.
+
