@@ -22,6 +22,14 @@ STATE_MACHINE = "grace-sweep"
 SCHEDULE_RULE = "grace-daily-sweep"
 ALARM = "grace-escalations-below-expected"
 
+# The state machine's CloudWatch log group. Named here, not rebuilt at each use,
+# because two tasks must agree on it: `provision_stepfunctions` creates it and
+# points Step Functions logging at it, and `provision_alarm` builds the
+# escalation metric filter over it. If they disagreed the filter would match
+# nothing, and `TreatMissingData: breaching` would report that as a permanent
+# breach — a false alarm indistinguishable from a real one.
+SFN_LOG_GROUP = f"/aws/vendedlogs/states/{STATE_MACHINE}-Logs"
+
 # Tagged at creation so Grace's spend is separable in Cost Explorer against a
 # $50 credit budget, and so teardown can identify what it owns.
 TAGS = {"Project": "Grace", "Environment": "dev"}

@@ -3831,25 +3831,57 @@ def definition(account_id: str, lambda_arn: str) -> dict:
 
 def provision(lambda_arn: str, client=None, role_arn: str | None = None,
               account_id: str | None = None) -> str:
-    """Create or update the state machine; return its ARN."""
+    """Create or update the state machine; return its ARN.
+
+    **`loggingConfiguration` is not optional here.** Step Functions logging
+    defaults to `OFF`, and Task 9's alarm counts escalations from a metric filter
+    over this state machine's log group — with logging off, no log events exist,
+    the filter matches nothing, and the alarm sits on missing data forever. The
+    two tasks have to agree about the log group name, so it comes from
+    `naming.SFN_LOG_GROUP`.
+
+    `includeExecutionData=True` is what puts the per-case outcome payload
+    (`{"status": "escalated", ...}`) into the log event, which is what the filter
+    pattern matches on. Without it the events carry state transitions only.
+    Household identity is not in that payload — the outcome carries `case_id`,
+    `reason`, and `deadline`, never a name, phone, or address (hard rule 9).
+    """
     client = client or boto3.client("stepfunctions", region_name=naming.REGION)
     if account_id is None:
         account_id = boto3.client("sts").get_caller_identity()["Account"]
     if role_arn is None:
         role_arn = provision_iam.provision()["stepfunctions"]
 
+    logs = boto3.client("logs", region_name=naming.REGION)
+    try:
+        logs.create_log_group(logGroupName=naming.SFN_LOG_GROUP)
+    except logs.exceptions.ResourceAlreadyExistsException:
+        pass
+    log_group_arn = (
+        f"arn:aws:logs:{naming.REGION}:{account_id}:log-group:{naming.SFN_LOG_GROUP}:*"
+    )
+    logging_configuration = {
+        "level": "ALL",
+        "includeExecutionData": True,
+        "destinations": [{"cloudWatchLogsLogGroup": {"logGroupArn": log_group_arn}}],
+    }
+
     body = json.dumps(definition(account_id, lambda_arn))
     arn = f"arn:aws:states:{naming.REGION}:{account_id}:stateMachine:{naming.STATE_MACHINE}"
     try:
         response = client.create_state_machine(
             name=naming.STATE_MACHINE, definition=body, roleArn=role_arn,
+            loggingConfiguration=logging_configuration,
             tags=[{"key": k, "value": v} for k, v in naming.TAGS.items()],
         )
         return str(response["stateMachineArn"])
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "StateMachineAlreadyExists":
             raise
-        client.update_state_machine(stateMachineArn=arn, definition=body, roleArn=role_arn)
+        client.update_state_machine(
+            stateMachineArn=arn, definition=body, roleArn=role_arn,
+            loggingConfiguration=logging_configuration,
+        )
         return arn
 ```
 
@@ -4060,7 +4092,13 @@ from infra import naming
 
 _NAMESPACE = "Grace"
 _METRIC = "EscalatedCases"
-_LOG_GROUP = f"/aws/vendedlogs/states/{naming.STATE_MACHINE}-Logs"
+# The state machine's log group. Read from `naming` rather than rebuilt here:
+# Task 8 creates it and configures Step Functions to write there, and this task
+# builds a metric filter over it. If the two names disagree the filter matches
+# nothing and the alarm sits on missing data forever, which
+# `TreatMissingData: breaching` then reports as a permanent breach — a false
+# alarm indistinguishable from a real one.
+_LOG_GROUP = naming.SFN_LOG_GROUP
 
 
 def alarm_spec() -> dict:

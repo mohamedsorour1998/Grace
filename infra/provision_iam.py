@@ -320,6 +320,45 @@ def _stepfunctions_policy(account_id: str) -> dict:
                 "Action": "dynamodb:PutItem",
                 "Resource": f"arn:aws:dynamodb:{region}:{account_id}:table/{naming.TABLE}",
             },
+            {
+                "Sid": "DeliverExecutionLogs",
+                "Effect": "Allow",
+                # Required, not hygiene: Task 9's escalation alarm counts
+                # `"status": "escalated"` from a metric filter over this state
+                # machine's log group, and Step Functions logging defaults to
+                # OFF. Without these actions `create_state_machine` rejects the
+                # logging configuration outright, and without logging the filter
+                # matches nothing — the alarm then sits on missing data, which
+                # `TreatMissingData: breaching` reports as a permanent breach
+                # indistinguishable from a real one.
+                #
+                # Step Functions' log delivery requires the account-level
+                # `*Delivery*`/`*ResourcePolicy*` actions on `Resource: "*"` —
+                # AWS documents this and they cannot be resource-scoped. The
+                # write actions are scoped to Grace's own log group.
+                "Action": [
+                    "logs:CreateLogDelivery",
+                    "logs:GetLogDelivery",
+                    "logs:UpdateLogDelivery",
+                    "logs:DeleteLogDelivery",
+                    "logs:ListLogDeliveries",
+                    "logs:PutResourcePolicy",
+                    "logs:DescribeResourcePolicies",
+                    "logs:DescribeLogGroups",
+                ],
+                "Resource": "*",
+            },
+            {
+                "Sid": "WriteExecutionLogs",
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                ],
+                "Resource": (
+                    f"arn:aws:logs:{region}:{account_id}:log-group:{naming.SFN_LOG_GROUP}:*"
+                ),
+            },
         ],
     }
 
