@@ -27,13 +27,34 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Plan 1 is complete — all 9 tasks done.** 360 unit tests passing
-(`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against real
-Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
+**Plan 1 is complete — all 9 tasks done. Plan 2 (AgentCore deploy) is in progress.** 367 unit
+tests passing (`.venv/bin/python -m pytest`), plus 23 trajectory evals passing separately against
+real Bedrock (`.venv/bin/python -m pytest evals/` — not part of the fast suite;
 `testpaths = ["tests"]` excludes `evals/`). `grace sweep` runs end to end and reports
 **9 acted / 3 escalated**, the evals prove the gate ordering holds against five real graph
 invocations, and every ledger row now carries the OTEL trace ID that joins it to its
-CloudWatch trace. Plan 2 (AgentCore deploy) is next.
+CloudWatch trace.
+
+- Plan 2 spec: `docs/superpowers/specs/2026-09-03-grace-agentcore-design.md`
+- Plan 2 tasks: `docs/superpowers/plans/2026-09-03-grace-agentcore.md`
+- Deploy runbook (verified CLI flags): `docs/runbook-deploy.md`
+
+**Plan 2 scope: Runtime + DynamoDB + Memory.** Gateway and Identity are deliberately deferred
+with written reasons — say three AgentCore surfaces, never five. Plan 2 task state:
+
+| Task | State |
+|---|---|
+| 0 — preflight | **done** — Podman not Docker, CLI 0.28.1, CDK already bootstrapped, Transaction Search already ACTIVE |
+| 1 — naming + `grace-cases` table | **done** — `infra/{naming,provision_dynamodb}.py`, 367 tests. **Two real defects in the plan's draft; read "What Plan 2 established" below** |
+| 2 — `DynamoDBCaseStore` + store factory | next |
+| 3 — observability | pending |
+| 4 — Runtime entrypoint | pending |
+| 5 — AgentCore Memory | pending |
+| 6 — IAM roles | pending |
+| 7 — deploy to Runtime | pending |
+| 8 — Lambda/Step Functions/EventBridge | pending |
+| 9 — escalation alarm + provisioning | pending |
+| 10 — deployed verification + README | pending |
 
 | Task | State |
 |---|---|
@@ -539,6 +560,77 @@ empty comparison cannot pass vacuously (the Task 8 lesson).
 characters.** `SpanContext.is_valid` is precomputed at construction and already rejects a
 trace ID outside the 128-bit range — verified: `2**128` gives `is_valid == False`, `2**128 - 1`
 formats to exactly 32 hex chars. No separate length guard is needed.
+
+### What Plan 2 established — follow these
+
+**The container engine is Podman, not Docker.** Docker's binary is installed but its daemon is
+not running and is not used. `podman machine start`, then
+`export DOCKER_HOST="$(podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}'
+podman-machine-default)"` — that export is mandatory for any Docker-API client, including the
+`agentcore` CLI, because `podman-mac-helper` is not installed so `/var/run/docker.sock` does not
+exist. The VM is native `linux/arm64`, which is what Runtime requires, so `--platform linux/arm64`
+is a no-op rather than an emulated cross-build. Note the socket path lives under `$TMPDIR` and
+changes if the machine is recreated — read it, never hardcode it.
+
+**The `agentcore` CLI is 0.28.1 and the appendices were written against 0.24.2. Four command
+shapes differ, all verified against `--help`:** `deploy` deploys **via CDK** (already bootstrapped
+in this account, `CDKToolkit` from Feb 2026); `create` takes `--name`/`--project-name` rather than
+a positional and **scaffolds a new project** rather than registering existing code; `add` is
+subcommand-based (`agent`, `harness`, `memory`, `gateway`, …); and Grace needs
+`add agent --type byo --code-location . --entrypoint runtime_app.py` — `--type create` would
+generate a fresh agent and ignore `grace/` entirely. `docs/runbook-deploy.md` is authoritative over
+the appendices wherever they disagree.
+
+**The Runtime entrypoint is `BedrockAgentCoreApp`, not a bare handler.** Verified by scaffolding a
+template agent and reading it: `app = BedrockAgentCoreApp()`, `@app.entrypoint` on
+`invoke(payload, context)`, `app.run()` under `__main__`. It is a Starlette app on **port 8080**
+(8000 MCP, 9000 A2A per the Runtime service contract). Its own docstring says payloads are passed
+through **unchanged**, so the app must validate the payload shape itself. Grace's entrypoint is a
+plain `def` returning a dict; the template's is an async generator only because it is a chat agent.
+**Two template defaults Grace rejects:** `aws-opentelemetry-distro` and
+`CMD ["opentelemetry-instrument", ...]` — both forbidden here because Runtime instruments itself.
+
+**A sort key built from `isoformat()` is only correctly ordered if the datetime is UTC.**
+`LedgerEntry` requires an *aware* datetime and nothing more, so any offset reaches the key builder,
+and DynamoDB compares a range key **bytewise**: `2026-10-01T08:00:00-05:00` is one hour *after*
+`2026-10-01T12:00:00+00:00` in real time but sorts *before* it as a string. That silently inverts
+`ScanIndexForward=True` — the ordering Task 8's evals read to assert reads precede actions — with no
+error anywhere. `infra/naming.py`'s `_utc_stamp` normalizes first. **The naive-datetime `raise` must
+stay ahead of the conversion:** a naive `.astimezone()` silently assumes the local clock, which
+looks correct on a UTC host and is wrong where the code was written. It also refuses
+`utcoffset() is None` — verified reachable, not defensive padding: a `tzinfo` subclass may return no
+offset, `LedgerEntry` *accepts* such a value, and `isoformat()` then emits no offset at all.
+
+**A provisioning script that swallows a "not ready yet" error reports success while the control is
+absent.** `provision_dynamodb` originally caught `ContinuousBackupsUnavailableException` and moved
+on; measured across three runs on throwaway tables, point-in-time recovery came out
+`ENABLED, ENABLED, DISABLED` — one run in three left the ledger table unrecoverable while the script
+exited 0. The fix is a bounded retry on that error code only **plus a read-back that is the sole
+arbiter of success**: "the API call returned" and "the control is on" are different claims, and only
+the second one matters. Non-transient errors re-raise immediately rather than burning the retry
+budget. **Raising is correct here even though Grace's observability paths deliberately fail open** —
+`infra/` is a provisioning script, not the request path, so a loud failure blocks a deploy and the
+operator re-runs, which is exactly what idempotence exists for.
+
+**Prove a new test fails against the code it was written to catch.** Both Task 1 defects were
+invisible to the plan's own tests: the sort-key tests used only UTC inputs, so they passed against
+the buggy implementation. The fix was confirmed by reverting `naming.py` in a throwaway copy and
+watching the two new tests fail there while the five original ones passed either way. This is Task
+8's vacuity lesson applied forward — a test that cannot fail is indistinguishable from a passing one
+in every report.
+
+**Task 8's state machine definition is pre-verified.** It was validated against the real
+`stepfunctions:validate_state_machine_definition` API (`result: OK`, zero diagnostics) including the
+`States.Format` intrinsics, `$$.State.EnteredTime`, and the `dynamodb:putItem` parameters nested
+inside the Map's `ItemProcessor`. If it stops validating, re-run the validator rather than guessing
+— it reports the exact path of the offending field.
+
+**`namespaces` is a legacy parameter on a memory strategy; use `namespaceTemplates`.** The live
+`CreateMemory` model documents it as *"a legacy parameter, use `namespaceTemplates`"*. Both exist
+and both accept the same list, which is what makes it dangerous — writing the legacy field succeeds,
+and a retrieval namespace that does not match what was set at creation **retrieves nothing,
+silently**. Any agreement check must read both spellings and assert the result is non-empty, or it
+passes vacuously when the service echoes the other field.
 
 
 ## The one idea that matters
