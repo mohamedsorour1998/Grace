@@ -437,6 +437,8 @@ same audit trail read two ways.
 
 from __future__ import annotations
 
+import time
+
 import boto3
 from botocore.exceptions import ClientError
 
@@ -486,16 +488,50 @@ def provision(client=None) -> str:
 
     client.get_waiter("table_exists").wait(TableName=naming.TABLE)
 
-    # An audit trail for benefits decisions should be recoverable. Cheap, and
-    # the kind of control a benefits-domain reviewer looks for.
-    try:
-        client.update_continuous_backups(
-            TableName=naming.TABLE,
-            PointInTimeRecoverySpecification={"PointInTimeRecoveryEnabled": True},
+    # Point-in-time recovery, with a bounded retry and a verified read-back.
+    #
+    # **Do not swallow `ContinuousBackupsUnavailableException`.** Measured, not
+    # theorised: running this function three times against throwaway tables gave
+    # PITR `ENABLED, ENABLED, DISABLED` — one run in three hit a transient
+    # refusal in the moments after `table_exists` returns, and a bare
+    # `except ... : pass` left the ledger table with recovery **off** while the
+    # script exited 0 reporting success. An audit trail for benefits decisions
+    # that is silently unrecoverable is precisely the "control that looks present
+    # and is absent" failure this codebase keeps finding.
+    #
+    # Verified while fixing it: enabling PITR on an already-enabled table
+    # succeeds and returns `ENABLED` (so the retry is safely idempotent), and
+    # `describe_continuous_backups` reads the new value back immediately (so the
+    # verification below cannot produce a false alarm).
+    #
+    # Raising is the right failure here, unlike most of Grace's fail-open
+    # observability decisions: this is a provisioning script, not the request
+    # path. A loud failure blocks a deploy and the operator re-runs — the script
+    # is idempotent precisely so that is the recovery path.
+    last_error: Exception | None = None
+    for _ in range(10):
+        try:
+            client.update_continuous_backups(
+                TableName=naming.TABLE,
+                PointInTimeRecoverySpecification={"PointInTimeRecoveryEnabled": True},
+            )
+            break
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ContinuousBackupsUnavailableException":
+                raise
+            last_error = exc
+            time.sleep(3)
+
+    status = client.describe_continuous_backups(TableName=naming.TABLE)[
+        "ContinuousBackupsDescription"
+    ]["PointInTimeRecoveryDescription"]["PointInTimeRecoveryStatus"]
+    if status != "ENABLED":
+        raise RuntimeError(
+            f"point-in-time recovery is {status} on {naming.TABLE} after retrying "
+            f"(last error: {last_error}). The ledger is the audit trail for every "
+            "autonomous benefits decision, so it must be recoverable. This script "
+            "is idempotent — re-run it."
         )
-    except ClientError as exc:
-        if exc.response["Error"]["Code"] != "ContinuousBackupsUnavailableException":
-            raise
 
     return naming.TABLE
 
@@ -515,6 +551,21 @@ aws dynamodb describe-table --table-name grace-cases --region us-east-1 \
 
 Expected: both runs succeed (that is the idempotence check, not a mistake), and
 `{"status": "ACTIVE", "gsi": "escalation-queue"}`.
+
+Then verify the durability control actually landed, rather than trusting the script's exit code:
+
+```bash
+aws dynamodb describe-continuous-backups --table-name grace-cases --region us-east-1 \
+  --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus' \
+  --output text
+```
+
+Expected: `ENABLED`. **This check exists because the original version of this script silently left it
+`DISABLED` one run in three** — a transient `ContinuousBackupsUnavailableException` in the moments
+after `table_exists` returns, swallowed by a bare `except`, exiting 0. Measured across three real
+runs: `ENABLED, ENABLED, DISABLED`. The retry-and-verify above is the fix; this command is the
+independent confirmation, because "the script said it worked" is exactly the evidence that failed
+here.
 
 - [ ] **Step 7: Run the whole suite**
 
