@@ -404,10 +404,14 @@ it. Nothing in this README should be read as saying the submission is complete.
 | Architecture diagram | [`docs/architecture.md`](docs/architecture.md) (Mermaid, renders on GitHub) and [`docs/architecture.png`](docs/architecture.png) |
 | AWS Builder ID | **@sorour** |
 | Live demo link *(optional, scores better)* | Present — **[grace.rosettacloud.app](https://grace.rosettacloud.app)** |
-| **≤5-minute demo video** | **Not recorded. Outstanding.** Must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
-| **builder.aws blog post** *(optional, bonus points)* | **Not written. Outstanding.** Must be public on builder.aws.com with "Agents for Humans" in the title |
+| **≤5-minute demo video** | **Not recorded. Outstanding.** The script, shot list, and figures are ready in [docs/demo-video-handout.md](docs/demo-video-handout.md) — must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
+| **builder.aws blog post** *(optional, bonus points)* | **Not published. Outstanding.** Drafted in [docs/builder-blog-post.md](docs/builder-blog-post.md) — must be public on builder.aws.com with "Agents for Humans" in the title |
 
 **AWS Builder ID:** `@sorour`
+
+Both remaining artifacts are drafted rather than done. Each carries
+`<replace this text by a screenshot of …>` markers where a capture belongs, so the writing is finished
+and only the recording and the screenshots remain.
 
 ---
 
