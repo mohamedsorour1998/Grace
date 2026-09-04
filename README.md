@@ -396,15 +396,18 @@ it. Nothing in this README should be read as saying the submission is complete.
 
 | Required artifact | State |
 |---|---|
-| Public repository | Present — [`mohamedsorour1998/Grace`](https://github.com/mohamedsorour1998/Grace), MIT |
+| Project built with the required tools | Present — Strands Agents SDK, Amazon Bedrock (Nova only), AgentCore Runtime + Memory, deployed on AWS |
+| Text description of features and functionality | This README, plus [docs/dashboard-verification.md](docs/dashboard-verification.md) and [docs/deployed-verification.md](docs/deployed-verification.md) for the evidence |
+| Public code repository | Present — [`mohamedsorour1998/Grace`](https://github.com/mohamedsorour1998/Grace) |
+| MIT license, visible in the About section | Present — [LICENSE](LICENSE), detected by GitHub as MIT |
 | README | This file |
 | Architecture diagram | [`docs/architecture.md`](docs/architecture.md) (Mermaid, renders on GitHub) and [`docs/architecture.png`](docs/architecture.png) |
-| **≤5-minute demo video** | **Not recorded.** Outstanding. |
-| **AWS Builder ID** | `TODO(sorour)` — see below |
+| AWS Builder ID | **@sorour** |
+| Live demo link *(optional, scores better)* | Present — **[grace.rosettacloud.app](https://grace.rosettacloud.app)** |
+| **≤5-minute demo video** | **Not recorded. Outstanding.** Must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
+| **builder.aws blog post** *(optional, bonus points)* | **Not written. Outstanding.** Must be public on builder.aws.com with "Agents for Humans" in the title |
 
-**AWS Builder ID:** `TODO(sorour)` — fill in before submitting. It is an account identifier that cannot
-be read from this repository or from the AWS API, so it is left as an explicit placeholder rather than
-guessed at.
+**AWS Builder ID:** `@sorour`
 
 ---
 
