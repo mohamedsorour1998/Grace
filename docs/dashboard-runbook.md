@@ -435,8 +435,132 @@ exit code.
 
 ## Running locally
 
-Filled in by Task 6.
+Four `web/` gates plus the Python suite. `npm run build` is the one that matters — it is what Amplify
+runs, so a green `typecheck` and `test` with a failing `build` is not a deployable app.
+
+```bash
+cd web && npm run typecheck && npm run lint && npm run test && npm run build
+.venv/bin/python -m pytest        # 648, and web/ may never change it
+```
+
+To serve the dashboard against the live table:
+
+```bash
+cd web
+GRACE_TABLE_NAME=grace-cases \
+GRACE_ESCALATION_INDEX=escalation-queue \
+GRACE_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-east-1:<AWS_ACCOUNT_ID>:runtime/grace_grace-oTyyvo8stE \
+COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_HXs3b0APR \
+COGNITO_CLIENT_ID=11ejmthb9mdrfkm5s2dm51jdiv \
+COGNITO_DOMAIN=https://grace-caseworkers.auth.us-east-1.amazoncognito.com \
+DASHBOARD_URL=http://localhost:3000 \
+AWS_REGION=us-east-1 npm run dev
+```
+
+All six are required and there is no `NEXT_PUBLIC_` among them. `readEnv()` throws on a missing or
+blank name, including `GRACE_RUNTIME_ARN`, which the read pages never use — deliberately, so a
+dashboard whose reads work while its decide route is misconfigured refuses to start rather than
+failing at the moment a caseworker tries to decide.
+
+### Step 6, read against the live table (2026-09-04)
+
+The three page components were rendered server-side against the real `grace-cases` table with a
+verified session, and the markup inspected. Reads only; nothing was written.
+
+```text
+===== / (sweep) =====
+read 12 of 12 — acted=9 escalated=3 incomplete=0
+  c-001  acted     filed=true  program=medicaid  deadline=2026-10-15
+  c-002  acted     filed=true  program=snap      deadline=2026-09-30
+  c-003  acted     filed=true  program=medicaid  deadline=2026-10-31
+  c-004  acted     filed=true  program=snap      deadline=2026-10-05
+  c-005  acted     filed=true  program=medicaid  deadline=2026-11-15
+  c-006  acted     filed=true  program=snap      deadline=2026-10-20
+  c-007  acted     filed=true  program=medicaid  deadline=2026-10-25
+  c-008  acted     filed=true  program=snap      deadline=2026-10-10
+  c-009  acted     filed=true  program=medicaid  deadline=2026-11-01
+  c-010  escalated filed=false program=-         deadline=2026-10-18  missing_document: …
+  c-011  escalated filed=false program=-         deadline=2026-10-22  material_income_change: …
+  c-012  escalated filed=false program=-         deadline=2026-10-12  A caseworker must decide. …
+  <span class="text-acted">9 handled alone</span>
+  <span class="text-escalate">3 waiting on you</span>
+  sweep-strip blocks: 12          household identity in markup: NONE
+
+===== /queue =====
+rows after de-duplication: 3  (the GSI itself holds 19)
+  <h1>3 households need a decision.</h1>
+  reason-code chips rendered: 2   household identity in markup: NONE
+
+===== /case/… =====
+  c-001  acted     filed=true  program="medicaid" ledger=52  form offered: false  identity: NONE
+  c-010  escalated filed=false program=""         ledger=65  form offered: true   identity: NONE
+  c-011  escalated filed=false program=""         ledger=41  form offered: true   identity: NONE
+  c-012  escalated filed=false program=""         ledger=49  form offered: true   identity: NONE
+  every ledger chronological: true
+```
+
+**The 9/3 split renders correctly and no household identity reaches any page.** Four things worth
+recording beyond that:
+
+- **The queue de-duplicates 19 GSI rows to 3.** The index has grown from 17 → 18 → 19 as sweeps ran;
+  treat every such number as a measurement with a date. A queue longer than three means the
+  newest-wins dedup regressed.
+- **Two reason-code chips on three escalations, and that is correct.** `c-012`'s newest reason begins
+  `"A caseworker must decide. source_conflict: …"`, so the text before the first colon is not one of
+  `authority.py`'s eight codes and `splitReason` declines to render a chip. A first-colon split would
+  have put `A caseworker must decide. source_conflict` in a monospaced chip that implies the gate
+  emitted it.
+- **`program` is empty for all three escalated cases**, because `d_program` exists only on
+  `renewal_submitted` rows. The page writes the dash; `lib/cases.ts` returns `""`.
+- **Every ledger row carries `trace_id: null`.** Honest — Runtime never installed an in-process tracer
+  provider. The audit trail drops the key rather than rendering an empty column that reads as a fault.
+
+**A browser sign-in was not possible and a token was minted instead.** The `grace-dashboard` client
+permits only `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`, so there is no non-interactive way
+to obtain a real ID token, and adding `ALLOW_ADMIN_USER_PASSWORD_AUTH` would mean an
+`UpdateUserPoolClient` — a **full replace** (Task 4's finding) against a live resource, to look at a
+page. The `NODE_ENV === "test"` JWKS injection covers this and the *data* still came from the live
+table. The refusal side was measured separately against a real `next start`, where that injection is
+unreachable.
+
+### The pages had no session verification, measured against a real server
+
+`proxy.ts`'s docstring asserted `verifySession` "still refuses on every page and on the decide route."
+True of the decide route, false of every page: `grep verifySession app/` matched only the auth callback
+and the decide route, and no page read a cookie at all. Against `next start` on the live table:
+
+```text
+before                                          after
+/        no cookie       307 → /login           307 → /login
+/        forged cookie   200, 45143 bytes       307 → /login
+/queue   forged cookie   200                    307 → /login
+/case/…  forged cookie   200                    307 → /login
+```
+
+The 45143-byte response carried **all twelve case ids, all three typed escalation reasons, and the
+9-handled/3-waiting headline** — to a cookie whose value was the literal string
+`totally.forged.token`. Not a forged JWT; an unsigned sentence. `lib/session.ts` closes it: every page
+calls `requireSession()` before touching `lib/cases.ts`, so an unauthenticated request performs no
+DynamoDB read either.
+
+**Two follow-ups on that fix, both of which passed the suite before being caught.**
+
+1. **`verifySession` never throws, so `requireSession`'s `catch` was unreachable** — `issuer()` and
+   `clientId()` are called *inside* its own `try`, so even a fully unset `COGNITO_ISSUER` returns
+   `null`. Probed with a forged string, `123`, `{}`, and `[]`: all `null`. A version of that `catch`
+   fabricating `{ sub: "x", role: "caseworker", … }` — a complete bypass — passed **all 155 tests**,
+   because no input could reach the branch. The guard now injects a throwing verifier through
+   `vi.doMock`, and the fabricating version fails it.
+2. **`cookies()` sat above the `try`**, so the one call in that function which genuinely can fail
+   (it throws outside a request scope) was the one its fail-closed handling did not cover. Same shape
+   as Plan 1 Task 6's `list_documents`: "this function already fails closed" is not the same claim as
+   "every line in it is inside the `try`".
+
+**A source-shape assertion is not a behavioural one.** The first version of this guard grepped for
+`/catch\s*{[^}]*session = null/` and the fabricating `catch` matched it loosely enough to pass. Assert
+by *calling* the function.
 
 ## Deploying
 
 Filled in by Task 7.
+

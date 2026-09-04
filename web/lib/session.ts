@@ -42,17 +42,34 @@ import type { SessionIdentity } from "@/lib/types";
  *  branch on the result — there is no falsy value to ignore. Same reasoning as
  *  `verifySession` having no middle value between an identity and `null`.
  *
- *  A `verifySession` that *throws* (an unset `COGNITO_ISSUER` or
- *  `COGNITO_CLIENT_ID`) is treated as no session, exactly as the decide route
- *  treats it: a verifier that cannot run has authenticated nobody. Fail closed. */
+ *  **The `catch` assigns `null`, and the reason it must is not that it fires
+ *  today — it is that nothing proves it cannot.** Measured while testing this
+ *  file: `verifySession` never throws for any input, because `issuer()` and
+ *  `clientId()` are called *inside* its own `try`, so even an unset
+ *  `COGNITO_ISSUER` comes back as `null` rather than as an exception (probed with
+ *  a forged string, `123`, `{}`, and `[]` — all `null`). So this `catch` is
+ *  currently unreachable, and a version of it that fabricated
+ *  `{ role: "caseworker" }` passed all 155 tests precisely because no input could
+ *  reach it. That is the Plan 2 lesson about a fake that cannot fail: an
+ *  unreachable branch is still shipped code, and the next edit to `cognito.ts`
+ *  that moves a `throw` outside that `try` makes this one live. The value that
+ *  fails closed is the only correct one to leave here, and
+ *  `__tests__/render.test.ts` asserts it by *calling* this function with a
+ *  throwing verifier rather than by grepping for the assignment — a source-shape
+ *  guard was what the fabricated version slipped past. */
 export async function requireSession(): Promise<SessionIdentity> {
-  const jar = await cookies();
-  const token = jar.get(SESSION_COOKIE)?.value;
-
   let session: SessionIdentity | null;
   try {
-    session = await verifySession(token);
+    // `cookies()` is inside the `try` on purpose. It throws outside a request
+    // scope, and with it above the `try` that throw propagated past this
+    // function's own fail-closed handling — so the one call here that genuinely
+    // can fail was the one not covered. Plan 1 Task 6 found the identical shape
+    // in `list_documents`: "this function already fails closed" is not the same
+    // claim as "every line in it is inside the `try`".
+    const jar = await cookies();
+    session = await verifySession(jar.get(SESSION_COOKIE)?.value);
   } catch {
+    // A verifier that could not run has authenticated nobody. Fail closed.
     session = null;
   }
   if (session === null) redirect("/login");

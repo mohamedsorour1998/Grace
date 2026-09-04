@@ -369,36 +369,64 @@ describe("the pages", () => {
   });
 
   it("refuses when the verifier itself cannot run, rather than inventing a session", async () => {
-    // BEHAVIOURAL, not a source grep, and the difference was measured. An
-    // earlier version of this test asserted `/catch\s*{[^}]*session = null/`
-    // against the file's text — and a `catch` fabricating
-    // `{ sub: "x", role: "caseworker", expiresAt: Date.now()+9e6 }` still matched
-    // it loosely enough to pass. All 154 tests were green against a complete
-    // authentication bypass. A guard on the shape of the source is not a guard on
-    // what the function does.
+    // BEHAVIOURAL, and the first two attempts at this test both passed against a
+    // `catch` that fabricated `{ sub: "x", role: "caseworker", … }` — a complete
+    // authentication bypass, green on all 155 tests. Why, measured:
     //
-    // An unset `COGNITO_ISSUER` makes `verifySession` throw. A verifier that
-    // cannot run has authenticated nobody, so the only safe answer is the
-    // redirect — never a synthesised identity, which would hand a caseworker role
-    // to an unauthenticated request whenever configuration was missing.
-    const issuer = process.env.COGNITO_ISSUER;
-    const clientId = process.env.COGNITO_CLIENT_ID;
+    //   1. A source grep (`/catch\s*{[^}]*session = null/`) matched the
+    //      fabricating version loosely enough to pass. A guard on the shape of
+    //      the source is not a guard on what the function does.
+    //   2. Deleting COGNITO_ISSUER does not make `verifySession` throw —
+    //      `issuer()` is called INSIDE its own `try`, so a missing variable comes
+    //      back as `null`. Probed with a forged string, `123`, `{}`, and `[]`:
+    //      all `null`, never an exception. The `catch` was never reached.
+    //
+    // So the throw has to be injected. `cognito.ts` is mocked to throw the way a
+    // misconfigured verifier would, which is the only route into that branch —
+    // and with it mocked, a fabricated session makes this test fail.
+    const previous = process.env.COGNITO_ISSUER;
     vi.resetModules();
     vi.doMock("next/headers", () => ({
       cookies: async () => ({ get: () => ({ value: "totally.forged.token" }) }),
     }));
+    vi.doMock("@/lib/cognito", () => ({
+      SESSION_COOKIE: "grace_session",
+      verifySession: async () => {
+        throw new Error("COGNITO_ISSUER is not set.");
+      },
+    }));
     try {
-      delete process.env.COGNITO_ISSUER;
-      delete process.env.COGNITO_CLIENT_ID;
       const { requireSession } = await import("@/lib/session");
-      // `redirect()` throws `NEXT_REDIRECT`. Asserting it *throws* is the
-      // assertion: a returned value here is a session nobody authenticated.
+      // `redirect()` throws `NEXT_REDIRECT`. That it *throws* is the assertion: a
+      // returned value here is a caseworker session nobody authenticated.
+      await expect(requireSession()).rejects.toThrow(/NEXT_REDIRECT/);
+    } finally {
+      vi.doUnmock("@/lib/cognito");
+      vi.doUnmock("next/headers");
+      vi.resetModules();
+      if (previous !== undefined) process.env.COGNITO_ISSUER = previous;
+    }
+  });
+
+  it("fails closed when the cookie jar itself throws", async () => {
+    // `cookies()` throws outside a request scope. It sat ABOVE `requireSession`'s
+    // `try` at first, so the one call in that function which genuinely can fail
+    // was the one its fail-closed handling did not cover — verified by mocking the
+    // throw and watching it propagate rather than redirect. Plan 1 Task 6 found
+    // the identical shape in `list_documents`, where an `OverflowError` escaped a
+    // `try` whose indentation had not moved to cover a new loop.
+    vi.resetModules();
+    vi.doMock("next/headers", () => ({
+      cookies: async () => {
+        throw new Error("`cookies` was called outside a request scope.");
+      },
+    }));
+    try {
+      const { requireSession } = await import("@/lib/session");
       await expect(requireSession()).rejects.toThrow(/NEXT_REDIRECT/);
     } finally {
       vi.doUnmock("next/headers");
       vi.resetModules();
-      if (issuer !== undefined) process.env.COGNITO_ISSUER = issuer;
-      if (clientId !== undefined) process.env.COGNITO_CLIENT_ID = clientId;
     }
   });
 
