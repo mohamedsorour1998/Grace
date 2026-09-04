@@ -1754,7 +1754,7 @@ turns a cookie into a `SessionIdentity` or into `null`. The verifier is where a 
 authentication bypass, so it is tested like the gate.
 
 **Files:**
-- Create: `infra/provision_cognito.py`, `web/lib/cognito.ts`, `web/middleware.ts`, `web/app/login/page.tsx`, `web/app/api/auth/callback/route.ts`
+- Create: `infra/provision_cognito.py`, `web/lib/cognito.ts`, `web/proxy.ts`, `web/app/login/page.tsx`, `web/app/api/auth/callback/route.ts`
 - Test: `tests/test_infra_cognito.py`, `web/__tests__/cognito.test.ts`
 
 **Interfaces:**
@@ -1790,7 +1790,7 @@ the email is deliberately *not* read into `SessionIdentity` and never written to
 Appendix D.4's reason: inbound JWT claims are logged to CloudTrail, which is outside every redaction
 Grace has.
 
-- [ ] **Step 1: Write the failing Python test**
+- [x] **Step 1: Write the failing Python test**
 
 `tests/test_infra_cognito.py`:
 
@@ -1866,35 +1866,65 @@ def test_the_scopes_do_not_include_anything_write_shaped():
 def test_the_role_attribute_is_explicitly_readable():
     """**The one that makes sign-in work at all.**
 
-    Verified against the live API documentation: when `ReadAttributes` is
-    omitted, the client may read only `email_verified`,
-    `phone_number_verified`, and the pool's *standard* attributes — a custom
-    attribute is not among them. So without naming `custom:role` here it never
-    reaches the ID token, `verifySession` refuses every legitimate caseworker,
-    and the symptom reads as "auth is broken" rather than "one attribute is
-    unreadable". It fails closed, which is the right direction and still means
-    nobody can sign in.
+    Verified against a real ID token from a throwaway pool: with
+    `ReadAttributes` naming `custom:role`, the claim arrives as
+    `custom:role: caseworker`. When `ReadAttributes` is omitted, the client may
+    read only `email_verified`, `phone_number_verified`, and the pool's
+    *standard* attributes — a custom attribute is not among them. So without
+    naming `custom:role` here it never reaches the ID token, `verifySession`
+    refuses every legitimate caseworker, and the symptom reads as "auth is
+    broken" rather than "one attribute is unreadable". It fails closed, which is
+    the right direction and still means nobody can sign in.
     """
     assert provision_cognito.ROLE_CLAIM in provision_cognito.CLIENT_SPEC["ReadAttributes"]
+
+
+def test_the_client_cannot_write_the_claim_that_authorises_it():
+    """`WriteAttributes` must be PRESENT and must exclude `custom:role`.
+
+    An earlier draft omitted the key entirely and called that capability
+    absence. Measured on a throwaway pool, that is inverted: with
+    `WriteAttributes` omitted, a signed-in user's `UpdateUserAttributes` against
+    an ungranted *mutable* custom attribute **succeeded** — omission grants every
+    attribute, as the AWS docs state outright. `custom:role` survived only
+    because the schema marks it `Mutable: False`, so the draft claimed two
+    guards and shipped one.
+
+    Presence is therefore the assertion that matters, not absence. With the list
+    set and `custom:role` excluded, the same write is refused with
+    `NotAuthorizedException: A client attempted to write unauthorized attribute`
+    — an authorisation refusal rather than an immutability one.
+    """
+    spec = provision_cognito.CLIENT_SPEC
+    assert "WriteAttributes" in spec, "omitting this grants write access to everything"
+    assert provision_cognito.ROLE_CLAIM not in spec["WriteAttributes"]
+    # And the schema's immutability is the second guard, not the only one.
+    role = next(a for a in provision_cognito.pool_spec()["Schema"] if a["Name"] == "role")
+    assert role["Mutable"] is False
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_cognito.py -v`
 Expected: FAIL — `ImportError: cannot import name 'provision_cognito' from 'infra'`.
 
-- [ ] **Step 3: Write `infra/provision_cognito.py`**
+- [x] **Step 3: Write `infra/provision_cognito.py`**
 
-**Five of this draft's assumptions were probed on throwaway pools on 2026-09-04 and all five hold** —
-do not re-derive them, and do not "simplify" any of them away:
+**Nine of this draft's assumptions were probed on throwaway pools on 2026-09-04. Seven hold, and
+two were wrong** — do not re-derive the seven, and do not restore either of the two:
 
 | Probed | Result |
 |---|---|
-| `Schema` name `role` → claim name | Round-trips as `custom:role` in `SchemaAttributes`. The `custom:` prefix is Cognito's, not something to write yourself. |
-| `ReadAttributes: ["email", "custom:role"]` | Accepted and echoed back verbatim. Omitting it leaves `ReadAttributes` **empty**, which per the API docs means standard attributes only — so `custom:role` would be unreadable and `verifySession` would refuse every caseworker. |
-| `admin_create_user` with an immutable custom attribute | Accepted. The user lands in **`FORCE_CHANGE_PASSWORD`**, which cannot sign in — so the `admin_set_user_password(Permanent=True)` call below is **required**, not a convenience. After it, status is `CONFIRMED`. |
+| `Schema` name `role` → claim name | Round-trips as `custom:role` in `SchemaAttributes`, and appears as `custom:role` in a real ID token. The `custom:` prefix is Cognito's, not something to write yourself. |
+| `ReadAttributes: ["email", "custom:role"]` | Accepted and echoed back verbatim, and the claim **does** reach the ID token (measured on a real `admin_initiate_auth` result: `custom:role: caseworker`). Omitting it leaves `ReadAttributes` **absent**, which per the API docs means standard attributes only — so `custom:role` would be unreadable and `verifySession` would refuse every caseworker. |
+| `admin_create_user` with an immutable custom attribute | Accepted, and `custom:role` is present on the user immediately. The user lands in **`FORCE_CHANGE_PASSWORD`**, which cannot sign in — so the `admin_set_user_password(Permanent=True)` call below is **required**, not a convenience. After it, status is `CONFIRMED`. |
 | Re-creating the same user | `UsernameExistsException`, exactly as the `except` expects. |
 | Re-creating the same domain on the same pool | `InvalidParameterException` with message `Domain already exists.` — the code the `except` already allows. `AliasExistsException` was not observed, but leave it listed; it is the documented code for a domain taken by *another* pool. |
+| A pool created with no `UserPoolTier` | Comes back **`ESSENTIALS`**, not `LITE`. This matters because managed login (the newer sign-in pages) requires Essentials or above; Lite gets only the classic hosted UI. `create_user_pool_domain` returned `ManagedLoginVersion: 1` — the **classic hosted UI**, which is what `hostedUiUrl`'s `/login` path targets. Do not "upgrade" to `ManagedLoginVersion: 2` without also rewriting that URL builder and re-testing the redirect; version 1 needs no branding style and works out of the box. |
+| Token validity round-trip | `IdTokenValidity: 60` with `TokenValidityUnits: {"IdToken": "minutes"}` echoes back exactly. `EnableTokenRevocation` defaults to `True`; `RefreshTokenValidity` defaults to **30 days**, which is far longer than the hour the cookie lives — harmless here because nothing exchanges the refresh token, but do not add a refresh path without shortening it. |
+| The JWKS URI and signing algorithm | Fetched from a real pool in this account: `jwks_uri` is exactly `${issuer}/.well-known/jwks.json`, which is what `cognito.ts` builds, and `id_token_signing_alg_values_supported` is **`["RS256"]` and nothing else** — so the `algorithms: ["RS256"]` allowlist matches what Cognito actually offers rather than over-restricting it. **Two keys are published, not one** (`use: "sig"`, `alg: "RS256"`): Cognito signs ID tokens and access tokens with *different* keys, so an access token's `kid` will not match an ID token's. That is why the resolver must select by `kid` rather than taking `keys[0]`, and it is a second, independent reason the `token_use` check is not merely defensive. Note the discovery endpoints live on `cognito-idp.<region>.amazonaws.com`, **not** on the pool's hosted-UI domain. |
+| ~~`WriteAttributes` omitted = capability absence~~ | **WRONG, and inverted.** With `WriteAttributes` omitted, a signed-in user's `UpdateUserAttributes` against an ungranted **mutable** custom attribute **SUCCEEDED**. Omission grants *every* attribute. See the long comment on `WriteAttributes` below for the three-way probe and the fix. |
+| ~~`update_user_pool_client` patches~~ | **WRONG.** It is a **full replace**: an update naming only `ClientName` left `ReadAttributes`, `CallbackURLs`, and `AllowedOAuthFlows` **absent** afterwards. It also rejects `GenerateSecret` with `ParamValidationError` — not a `ClientError`, so no `except ClientError` catches it. Both handled in `provision` below. |
 
 ```python
 """The caseworker user pool. Idempotent: re-running is the recovery path.
@@ -1960,15 +1990,34 @@ CLIENT_SPEC: dict = {
     # broken" rather than "one attribute is unreadable". Fails closed, which is
     # the right direction and still unusable.
     "ReadAttributes": ["email", ROLE_CLAIM],
-    # **`WriteAttributes` is deliberately absent, and must stay absent.** Probed
-    # on a throwaway pool: Cognito *accepts* `custom:role` in `WriteAttributes`
-    # even though the schema marks it `Mutable: False`. Granting it would let a
-    # signed-in caseworker call `UpdateUserAttributes` against their own role —
-    # the immutable flag would still refuse, but that is one guard where there
-    # should be two. The role is set once by `admin_create_user`, which is an
-    # admin API and not bound by this list, so nothing legitimate needs write
-    # access. Capability absence again: the client cannot rewrite the claim that
-    # authorises it, because it was never granted the ability to try.
+    # **`WriteAttributes` must be set, and must NOT contain `custom:role`.**
+    # An earlier draft omitted it entirely and called that capability absence.
+    # That is backwards, and it was measured on a throwaway pool on 2026-09-04:
+    # with `WriteAttributes` omitted, a signed-in user's `UpdateUserAttributes`
+    # call against an ungranted **mutable** custom attribute **SUCCEEDED**.
+    # Omission grants every attribute, exactly as the AWS docs say ("When you
+    # create an app client and don't customize attribute read and write
+    # permissions, Amazon Cognito grants read and write permissions to all user
+    # pool attributes"). `custom:role` survived that draft only because the
+    # schema marks it `Mutable: False` — the plan claimed two guards and shipped
+    # one, with the comment asserting the opposite of the behaviour.
+    #
+    # Setting the list is what makes the refusal a *permission* refusal. Probed
+    # both ways on the same pool:
+    #   WriteAttributes omitted, write custom:scratch (mutable) -> SUCCEEDED
+    #   WriteAttributes: ["custom:scratch"], write custom:role  ->
+    #       NotAuthorizedException: A client attempted to write unauthorized attribute
+    #   WriteAttributes omitted, write custom:role (immutable)   ->
+    #       InvalidParameterException: user.custom:role: Attribute cannot be updated.
+    # The third is the immutability guard, not an authorisation one, which is why
+    # it could not be read as evidence that omission withholds anything.
+    #
+    # `email` alone: nothing in the dashboard writes it, but a client with an
+    # empty `WriteAttributes` cannot be updated later without a full replace
+    # (see the converge note in `provision`), and a required attribute must be
+    # writable. The role is set once by `admin_create_user`, an admin API that
+    # this list does not bind, so nothing legitimate needs write access to it.
+    "WriteAttributes": ["email"],
     # An hour. Long enough for a caseworker's session, short enough that a
     # leaked token expires before it is useful.
     "IdTokenValidity": 60,
@@ -2052,7 +2101,24 @@ def provision(client=None, callback_urls: list[str] | None = None) -> dict:
     else:
         # Converge: a re-run must apply the intended callback URLs, not leave
         # whatever a previous run wrote.
-        client.update_user_pool_client(**{**spec, "ClientId": client_id})
+        #
+        # **`UpdateUserPoolClient` is a FULL REPLACE, not a patch** — measured on
+        # a throwaway pool on 2026-09-04. A minimal update naming only
+        # `ClientName` left `ReadAttributes`, `CallbackURLs`, and
+        # `AllowedOAuthFlows` all **absent** from the subsequent
+        # `DescribeUserPoolClient`. So this call must send every field it wants
+        # to keep, which is why it reuses the whole `spec` rather than sending a
+        # delta. If someone later "tidies" this into a two-key update, the
+        # deployed client silently loses its OAuth flows and `custom:role` read
+        # permission, and every caseworker's sign-in starts failing closed with
+        # no error at provisioning time.
+        #
+        # `GenerateSecret` must be stripped: it is a create-only parameter and
+        # botocore raises `ParamValidationError` (not a `ClientError`, so no
+        # `except ClientError` would catch it) when it appears in an update.
+        # Verified — the error names the exact allowed parameter list.
+        update = {k: v for k, v in spec.items() if k != "GenerateSecret"}
+        client.update_user_pool_client(**update, ClientId=client_id)
 
     # The hosted UI domain. One API call, and it saves building sign-in forms.
     try:
@@ -2097,7 +2163,7 @@ if __name__ == "__main__":
         print(f"{key}: {value}")
 ```
 
-- [ ] **Step 4: Run the Python tests and provision for real**
+- [x] **Step 4: Run the Python tests and provision for real**
 
 ```bash
 .venv/bin/python -m pytest tests/test_infra_cognito.py -v
@@ -2106,7 +2172,7 @@ export AWS_PAGER=""
 .venv/bin/python -m infra.provision_cognito   # idempotence: same ids, no new user
 ```
 
-Expected: 7 tests pass; both runs print the same `pool_id` and `client_id`. **Record the seeded
+Expected: 8 tests pass; both runs print the same `pool_id` and `client_id`. **Record the seeded
 password from the first run** — it is printed once and is not recoverable. Then verify the claim
 actually landed on the user, because a missing custom attribute is silent until sign-in:
 
@@ -2118,7 +2184,7 @@ aws cognito-idp admin-get-user --user-pool-id "$POOL" --username caseworker-01 \
 
 Expected: `[{"Name": "custom:role", "Value": "caseworker"}]`.
 
-- [ ] **Step 5: Write the failing session-verification test**
+- [x] **Step 5: Write the failing session-verification test**
 
 `web/__tests__/cognito.test.ts`:
 
@@ -2242,7 +2308,7 @@ describe("verifySession — the one acceptance", () => {
 });
 ```
 
-- [ ] **Step 6: Write `web/lib/cognito.ts`**
+- [x] **Step 6: Write `web/lib/cognito.ts`**
 
 ```ts
 /**
@@ -2305,7 +2371,17 @@ function keys(): KeyResolver {
     // resolver is used here only to keep the shape parallel to the remote one.
     return (async (header: { kid?: string }) => {
       const { importJWK } = await import("jose");
-      const jwk = parsed.keys.find(k => k.kid === header.kid) ?? parsed.keys[0];
+      // Select by `kid` and REFUSE when it does not match — no `?? keys[0]`
+      // fallback. A real Cognito pool publishes **two** signing keys (measured):
+      // one for ID tokens and one for access tokens. A resolver that falls back
+      // to the first key when the `kid` misses would happily verify a token
+      // signed by any key in the set, which is precisely the property the
+      // wrong-key test exists to disprove. This path is test-only, so the
+      // failure mode is not a production bypass — it is worse in a subtler way:
+      // it would make the suite unable to tell a correct verifier from one that
+      // ignores `kid`, and that is the Task 8 vacuity lesson.
+      const jwk = parsed.keys.find(k => k.kid === header.kid);
+      if (!jwk) throw new Error(`no key for kid ${header.kid}`);
       return importJWK(jwk as never, "RS256");
     }) as unknown as KeyResolver;
   }
@@ -2394,9 +2470,14 @@ export async function exchangeCode(
 }
 ```
 
-- [ ] **Step 7: Write the middleware, the login page, and the callback**
+- [x] **Step 7: Write the proxy, the login page, and the callback**
 
-`web/middleware.ts`:
+`web/proxy.ts` — **not `middleware.ts`.** Next 16.3.4 deprecated that convention and prints
+`⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.` on every build, and
+clean output rather than a zero exit code is this project's bar. `PROXY_FILENAME = "proxy"` is present
+in `next/dist/lib/constants.js`, so the new name is supported here rather than aspirational; the
+exported function is `proxy`, and the compiled output still reports `ƒ Proxy (Middleware)`.
+**Never ship both files — that is a hard error, not a warning.**
 
 ```ts
 import { NextResponse, type NextRequest } from "next/server";
@@ -2413,7 +2494,7 @@ import { SESSION_COOKIE } from "@/lib/cognito";
  * matters. `__tests__/route-guard.test.ts` proves the write path refuses on its
  * own, with no middleware involved.
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   if (request.cookies.get(SESSION_COOKIE)) return NextResponse.next();
   const login = new URL("/login", request.url);
   return NextResponse.redirect(login);
@@ -2490,7 +2571,7 @@ export async function GET(request: NextRequest) {
 }
 ```
 
-- [ ] **Step 8: Run every test**
+- [x] **Step 8: Run every test**
 
 ```bash
 cd web && npm run test && npm run typecheck && npm run build
@@ -2527,7 +2608,7 @@ it("ignores an injected key set outside a test environment", async () => {
 `vi.resetModules()` matters both times: `cachedKeys` is module-level, so a stale remote resolver
 cached under one `NODE_ENV` would answer for the other. Import `vi` from `vitest`.
 
-- [ ] **Step 9: Prove the verifier's refusals are real**
+- [x] **Step 9: Prove the verifier's refusals are real**
 
 Delete the `payload.token_use !== "id"` check and re-run: the access-token test **must fail**. Then
 loosen the role comparison to `String(role).toLowerCase().trim() === CASEWORKER_ROLE` and re-run: the
@@ -2537,11 +2618,29 @@ Restore all three.
 
 Report what failed. A verifier whose refusals have never been watched to fail is a decoder.
 
-- [ ] **Step 10: Commit**
+**One refusal that is measured rather than sabotaged**, because it lives in the test-only resolver and
+so cannot be reached by a production sabotage. The resolver selects its key by `kid` and throws when
+none matches, with no `?? keys[0]` fallback. Measured with a two-key-pair harness:
+
+```text
+right key, right kid, strict resolver     -> ACCEPTED
+wrong key, same kid,  strict resolver     -> ERR_JWS_SIGNATURE_VERIFICATION_FAILED
+unknown kid,          strict resolver     -> no key for kid other-kid
+unknown kid,          `?? keys[0]` loose  -> ACCEPTED          <- the bug
+```
+
+The last line is why the fallback is gone: with it, a token naming a `kid` that is not in the set
+verifies anyway against whichever key happens to be first. A real Cognito pool publishes **two**
+signing keys, so "ignores `kid`" and "checks `kid`" are genuinely different verifiers — and the loose
+one would make the suite unable to tell them apart. Note the second line: the wrong-key test still
+refuses for the right reason after the fallback is removed, so this change tightens the resolver
+without weakening any existing assertion.
+
+- [x] **Step 10: Commit**
 
 ```bash
 git add infra/provision_cognito.py tests/test_infra_cognito.py \
-        web/lib/cognito.ts web/middleware.ts web/app/login web/app/api/auth
+        web/lib/cognito.ts web/proxy.ts web/app/login web/app/api/auth
 git commit -m "feat: Cognito caseworker pool and server-side session verification"
 ```
 
@@ -2585,6 +2684,16 @@ list. Its only effect is on the *wording* Grace uses when a case is still escala
 `outcome` written back to the decision row. Approving `c-010` re-runs the identical gate against the
 identical facts — the document is still missing, so nothing is filed. That is Task 5's headline test
 and the one to record for the demo video.
+
+**The guarantee is structural, not behavioural, and that is worth stating precisely.** Measured:
+`evaluate`'s signature is `(case: Case, today: date, pack: RulePack | None = None)`. There is no
+parameter an approval could occupy, so no value of `caseworker_approved` can reach the gate even by
+mistake — a wrong edit would be a `TypeError` at the call site rather than a silently looser verdict.
+Re-measured on all twelve fixtures at `today=2026-10-01`: **9 act / 3 escalate**, with `c-010` on
+`missing_document`, `c-011` on `material_income_change`, `c-012` on `source_conflict`. So the demo's
+claim rests on the gate's own arithmetic, and the approval path cannot move it. Hard rule 5 in its
+strongest available form: a reflection or a human note may make Grace *more* cautious, and here it
+physically cannot make it less.
 
 - [ ] **Step 1: Add the flag to `grace/entrypoint.py`, additively**
 
@@ -3898,6 +4007,20 @@ worst way.** Verified against the live API and the Amplify documentation on 2026
   query succeeds), `dynamodb:PutItem` on the table for the decision row, and
   `bedrock-agentcore:InvokeAgentRuntime` on the Grace runtime ARN. **No `Scan`**: `lib/cases.ts`
   queries, and granting `Scan` would let a bug read every ledger row in the table.
+
+  **The index ARN is not a formality — measured with `simulate-principal-policy` on a throwaway role,
+  both ways:**
+
+  ```text
+  grant [table]         → Query on table: allowed    Query on index: implicitDeny
+  grant [table, index]  → Query on table: allowed    Query on index: allowed
+  ```
+
+  That asymmetry is the whole hazard. A table-only grant leaves `readCase` working and `listQueue`
+  denied, so `/case/c-010` renders correctly while the caseworker's **queue is empty** — the one page
+  the product exists to show, failing on the one household who needs a human, with a green deploy and
+  no error visible anywhere except a server log. `listQueue` is the only function that touches the
+  index, so this is the single permission whose absence is invisible to every other page.
 - Attach it **app-level** here. The docs recommend branch-level instead when a public repo uses
   auto-branch creation or PR previews — this app has one branch and neither feature, so app-level is
   the simpler correct choice. Keep `enableAutoBranchCreation` and PR previews off, which is also why

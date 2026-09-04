@@ -49,8 +49,10 @@ line: `renewal_submitted` appears for exactly `c-001`–`c-009` and for none of 
 and the `escalation-queue` GSI holds exactly those three households with their typed gate reasons.
 Hard rule 6 holds on deployed infrastructure. `docs/deployed-verification.md` is the pasted evidence.
 
-**Scope is three AgentCore surfaces, not five** — Runtime, Memory, and the deploy harness. Gateway and
-Identity are deferred with written reasons (spec §8, README). **Never describe Grace as using five.**
+**Scope is four AgentCore surfaces, not five** — Runtime, Memory, Identity, and the deploy harness.
+Identity was un-deferred by Plan 3 Task 4, which ships the Cognito pool whose ID token is the trust
+anchor for every dashboard read and the one write. **Gateway stays deferred** with its written reason
+(spec §8, README). **Never describe Grace as using five.**
 
 **Two deployed facts that must not be overclaimed:**
 
@@ -883,8 +885,9 @@ that needs to prove *which* case was read, use `case_id`; never reintroduce a na
 ### What Plan 3 established — follow these
 
 Plan 3 adds a Next.js caseworker dashboard in `web/`, deployed to Amplify with Cognito auth. It also
-un-defers **AgentCore Identity**, so when Task 4 ships the honest surface count becomes **four**, not
-three — update the "Scope is three AgentCore surfaces" paragraph above at that point, and not before.
+un-defers **AgentCore Identity**, which Task 4 has now shipped — so the honest surface count is
+**four**, and the "Scope is four AgentCore surfaces" paragraph above has been updated to say so. The
+README still needs the same correction when Task 8 revisits it.
 
 Task state:
 
@@ -894,7 +897,7 @@ Task state:
 | 1 — scaffold `web/` | **done** — commit `e3ea347`, four gates green (`typecheck`, `lint`, `test`, `build`), Python suite unchanged at 622. **Two more version pins and three config defects; read below** |
 | 2 — `lib/authorize.ts` | **done** — `web/lib/authorize.ts`, 19 tests (21 with Task 1's smoke), four gates green, Python unchanged at 622. **Four defects in the plan's draft, three of them vacuous or dead tests; read below** |
 | 3 — `lib/cases.ts` | **done** — `web/lib/{env,cases}.ts`, **61 vitest tests** (39 cases + 20 authorize + 2 smoke), four gates green, Python unchanged at 622. **Ten defects in the plan's draft, one of which reported an unfiled case as `acted`; three more found in independent verification. Read below** |
-| 4 — Cognito + session verification | not started — **pre-verified against a real minted ID token and `jose` 6.2.10; the draft's JWKS injection had no environment gate. Read below** |
+| 4 — Cognito + session verification | **done** — `infra/provision_cognito.py`, `web/lib/cognito.ts`, `web/proxy.ts`, login page + callback route. **9 Python tests (631 total), 78 vitest**, five gates green. Pool `us-east-1_HXs3b0APR` live, one seeded caseworker, `custom:role` verified on the user. **Nine defects in the plan's draft, two of which broke a gate and two of which were inverted security claims; read below** |
 | 5 — `lib/decide.ts` + the write route | not started — **the draft edits one of `_escalate`'s three call sites; read below** |
 | 6 — pages | not started — **`escapeNote` double-escaped and its own test was vacuous; read below** |
 | 7 — Amplify | not started — **the draft sets no SSR compute role, so every read fails after a green deploy; read below** |
@@ -1151,8 +1154,114 @@ Neither route exists today, which is exactly what makes it the kind of bug that 
 adds `/api/authorize` and it arrives unguarded. Anchor each alternative on a segment boundary
 (`login$|login/`, `api/auth$|api/auth/`, `favicon\.ico$`) and verify the regex with a table of paths
 rather than eyeballing it. This is a *redirect convenience* rather than the security boundary —
-`verifySession` refuses independently on every page and on the decide route, and middleware says so in
-its own docstring — but a guard with a hole in it invites someone to start trusting it.
+`verifySession` refuses independently on every page and on the decide route, and `proxy.ts` says so in
+its own docstring — but a guard with a hole in it invites someone to start trusting it. **The `node -e`
+table the plan uses proves it once and guards nothing after**, so `__tests__/cognito.test.ts` now reads
+`config.matcher[0]` off the module and drives the same paths through it; sabotaging the anchors back to
+bare prefixes fails two tests.
+
+**`Number.isFinite` is not a type predicate, so the expiry guard did not compile.** Its declaration is
+`isFinite(number: unknown): boolean` — a plain `boolean` — so `if (!Number.isFinite(payload.exp)) return null;`
+leaves `payload.exp` typed `number | undefined` and `payload.exp * 1000` fails with
+`TS18048: 'payload.exp' is possibly 'undefined'`. The plan's `cognito.ts` did not pass `tsc`. Fixed with
+a one-line `isFiniteNumber(value): value is number` wrapper, which keeps `Number.isFinite` the **only**
+runtime check — adding `typeof exp === "number"` alongside would re-admit the hazard, since
+`typeof Infinity` is `"number"`, and `payload.exp!` is the non-null assertion Task 2 called "where the
+promise stops being checked". **And the guard was shipped untested:** the plan calls it load-bearing and
+has no assertion for it, so a test now hand-builds `exp: 1e400` and watches it refused. Measured, all
+three parts: `JSON.parse('{"exp":1e400}').exp` is `Infinity`, `jose` **verifies** that token, and
+`Infinity * 1000 <= Date.now()` is `false` — a permanent session. The token must be signed with
+`CompactSign` over raw bytes because `SignJWT` refuses it first (`"exp" claim must be a finite number`),
+which is the point: the hazard is a token an attacker crafts, not one `jose`'s builder would emit.
+
+**`process.env` accepts a `defineProperty` descriptor only with all three flags set.** Node throws
+`'process.env' only accepts a configurable, writable, and enumerable data descriptor` on any subset —
+measured on all four. The `NODE_ENV`-flipping test in Task 4's draft set `configurable` alone, so it
+threw on the way *in*, and the identical call in its own `finally` threw again and replaced the original
+error. Worse than the error: with the write refused, `NODE_ENV` stayed `"test"`, so the assertion would
+have been checking the injected-keys path against itself. The test now sets all three flags, **asserts
+`process.env.NODE_ENV` actually changed** before trusting the refusal, and re-verifies the same token
+after restoring — a one-way guard that left the module permanently refusing would otherwise look
+identical to a working one.
+
+**A Next page that reads configuration must be `force-dynamic`, or `next build` runs it.** `/login`
+calls `hostedUiUrl`, which throws on a missing `COGNITO_DOMAIN` — and Next prerenders a page with no
+dynamic API by default, so the build failed outright: `Error: COGNITO_DOMAIN is not set.` …
+`Export encountered an error on /login/page, exiting the build`, exit 1. `npm run build` is the gate
+Amplify runs, so this was a shipped-broken deploy. The quieter half is why `force-dynamic` is the right
+fix rather than supplying the variable at build time: with it present, the redirect URL — client id and
+`DASHBOARD_URL` included — bakes into the bundle, so rotating the app client keeps sending caseworkers
+to the old one until someone rebuilds. A sign-in redirect is request-time configuration.
+
+**The test-only JWKS resolver must select by `kid` and throw on a miss.** With `?? keys[0]`, a token
+naming an unknown `kid` verifies against whichever key is first. Reproduced with a two-key harness:
+strict resolver → right key `ACCEPTED`, wrong key same kid `ERR_JWS_SIGNATURE_VERIFICATION_FAILED`,
+unknown kid `no key for kid other-kid`; loose resolver → unknown kid **`ACCEPTED`**. Grace's own pool
+publishes **two** RS256 signing keys (verified live), so "checks `kid`" and "ignores `kid`" are
+genuinely different verifiers and the loose one makes the suite unable to tell them apart — test
+vacuity, not a production bypass, since this branch is gated on `NODE_ENV === "test"`.
+
+**Two live facts that make the verifier's allowlists exact rather than defensive.** Read off Grace's
+pool: `jwks_uri` is exactly `${issuer}/.well-known/jwks.json`, and
+`id_token_signing_alg_values_supported` is `["RS256"]` and nothing else — so `algorithms: ["RS256"]`
+restricts nothing legitimate. Also confirmed on the provisioned pool: tier `ESSENTIALS`,
+`ManagedLoginVersion: 1` (classic hosted UI, which is what `hostedUiUrl`'s `/login` path targets),
+seeded user `CONFIRMED` (so `admin_set_user_password(Permanent=True)` is required, not a convenience),
+and the converge branch's full replace preserved `ReadAttributes`/`WriteAttributes`/flows/scopes/
+callbacks on a second run.
+
+**`ListUserPoolClients` paginates too, and the draft read one page.** The pool lookup above it pages
+correctly; the client lookup did not. A missed page creates a *second* `grace-dashboard` client, and
+`verifySession` checks `aud` against the one id in the environment — so a token minted by the other
+client is refused **with a valid signature**, which reads as "auth is broken" rather than "there are
+two clients". Confirmed off the service model: `NextToken` on both input and output,
+`can_paginate: True`.
+
+**Next 16.3.4 deprecates the `middleware.ts` file convention in favour of `proxy.ts`**, and Grace has
+made the rename: the file is `web/proxy.ts` and the exported function is `proxy`. It was a `warnOnce`
+on every build, and clean output rather than a zero exit code is this project's bar.
+`PROXY_FILENAME = "proxy"` is present in `next/dist/lib/constants.js`, so the new convention is
+genuinely supported here rather than aspirational; the build still labels the compiled output
+`ƒ Proxy (Middleware)`. **Never ship both files — that is a hard error, not a warning.** Done before
+Task 5 deliberately, so its `route-guard.test.ts` is written against the current name rather than
+renamed afterwards.
+
+**Two of Task 4's plan defects were inverted security claims — a comment asserting the opposite of the
+measured behaviour.** Both were caught by probing the control rather than reading the API's response,
+and both had been recorded in `docs/plan3-live-data-findings.md` as *confirmed* findings while being
+backwards:
+
+1. **Omitting `WriteAttributes` does not withhold write access — it grants everything.** The draft
+   called the omission "capability absence: the client cannot rewrite the claim that authorises it."
+   Measured on a throwaway pool, a signed-in user's `UpdateUserAttributes` against an ungranted
+   **mutable** custom attribute **succeeded**. `custom:role` survived only because the schema marks it
+   `Mutable: False` — one guard, where the comment claimed two. The AWS docs say so outright: omitting
+   read/write permissions grants *all* attributes. Fixed to `"WriteAttributes": ["email"]`, and
+   re-verified against the **shipped constant**: a write to `custom:role` is now refused
+   `NotAuthorizedException: A client attempted to write unauthorized attribute` — an *authorisation*
+   refusal, and the previously-succeeding mutable write is refused too.
+2. **`UpdateUserPoolClient` is a full replace, not a patch.** An update naming only `ClientName` left
+   `ReadAttributes`, `CallbackURLs`, and `AllowedOAuthFlows` **absent** afterwards. So the converge
+   branch must resend every field it intends to keep; a later "tidy this into a two-key delta" edit
+   would silently delete the OAuth flows and the `custom:role` read permission, and every sign-in would
+   then fail closed with nothing failing at provision time. It also rejects `GenerateSecret` with
+   botocore's `ParamValidationError` — **not** a `ClientError`, so no `except ClientError` catches it.
+
+**Why the first one was easy to get wrong, which is the transferable part.** Probing `custom:role`
+alone *does* produce a refusal — `InvalidParameterException: Attribute cannot be updated.` — but that
+is the **immutability** guard, not an authorisation one. Reading it as evidence that omission withholds
+permission confirms the wrong mechanism. **To verify a control, perform the action it should prevent
+against a target where only that control can refuse.** Same shape as Plan 2's point-in-time-recovery
+finding: "the API accepted my configuration" and "the control does what I think" are different claims.
+
+**An index needs its own ARN in an IAM policy, and the failure is invisible to every page but one.**
+Measured with `simulate-principal-policy` on throwaway roles: granting `dynamodb:Query` on
+`table/grace-cases` alone yields `allowed` on the table and **`implicitDeny` on
+`table/grace-cases/index/escalation-queue`**. `readCase` reads the table and `listQueue` reads the
+index, so a table-only grant leaves `/case/c-010` rendering perfectly while **`/queue` comes back
+empty** — the one page the product exists for, blank for exactly the three households who need a human,
+after a green deploy. Task 7's compute role must name both ARNs. `implicitDeny` rather than
+`explicitDeny`, so it can be added later without fighting a statement.
 
 
 ## The one idea that matters

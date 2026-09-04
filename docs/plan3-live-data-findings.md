@@ -147,31 +147,81 @@ PY
 
 ## Cognito, probed rather than assumed (Task 4)
 
-Three throwaway pools were created and deleted on 2026-09-04 to check Task 4's draft before writing
-it. All three were confirmed gone afterwards — `list_user_pools` shows only the two unrelated
-projects. Five assumptions held and one gap was found.
+Throwaway pools were created and deleted on 2026-09-04 to check Task 4's draft before writing it. All
+were confirmed gone afterwards — `list_user_pools` shows only the two unrelated projects
+(`astrolabe-paper-auth`, `rosettaclaw-live-auth`). **Seven assumptions held and two were wrong**, and
+one of the two had been recorded here as a *confirmed* finding when it was in fact backwards; see the
+`WriteAttributes` section below.
 
 | Probed | Result |
 |---|---|
 | `Schema` entry named `role` | Round-trips as **`custom:role`** in `SchemaAttributes`. The `custom:` prefix is Cognito's; do not write it into the schema name. |
-| `ReadAttributes: ["email", "custom:role"]` | Accepted and echoed back verbatim, so the claim reaches the ID token. |
-| `ReadAttributes` omitted entirely | Echoes back **empty**, which per the API docs means standard attributes only — `custom:role` would be unreadable and `verifySession` would refuse every legitimate caseworker. This is the defect already fixed in commit `0e07f04`, now confirmed against the live API rather than from the docs alone. |
+| `ReadAttributes: ["email", "custom:role"]` | Accepted and echoed back verbatim, and confirmed present in a real minted ID token as `custom:role: caseworker`. |
+| `ReadAttributes` omitted entirely | Comes back **absent**, which per the API docs means standard attributes only — `custom:role` would be unreadable and `verifySession` would refuse every legitimate caseworker. This is the defect already fixed in commit `0e07f04`, now confirmed against the live API rather than from the docs alone. |
 | `admin_create_user` with an immutable custom attribute | Accepted; `custom:role` is set and `sub` is a UUID. **The user lands in `FORCE_CHANGE_PASSWORD` and cannot sign in.** |
 | `admin_set_user_password(Permanent=True)` | Moves the user to **`CONFIRMED`**. So that call is required for an unattended demo, not a convenience — without it the seeded account exists and cannot be used. |
 | Re-creating the same user / same domain | `UsernameExistsException`; `InvalidParameterException` with message `Domain already exists.` Both are already in the draft's `except` clauses. |
+| `jwks_uri` and signing algorithm | Fetched from a live pool: `jwks_uri` is exactly `${issuer}/.well-known/jwks.json`, and `id_token_signing_alg_values_supported` is `["RS256"]` **only** — so the `algorithms: ["RS256"]` allowlist matches what Cognito offers rather than over-restricting. Discovery endpoints live on `cognito-idp.<region>.amazonaws.com`, not on the hosted-UI domain. |
+| ~~`WriteAttributes` omitted is the safe state~~ | **WRONG and inverted — see below.** |
+| ~~`update_user_pool_client` patches~~ | **WRONG — it is a full replace. See below.** |
 
-### The gap: `WriteAttributes`
+### `WriteAttributes`: the earlier reading here was inverted
 
-Cognito **accepts `custom:role` in `WriteAttributes` even though the schema marks it
-`Mutable: False`** — verified, the client was created and echoed the attribute back. Granting it would
-let a signed-in caseworker call `UpdateUserAttributes` against the very claim that authorises them.
-The immutable flag would still refuse the write, but that leaves one guard where there should be two.
+**This section previously concluded the opposite of the truth, and the error is instructive.** It
+reasoned that omitting `WriteAttributes` "yields an empty list, which is the safe state" — inferred
+from the API *accepting* a client creation and echoing nothing back. Acceptance of a create call is not
+a measurement of what a signed-in user can then do.
 
-Omitting `WriteAttributes` yields an empty list, which is the safe state, and nothing legitimate needs
-it: the role is set once by `admin_create_user`, an admin API that this list does not constrain. So the
-absence is deliberate and is now commented as such in the plan — the client cannot rewrite the claim
-that authorises it, because it was never granted the ability to try. Same reasoning as layer 1 of the
-escalation boundary.
+Probed properly on 2026-09-04 by actually attempting the write, on a pool carrying **two** custom
+attributes: `role` (`Mutable: False`) and `scratch` (`Mutable: True`), with `ReadAttributes` naming both
+and `WriteAttributes` omitted:
+
+```text
+WriteAttributes omitted    → write custom:scratch (mutable, ungranted)
+                             SUCCEEDED. Value changed "before" → "after".
+WriteAttributes omitted    → write custom:role (immutable, ungranted)
+                             InvalidParameterException: user.custom:role: Attribute cannot be updated.
+WriteAttributes ["custom:scratch"] → write custom:role
+                             NotAuthorizedException: A client attempted to write unauthorized attribute
+```
+
+The first line settles it: **omission grants write access to every attribute**, exactly as the AWS
+documentation states outright ("When you create an app client and don't customize attribute read and
+write permissions, Amazon Cognito grants read and write permissions to all user pool attributes").
+
+The second line is why the original error was easy to make and hard to catch. The write *is* refused —
+but by the **immutability** guard, not by an authorisation one. Reading that refusal as evidence that
+omission withholds permission is the mistake: it confirms `Mutable: False` works, and says nothing
+about permissions. The plan claimed two guards and shipped one, with a comment asserting the reverse.
+Only the third line is a permission refusal, and it requires the list to be present.
+
+**Fixed:** `CLIENT_SPEC` now sets `"WriteAttributes": ["email"]` — present, and excluding
+`custom:role`. `email` is there because a client with an empty write list cannot be converged later
+without a full replace, and nothing in the dashboard writes it anyway. The role is still set once by
+`admin_create_user`, an admin API that this list does not bind. `tests/test_infra_cognito.py` asserts
+**presence** and exclusion, not absence, so the corrected polarity is pinned rather than commented.
+
+The general lesson, which is the same one Plan 2 recorded about point-in-time recovery: **"the API
+accepted my configuration" and "the control does what I think" are different claims.** Only the second
+one matters, and reaching it means performing the action the control is supposed to prevent.
+
+### Two more measured on the same pools
+
+**`update_user_pool_client` is a full replace, not a patch.** An update naming only `ClientName` left
+`ReadAttributes`, `CallbackURLs`, and `AllowedOAuthFlows` all **absent** from the next
+`DescribeUserPoolClient`. So `provision`'s converge branch must resend every field it wants to keep. If
+someone later tidies it into a two-key delta, the deployed client silently loses its OAuth flows and
+its `custom:role` read permission — and every caseworker sign-in then fails closed with nothing
+failing at provision time. It also rejects `GenerateSecret` with botocore's `ParamValidationError`,
+which is **not** a `ClientError`, so no `except ClientError` catches it.
+
+**A pool created with no `UserPoolTier` comes back `ESSENTIALS`, not `LITE`.** That matters because
+managed login (the newer pages) needs Essentials or above, while Lite gets only the classic hosted UI.
+`create_user_pool_domain` returned `ManagedLoginVersion: 1` — the classic hosted UI, which is what
+`hostedUiUrl`'s `/login` path targets, and which needs no branding style to work. Also measured:
+`EnableTokenRevocation` defaults `True`, and `RefreshTokenValidity` defaults to **30 days**, far
+longer than the hour the session cookie lives. Harmless while nothing exchanges the refresh token; do
+not add a refresh path without shortening it.
 
 ### The ID token, minted and read rather than assumed
 
@@ -288,9 +338,21 @@ bedrock-agentcore:InvokeAgentRuntime
   arn:aws:bedrock-agentcore:us-east-1:339712964409:runtime/grace_grace-oTyyvo8stE
 ```
 
-**The index needs its own ARN.** A policy granting `Query` on the table alone denies the GSI query
-while the table query succeeds — so `/queue` would break and `/case/[id]` would work, which reads like
-a bug in the queue page rather than a missing permission.
+**The index needs its own ARN, and this was measured rather than reasoned.** Two throwaway roles were
+simulated with `simulate-principal-policy`, which needs no attachment to a live app:
+
+```text
+grant Resource [table]         → Query on table: allowed   Query on index: implicitDeny
+grant Resource [table, index]  → Query on table: allowed   Query on index: allowed
+```
+
+`implicitDeny` rather than `explicitDeny` — the permission is simply not granted, so it can be added
+later without fighting a statement. The asymmetry is what makes it dangerous: `readCase` reads the
+table and `listQueue` reads the index, so a table-only grant leaves `/case/c-010` rendering perfectly
+while **`/queue` comes back empty**. That is the one page the product exists to show, failing for
+exactly the three households who need a human, after a green deploy, with nothing visible except a
+server log. `listQueue` is the only function that touches the index, so no other page can reveal the
+gap.
 
 **No `Scan` and no `DeleteItem`.** `lib/cases.ts` queries rather than scans, and granting `Scan` would
 let a bug read every ledger row in the table. Nothing in the app deletes, and a dashboard that can
@@ -372,4 +434,54 @@ So the headline claim and hard rule 6 both still hold: `renewal_submitted` exist
 `c-001`–`c-009`, and for none of the three escalating households. **Task 8 should re-derive these
 numbers rather than quoting them** — the row counts grow with every sweep and every invocation, while
 the two boolean properties are what must never change.
+
+### The same probe on `c-012`, which is the case that leaked
+
+`c-010` was the wrong household to prove the PII fix with: its escalation reason is a flat
+`missing_document` string with no model prose in it, so it would read clean even if redaction were
+broken. `c-012` is the one whose surname reached CloudWatch, because its reason carries the
+**referee's deliberation text** — the exact path span redaction does not cover. Re-run against
+deployed runtime **version 2** (`READY`, last updated `2026-09-03T04:44:47Z`):
+
+```text
+status     escalated
+case_id    c-012
+reason     A caseworker must decide. source_conflict: household size 5 on application,
+           3 on most recent wage record Deliberation — CLEAR: The reading that applies is
+           that the household size conflict does not affect eligibility because the income
+           remains qualifying even if we take the larger household size. All required
+           documents are present and current, and the renewal window is open...
+PII scan   NONE   (all twelve fixture surnames + "+1555")
+```
+
+Three properties in one invocation, and each is a claim someone could otherwise only assert:
+
+1. **The PII fix holds on the path that broke.** Referee prose is present in the payload and carries
+   no household name. Removing `display_name` from `read_case` closed it at the source, so there was
+   nothing for the model to quote — capability absence rather than filtering.
+2. **The approval flag changes no verdict, on the hardest case for it.** `c-012` escalates on
+   `source_conflict`, an eligibility question rather than a paperwork one, and it still escalated with
+   `caseworker_approved: true`.
+3. **The referee concluded `CLEAR:` and the case escalated anyway.** Plan 1 Task 7 found this on a
+   local run; it is now confirmed on deployed infrastructure. The referee's note is *appended* to the
+   gate's typed reason, never substituted for it — a deliberation that talks itself into "this looks
+   fine" cannot satisfy a gate condition. Hard rule 5, executed rather than narrated.
+
+That probe appended a row too. Re-derived immediately afterwards, one scan:
+
+```text
+rows scanned      : 651            (633 → 643 → 651 across this session's probes)
+renewal_submitted : 9 cases -> c-001 … c-009
+escalation rows   : 19 across 3 households {'c-010': 7, 'c-012': 7, 'c-011': 5}
+DECISION# rows    : 0              ← Task 5 still introduces this prefix
+9 acted / 3 escalated holds       : True
+no escalating case was ever filed : True
+PII across the whole table        : CLEAN
+```
+
+Note the row count moved three times in one day while both boolean properties never did. That is the
+distinction to carry into Task 8: **counts are measurements with a timestamp, the two booleans are the
+claims.** A README or a demo script that hardcodes "643 rows" is wrong by the next sweep; one that says
+"`renewal_submitted` exists for exactly the nine clean households and for none of the three escalating
+ones" stays true.
 
