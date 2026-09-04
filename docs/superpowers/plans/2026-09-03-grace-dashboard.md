@@ -2695,7 +2695,7 @@ claim rests on the gate's own arithmetic, and the approval path cannot move it. 
 strongest available form: a reflection or a human note may make Grace *more* cautious, and here it
 physically cannot make it less.
 
-- [ ] **Step 1: Add the flag to `grace/entrypoint.py`, additively**
+- [x] **Step 1: Add the flag to `grace/entrypoint.py`, additively**
 
 `grace/entrypoint.py` is in Plan 2's territory but not in the four protected decision-path files, and
 this change adds a field without altering classification. In `process_case`, after `today` is parsed:
@@ -2737,7 +2737,7 @@ difference between "appended on approval" and "appended always".
 
 **Change nothing else.** Do not pass the flag to `build_case_graph`, `evaluate`, or any tool.
 
-- [ ] **Step 2: Write the failing Python test**
+- [x] **Step 2: Write the failing Python test**
 
 `tests/test_entrypoint_approval.py`:
 
@@ -2878,7 +2878,7 @@ def test_the_deployed_path_still_carries_no_resume_vocabulary():
         assert forbidden not in source, forbidden
 ```
 
-- [ ] **Step 3: Run the Python tests**
+- [x] **Step 3: Run the Python tests**
 
 ```bash
 .venv/bin/python -m pytest tests/test_entrypoint_approval.py -v
@@ -2887,7 +2887,7 @@ def test_the_deployed_path_still_carries_no_resume_vocabulary():
 
 Expected: 6 new tests pass and the suite is **628 passed** (622 + 6). Report the real number.
 
-- [ ] **Step 4: Write the failing TypeScript tests**
+- [x] **Step 4: Write the failing TypeScript tests**
 
 `web/__tests__/decide.test.ts`:
 
@@ -3149,12 +3149,12 @@ describe("the decide route", () => {
 });
 ```
 
-- [ ] **Step 5: Run them to verify they fail**
+- [x] **Step 5: Run them to verify they fail**
 
 Run: `cd web && npm run test`
 Expected: FAIL — `Cannot find module '@/lib/decide'`.
 
-- [ ] **Step 6: Write `web/lib/decide.ts`**
+- [x] **Step 6: Write `web/lib/decide.ts`**
 
 ```ts
 /**
@@ -3332,7 +3332,7 @@ async function writeOutcome(
 }
 ```
 
-- [ ] **Step 7: Write the route**
+- [x] **Step 7: Write the route**
 
 `web/app/api/case/[id]/decide/route.ts`:
 
@@ -3420,7 +3420,7 @@ export async function POST(
 }
 ```
 
-- [ ] **Step 8: Run everything**
+- [x] **Step 8: Run everything**
 
 ```bash
 cd web && npm run test && npm run typecheck && npm run build
@@ -3430,7 +3430,7 @@ cd .. && .venv/bin/python -m pytest
 Expected: 11 `decide.test.ts` + 4 `route-guard.test.ts` pass, the build succeeds, Python is
 **628 passed**.
 
-- [ ] **Step 9: Prove the two guards that matter are not vacuous**
+- [x] **Step 9: Prove the two guards that matter are not vacuous**
 
 **The session guard.** In `route.ts`, temporarily replace `const session = await verifySession(cookie)`
 with a hardcoded session object. The `returns 401 and writes NOTHING` test **must fail**. Restore it.
@@ -3443,7 +3443,7 @@ file. Restore it, and re-run to confirm green.
 Report both failures. These two are the plan's safety argument; a guard nobody has watched fail is
 not a guard.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add web/lib/decide.ts web/app/api/case web/__tests__/decide.test.ts \
@@ -3612,15 +3612,28 @@ export function statusTone(status: CaseStatus): string {
 }
 
 /** A caseworker's note is untrusted free text, and this asserts what protects it
- *  rather than adding a second layer. React escapes text children itself —
- *  verified: `<img src=x onerror="alert(1)">` renders as `&lt;img ...` with no
- *  live tag through `renderToStaticMarkup`. Escaping again before handing the
- *  string to JSX double-escapes it: a note reading `the family's record` would
- *  display as `the family&#39;s record` to the caseworker.
+ *  rather than adding a second layer. React escapes text children itself.
+ *  Measured with `renderToStaticMarkup`:
  *
- *  So this function exists to be *checked*, not applied. It answers "would this
+ *    input  The family's wage record is stale.
+ *    JSX    <p>The family&#x27;s wage record is stale.</p>      correct
+ *    esc→JSX <p>The family&amp;#39;s wage record is stale.</p>  shows "&#39;" on screen
+ *
+ *    input  <img src=x onerror="alert(1)">
+ *    JSX    <p>&lt;img src=x onerror=&quot;alert(1)&quot;&gt;</p>   no live tag
+ *
+ *  So escaping before handing a string to JSX is a bug, not defence in depth.
+ *
+ *  This function exists to be *checked*, not applied. It answers "would this
  *  note be safe if someone reached for `dangerouslySetInnerHTML`?", which is the
- *  only way markup could reach the page. Callers render `note` directly. */
+ *  only way markup could reach the page. Callers render `note` directly.
+ *
+ *  Only `<` and `>` — apostrophes and quotes cannot open a tag, and flagging
+ *  them would reject ordinary prose. Verified against the same four fixtures:
+ *  `The family's …` → true, `<img …>` → false, `5 > 3 && 2 < 4` → false,
+ *  `"quoted" & ampersand` → true. **A no-op test's fixture must contain every
+ *  character the function is meant to react to** — the draft's version passed
+ *  against the double-escaping bug because its fixture had no apostrophe. */
 export function noteIsInert(note: string): boolean {
   return !/[<>]/.test(note);
 }
@@ -4219,16 +4232,34 @@ aws amplify start-job --app-id "$APP" --branch-name main --job-type RELEASE \
   --region us-east-1 2>&1 | head -20
 ```
 
-If that reports no connected repository, use the zip path:
+If that reports no connected repository, use the zip path. **Verified against the service model:**
+`CreateApp` requires only `name` (no `repository`), `CreateDeployment` returns a `zipUploadUrl`, and
+`StartDeployment`'s `sourceUrlType` accepts `ZIP` or `BUCKET_PREFIX` — so the unattended path is real
+rather than hopeful. `computeRoleArn` is settable on both `CreateApp` and `CreateBranch`.
 
 ```bash
-cd /Users/sorour/sorour/AgentsforHumansHackathon
-zip -rq /tmp/grace-dashboard.zip web -x "web/node_modules/*" "web/.next/*"
-aws amplify create-deployment --app-id "$APP" --branch-name main --region us-east-1
-# upload to the returned zipUploadUrl with curl --upload-file, then:
+cd /Users/sorour/sorour/AgentsforHumansHackathon/web
+# Zip the CONTENTS of web/, not the directory itself. Amplify expects
+# package.json at the archive root; `zip -r x.zip web` nests everything one
+# level down and the build fails with no package.json found — which reads as a
+# broken build rather than a packaging mistake.
+zip -rq /tmp/grace-dashboard.zip . -x "node_modules/*" ".next/*" "*.tsbuildinfo"
+unzip -l /tmp/grace-dashboard.zip | grep -c "^.*package.json"   # must be >= 1 at root
+
+APP=$(aws amplify list-apps --region us-east-1 \
+  --query "apps[?name=='grace-dashboard'].appId | [0]" --output text)
+# ONE create-deployment call, both values read from that one response. Calling it
+# twice returns a second jobId that does not correspond to the upload URL you
+# used, and the deploy then starts against an empty job.
+read -r JOB UP < <(aws amplify create-deployment --app-id "$APP" \
+  --branch-name main --region us-east-1 \
+  --query '[jobId,zipUploadUrl]' --output text)
+curl -s --upload-file /tmp/grace-dashboard.zip "$UP"
 aws amplify start-deployment --app-id "$APP" --branch-name main \
-  --job-id <returned> --region us-east-1
+  --job-id "$JOB" --region us-east-1
 ```
+
+Note `create-deployment` is called **once** above, deliberately.
 
 Then watch it:
 

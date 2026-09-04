@@ -137,6 +137,28 @@ def process_case(
         return {"status": "error", "case_id": case_id,
                 "detail": f"today must be an ISO date: {exc}"}
 
+    # A caseworker's approval, when the dashboard re-invokes a case they decided.
+    # **This does not reach the gate.** `evaluate()` runs on the case record
+    # exactly as before and the tool list is unchanged, so approving a household
+    # that is still missing a document still files nothing. The flag affects only
+    # the wording of an escalation reason, so a caseworker can tell "Grace
+    # re-checked and still refused" apart from "nothing happened".
+    #
+    # The guarantee is structural rather than behavioural: `evaluate`'s signature
+    # is `(case, today, pack=None)`, so there is no parameter an approval could
+    # occupy even by mistake — a wrong edit is a `TypeError` at the call site,
+    # not a silently looser verdict.
+    #
+    # `is True`, not truthiness. The payload arrives from an HTTP body, where
+    # `"false"`, `"no"`, `1`, and `[0]` are all truthy in Python; only the JSON
+    # boolean `true` deserializes to `True`. Same allowlist-over-truthiness
+    # polarity as `APPROVE_DECISIONS` — and the same reason: the unrecognised
+    # value must be the safe one.
+    #
+    # Deliberately NOT a resume: Task 6 proved a truthy resume response
+    # *approves* the blocked tool, so there is no interrupt to answer here.
+    caseworker_approved = payload.get("caseworker_approved") is True
+
     # Built here rather than at import, and inside no `try`, because a store
     # that cannot be constructed is a misconfiguration this process cannot
     # recover from (`build_store` raises on an unrecognized `GRACE_STORE`
@@ -212,7 +234,8 @@ def process_case(
         # escalation auditable; the referee's question is what makes it useful.
         if deliberation:
             detail = f"{detail} Deliberation — {deliberation}"
-        return _escalate(store, case_id, detail)
+        return _escalate(store, case_id, detail,
+                         caseworker_approved=caseworker_approved)
 
     if reason is not None:
         # The gate says the case is clean but the run did not finish cleanly.
@@ -220,7 +243,8 @@ def process_case(
         # cannot see.
         if deliberation:
             reason = f"{reason} Deliberation — {deliberation}"
-        return _escalate(store, case_id, reason)
+        return _escalate(store, case_id, reason,
+                         caseworker_approved=caseworker_approved)
 
     if renewal_filed(store, case_id):
         return {"status": "acted", "case_id": case_id, "filed": True,
@@ -233,10 +257,17 @@ def process_case(
         store, case_id,
         "The case is clean but no renewal was filed. A caseworker must file it "
         "or say why not.",
+        caseworker_approved=caseworker_approved,
     )
 
 
-def _escalate(store: Any, case_id: str, detail: str) -> CaseOutcome:
+def _escalate(
+    store: Any,
+    case_id: str,
+    detail: str,
+    *,
+    caseworker_approved: bool = False,
+) -> CaseOutcome:
     """Record the escalation and report it.
 
     The row is written here rather than only in Step Functions so that a case
@@ -259,7 +290,29 @@ def _escalate(store: Any, case_id: str, detail: str) -> CaseOutcome:
     `CaseStore` Protocol — `InMemoryCaseStore` has no such method, and a local
     run must still work. Absence means "no queue to write to", which is not a
     failure.
+
+    **`caseworker_approved` is keyword-only, and every call site passes it.**
+    The clause lives here rather than at any one call site because
+    `process_case` escalates from three different places — the gate's typed
+    reason, a run that did not finish, and a clean case that filed nothing (hard
+    rule 6) — and a caseworker who approved a case must see that Grace re-checked
+    on whichever path it took. A parameter with a default that nobody passes is a
+    clause that never appears, so the default exists for `_escalate`'s own
+    readability and not as a route any caller relies on.
+
+    It changes wording only. It reaches no gate, no tool, and no graph.
     """
+    if caseworker_approved:
+        # Hard rule 5's forbidden direction, made impossible rather than
+        # avoided: this appends a sentence *after* the verdict is already
+        # final. A caseworker's approval cannot satisfy a gate condition, so
+        # the most it can do is explain itself to the next human who reads the
+        # row.
+        detail = (
+            f"{detail} (A caseworker approved this case; Grace re-checked and "
+            "the gate still requires a human, so nothing was filed.)"
+        )
+
     deadline = ""
     try:
         deadline = store.get(case_id).cert_end.isoformat()
