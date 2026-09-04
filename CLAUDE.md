@@ -1504,6 +1504,14 @@ consumes that irreversibly to re-confirm a property `c-010` already proves. **Wh
 spend the demo's own evidence on something already established, report instead of executing** — and say
 in the artifact that it was skipped and why, so the gap is visible rather than looking like an oversight.
 
+**A refusal message is not a refusal — check the store.** After the `c-010` approval, a second decision
+on the same case returned **409 `already_decided`**, and the table still held exactly **2** `DECISION#`
+rows and **0** `renewal_submitted` rows, so the second attempt wrote nothing and invoked nothing. This
+check is not ceremony: Grace's own outcome row shares the `DECISION#` prefix, so under a naive prefix
+test it would make `alreadyDecided` true and the *first* human decision would refuse itself as a
+duplicate. `readCase` discriminates on the presence of a `decision` attribute, which is what makes the
+first decision succeed and the second fail.
+
 **Measure the baseline before a write, or the delta is unattributable.** The table was scanned *first*
 (651 rows, **zero** `DECISION#` rows), then again after (663 rows). All twelve new rows carry an `sk`
 timestamp inside the probe window and all are on `c-010`: 2 decision, 9 ledger, 1 escalation — and the

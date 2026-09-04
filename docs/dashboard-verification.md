@@ -233,6 +233,10 @@ $ POST /api/case/c-099/decide   valid session, unknown case
 $ POST /api/case/c-001/decide   valid session, a case Grace handled itself
 {"error":"not_escalated","message":"Grace handled this case itself; there is nothing to decide."}
                                                                                 status=409
+
+$ POST /api/case/c-010/decide   valid session, AFTER the §3 approval
+{"error":"already_decided","message":"A caseworker has already decided this case."}
+                                                                                status=409
 ```
 
 Two of these are sharper than they look:
@@ -245,15 +249,22 @@ Two of these are sharper than they look:
   gets `no_session`, not `unknown_case` — otherwise the difference between the two codes would tell an
   unauthenticated caller which case ids exist.
 
-All four refused, and the table proves they refused: **zero `DECISION#` rows existed before the one
+**The `already_decided` refusal was verified to be a real refusal, not just a message.** After it, the
+table still holds exactly **2** `DECISION#` rows on `c-010` and still **0** `renewal_submitted` rows —
+so the second decision wrote nothing and invoked nothing. That check matters because the outcome row
+Grace writes shares the `DECISION#` prefix: under a naive prefix test, Grace's own row would make
+`alreadyDecided` true and the *first* human decision would refuse itself as a duplicate.
+
+All the others refused too, and the table proves it: **zero `DECISION#` rows existed before the one
 approval in §3**, and afterwards exactly the two rows that approval wrote.
 
 ---
 
 ## 5. No household identity on any new surface
 
-Hard rule 9, checked on all three surfaces Plan 3 added — the deployed markup, the decision rows, and
-the table as a whole. All twelve fixture surnames, the reserved phone range, and `@` for emails:
+Hard rule 9, checked on the three *places* Plan 3 added where text could surface — the deployed markup,
+the decision rows, and the table as a whole. All twelve fixture surnames, the reserved phone range, and
+`@` for emails:
 
 ```console
 === c-010's rows, including the new decision rows ===
