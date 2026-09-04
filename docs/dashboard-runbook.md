@@ -65,9 +65,23 @@ Two pools already exist, which proves the Cognito API and this account's permiss
 
 **`WEB_COMPUTE` is the SSR platform.** `WEB` is a static host with no route handlers and no
 middleware, so deploying onto it would silently remove the Cognito gate and the decide endpoint: the
-app would build, serve, and be wrong. `CreateDeployment` matters as the fallback — connecting a GitHub
-repo needs browser-based app authorization, which cannot be done unattended, so a zip deploy is the
-escape hatch.
+app would build, serve, and be wrong. **`CreateDeployment` is not a build fallback**, which the
+preflight originally assumed it was: a manual deployment *deploys artifacts and does not run a
+buildspec* (`StartDeployment`'s own API docs say manually deployed apps are not connected to a Git
+repository). A zip must already contain the Amplify Hosting deployment-specification bundle —
+`.amplify-hosting/static/`, `.amplify-hosting/compute/default/` with a self-contained Node entry point
+listening on **port 3000**, and a `deploy-manifest.json` carrying a catch-all route to `Compute` —
+and Next.js emits none of that (measured: a real build produces `.next/`, with no `.amplify-hosting/`
+and no `.next/standalone` unless `output: "standalone"` is set).
+
+So Grace connects the repository instead. That is the supported SSR path, and the only one that runs
+the buildspec's `typecheck`/`lint`/`test` before deploying. **It requires exactly one browser step** —
+authorizing the AWS Amplify GitHub app — for which there is no API; `CreateApp`'s
+`accessToken`/`oauthToken` are legacy personal-token fields that do not cover the GitHub App
+installation. Two further traps from the AWS docs: framework detection happens on the *Add repository*
+page, so a monorepo whose app root is not set to `web` silently stays `platform: WEB`; and
+`baseDirectory` is `.next` for Next 14+ regardless of SSG or SSR, even though a local build may also
+leave an `out/` directory that looks like the right answer.
 
 ### Baseline
 

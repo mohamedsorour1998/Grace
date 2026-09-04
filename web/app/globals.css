@@ -11,6 +11,28 @@
   --color-acted: #2F6F4E;
   --color-escalate: #B4530A;
   --color-error: #9B2C2C;
+
+  /* Two faces, one distinction: the mono face is for anything Grace or the table
+     wrote — a case id, a reason code, a timestamp, a ledger row — and the sans
+     face is for the sentences a person reads. No web font is loaded, so this
+     costs no request and cannot flash. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-body { background-color: var(--color-paper); color: var(--color-ink); }
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* A caseworker who has asked their system for less motion gets less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

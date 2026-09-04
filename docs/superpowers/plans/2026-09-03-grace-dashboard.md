@@ -192,8 +192,12 @@ print('has CreateDeployment (zip fallback):',
 ```
 
 Expected: `['WEB', 'WEB_DYNAMIC', 'WEB_COMPUTE']` and `True`. **`WEB_COMPUTE` is the SSR platform.**
-`CreateDeployment` matters as the fallback: connecting a GitHub repo needs browser-based app
-authorization, which cannot be done unattended, so a zip deploy is the escape hatch.
+`CreateDeployment` exists, but it is **not** the escape hatch this step originally called it: a manual
+deployment does *not* build the app — Amplify runs a buildspec only for Git-connected apps, and a zip
+must already contain a built `.amplify-hosting/` bundle (`static/`, `compute/default/` with a Node
+server on port 3000, `deploy-manifest.json`) which Next.js does not emit. See Task 7's deploy step;
+Grace connects the repository instead, which is the supported SSR path and the only one that runs the
+tests in the buildspec.
 
 - [x] **Step 5: Confirm the Python suite baseline**
 
@@ -204,7 +208,8 @@ wrong before Plan 3 began.
 - [x] **Step 6: Write the preflight section of the runbook**
 
 Create `docs/dashboard-runbook.md` with a `## Preflight` section recording: the observed versions, the
-Cognito and Amplify findings, the `WEB_COMPUTE` platform value, the zip-deploy fallback, and the
+Cognito and Amplify findings, the `WEB_COMPUTE` platform value, why a zip deploy is NOT a build
+fallback, and the
 pending-queue count. Later tasks append the local-run and deploy sequences.
 
 - [x] **Step 7: Commit**
@@ -3466,7 +3471,7 @@ households, each with a typed reason and a deadline.
 - Consumes: `web/lib/cases.ts` (`listCases`, `listQueue`, `readCase`), `web/lib/types.ts`
 - Produces: the four routes. No new exported functions other than the components.
 
-- [ ] **Step 1: Add the shadcn primitives**
+- [x] **Step 1: Add the shadcn primitives**
 
 ```bash
 cd web
@@ -3478,7 +3483,7 @@ This writes `components/ui/*.tsx` and `lib/utils.ts` (the `cn` helper). If the C
 would replace it. If the CLI cannot run non-interactively, write the four primitives by hand from the
 shadcn docs; they are small, and `cn` is `twMerge(clsx(...))`.
 
-- [ ] **Step 2: Write the failing render test**
+- [x] **Step 2: Write the failing render test**
 
 `web/__tests__/render.test.ts`:
 
@@ -3571,7 +3576,7 @@ describe("the caseworker's note", () => {
 });
 ```
 
-- [ ] **Step 3: Write the shared row helpers**
+- [x] **Step 3: Write the shared row helpers**
 
 `web/components/case-table.tsx` — the pure helpers live here alongside the component so the test can
 import them without rendering React:
@@ -3665,7 +3670,7 @@ export function CaseTable({ cases }: { cases: CaseSummary[] }) {
 }
 ```
 
-- [ ] **Step 4: Write the three pages**
+- [x] **Step 4: Write the three pages**
 
 `web/app/page.tsx` — the sweep, which is the headline claim rendered:
 
@@ -3867,7 +3872,7 @@ export function DecisionForm({ caseId }: { caseId: string }) {
 }
 ```
 
-- [ ] **Step 5: Run the tests and the build**
+- [x] **Step 5: Run the tests and the build**
 
 ```bash
 cd web && npm run test && npm run typecheck && npm run lint && npm run build
@@ -3875,7 +3880,7 @@ cd web && npm run test && npm run typecheck && npm run lint && npm run build
 
 Expected: 7 `render.test.ts` assertions pass and the build succeeds.
 
-- [ ] **Step 6: Look at it against the real table**
+- [x] **Step 6: Look at it against the real table**
 
 ```bash
 cd web
@@ -3893,12 +3898,12 @@ de-duplication regressed** — the GSI holds a row per sweep.
 Record what you saw in `docs/dashboard-runbook.md` under a `## Running locally` section, including the
 environment variables.
 
-- [ ] **Step 7: Confirm Python is untouched**
+- [x] **Step 7: Confirm Python is untouched**
 
 Run: `.venv/bin/python -m pytest`
 Expected: **628 passed**.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add web/ docs/dashboard-runbook.md
@@ -4056,7 +4061,12 @@ wrong rather than broken, which is the worse failure.
 
 Repo-connected deploys need a GitHub app authorization performed in a browser,
 which cannot be done unattended. `CreateDeployment` / `StartDeployment` accept a
-zip instead, and that is the documented fallback in the runbook.
+zip instead — but a manual deployment does NOT build: it deploys pre-built
+artifacts in the `.amplify-hosting/` layout (static/, compute/default/ on port
+3000, deploy-manifest.json), which Next.js does not emit. So Grace connects the
+repository, which is the supported SSR path and the only one that runs the
+buildspec's tests. The one browser step in this project is authorizing the
+Amplify GitHub app; there is no API for it.
 """
 
 from __future__ import annotations
@@ -4223,43 +4233,61 @@ export AWS_PAGER=""
 .venv/bin/python -m infra.provision_amplify   # idempotence: same app id
 ```
 
-Then deploy. Try the repo-connected path first, and fall back to zip if it needs a browser:
+Then deploy. **Read this before running anything — the earlier draft of this step was wrong in a way
+that cannot be patched at the command line.**
+
+**A manual (zip) deployment does not build the app.** Amplify builds only for **Git-connected** apps.
+`StartDeployment`'s own API documentation says "Starts a deployment for a manually deployed app.
+Manually deployed apps are not connected to a Git repository" — it *deploys artifacts*, it does not run
+a buildspec. So the draft's `zip -rq … web` + `create-deployment` sequence would have uploaded
+TypeScript source and deployed nothing runnable, and the `buildSpec` above would never have executed.
+
+A manual deployment must instead contain **pre-built** artifacts in the Amplify Hosting deployment
+specification layout, which Next.js does **not** emit (verified: a real `npm run build` produces
+`.next/`, and there is no `.amplify-hosting/` and no `.next/standalone` without
+`output: "standalone"`):
+
+```text
+.amplify-hosting/
+├── compute/default/     ← a Node entry point that listens on PORT 3000, self-contained
+├── static/              ← everything served from /
+└── deploy-manifest.json ← version, routes (catch-all → Compute), computeResources, framework
+```
+
+Building that bundle by hand is possible but bespoke and fragile — a wrong route rule produces a blank
+page on a green deploy. **So Grace uses the Git-connected path**, which is the supported one for SSR and
+the only one that runs the buildspec.
+
+**The one manual step in this project, and it cannot be automated.** Connecting a repository requires a
+browser authorization of the AWS Amplify GitHub app. There is no API for it: `CreateApp` accepts
+`accessToken`/`oauthToken`, but those are legacy personal-token fields that do not cover the GitHub App
+installation this account needs. Ask the operator to authorize it once in the Amplify console, then
+continue. Grace's repo is public at `https://github.com/mohamedsorour1998/Grace`.
+
+Three things the doc makes explicit that are easy to get wrong here:
+
+1. **`web/` is a monorepo subdirectory, and framework detection happens on the *Add repository* page.**
+   If Amplify does not detect Next.js there, it silently leaves `platform: WEB` and the app either fails
+   to build or deploys and serves a blank page. Select the monorepo option and give `web` as the app
+   root, or set `platform=WEB_COMPUTE` explicitly via `update-app` and verify it afterwards.
+2. **`baseDirectory` is `.next` for Next 14+ regardless of SSG or SSR** — `next export` was removed and
+   an `out/` directory is no longer the artifact root. A local build *does* leave both `.next/` and
+   sometimes `out/`, which is what makes `out` a tempting wrong answer; pointing at it fails with
+   `cannot find required-server-files.json`. Grace's buildspec already says `web/.next`.
+3. **Amplify's build image ships Node 18 by default.** Next 16.3.4 and `jose` 6 need newer, so set the
+   Node version explicitly in the build settings (a `nvm use` line in `preBuild`, or the console's
+   live-package-updates setting) rather than discovering it as a build failure.
 
 ```bash
 APP=$(aws amplify list-apps --region us-east-1 \
   --query "apps[?name=='grace-dashboard'].appId | [0]" --output text)
-aws amplify start-job --app-id "$APP" --branch-name main --job-type RELEASE \
-  --region us-east-1 2>&1 | head -20
+
+# Confirm the platform BEFORE building — a WEB app with SSR routes deploys green and serves nothing.
+aws amplify get-app --app-id "$APP" --region us-east-1 \
+  --query 'app.{platform:platform,repo:repository,role:computeRoleArn,branch:defaultDomain}'
+
+aws amplify start-job --app-id "$APP" --branch-name main --job-type RELEASE --region us-east-1
 ```
-
-If that reports no connected repository, use the zip path. **Verified against the service model:**
-`CreateApp` requires only `name` (no `repository`), `CreateDeployment` returns a `zipUploadUrl`, and
-`StartDeployment`'s `sourceUrlType` accepts `ZIP` or `BUCKET_PREFIX` — so the unattended path is real
-rather than hopeful. `computeRoleArn` is settable on both `CreateApp` and `CreateBranch`.
-
-```bash
-cd /Users/sorour/sorour/AgentsforHumansHackathon/web
-# Zip the CONTENTS of web/, not the directory itself. Amplify expects
-# package.json at the archive root; `zip -r x.zip web` nests everything one
-# level down and the build fails with no package.json found — which reads as a
-# broken build rather than a packaging mistake.
-zip -rq /tmp/grace-dashboard.zip . -x "node_modules/*" ".next/*" "*.tsbuildinfo"
-unzip -l /tmp/grace-dashboard.zip | grep -c "^.*package.json"   # must be >= 1 at root
-
-APP=$(aws amplify list-apps --region us-east-1 \
-  --query "apps[?name=='grace-dashboard'].appId | [0]" --output text)
-# ONE create-deployment call, both values read from that one response. Calling it
-# twice returns a second jobId that does not correspond to the upload URL you
-# used, and the deploy then starts against an empty job.
-read -r JOB UP < <(aws amplify create-deployment --app-id "$APP" \
-  --branch-name main --region us-east-1 \
-  --query '[jobId,zipUploadUrl]' --output text)
-curl -s --upload-file /tmp/grace-dashboard.zip "$UP"
-aws amplify start-deployment --app-id "$APP" --branch-name main \
-  --job-id "$JOB" --region us-east-1
-```
-
-Note `create-deployment` is called **once** above, deliberately.
 
 Then watch it:
 
@@ -4390,12 +4418,36 @@ and the final test count.
 
 - **Four AgentCore surfaces now, not three and not five** — Runtime, Memory, Identity, harness.
   Gateway stays deferred with its reason. Update the count only because Cognito actually shipped.
-- The dashboard's live URL, and that it is gated on Cognito with an admin-created account.
+  The section to edit is **`### Three AgentCore surfaces, not five`** (README line ~202), whose table
+  currently lists Identity as *deferred* with the reason "No caseworker IdP exists." That reason is
+  now obsolete: one does exist, `grace-caseworkers` / `us-east-1_HXs3b0APR`.
+- **State the Identity claim narrowly, because there are two different things called Identity and
+  only one of them shipped.** What shipped is a **Cognito user pool whose ID token is the dashboard's
+  trust anchor** — `verifySession` verifies the signature against the pool's published JWKS, the
+  issuer, the audience, the expiry, `token_use: "id"`, and `custom:role === "caseworker"`, and a
+  failure of any one produces `null` rather than a lesser session. What did **not** ship is an
+  **AgentCore Gateway JWT authorizer** (`customJWTAuthorizer` with inbound claim rules) — the runtime
+  is still IAM-authorised. Both are honest; conflating them is not. The Appendix D findings that make
+  the JWT path safe (an explicit `Deny` on `GetWorkloadAccessTokenForUserId`, an opaque `sub` that is
+  never a name or email) remain enforced in the runtime role either way, so keep that sentence.
+- The dashboard's live URL, and that it is gated on Cognito with an admin-created account
+  (self-signup is off: `AllowAdminCreateUserOnly: True`, so nobody on the internet can register and
+  reach the decide endpoint).
 - **The claim that matters:** a caseworker can approve a case and Grace will re-check it, and
   approving `c-010` still files nothing because the document is still missing. Say it with the
-  evidence.
+  evidence — and note the guarantee is *structural*: `evaluate(case, today, pack=None)` has no
+  parameter an approval could occupy, so the flag cannot reach the gate even by mistake.
+- **Re-measure every count rather than quoting one.** The table has moved 633 → 643 → 651 in a single
+  day of probing, and it grows with every sweep and every invocation. Write the two properties that
+  never change instead: `renewal_submitted` exists for exactly the nine clean households and for none
+  of the three escalating ones. A README that hardcodes a row count is wrong by the next sweep.
 - Carry forward the honest caveats: `trace_id` is `NULL` in the deployed runtime, pre-fix log events
   still contain one household name until retention expires, and SMS is sandboxed.
+- **Add the AWS Builder ID**, which is a hard submission requirement and appears nowhere in the repo
+  today (`grep -ci "builder id" README.md` → 0). Also confirm the four other required artifacts are
+  present and linked: public repo, README, architecture diagram, and the ≤5-minute demo video.
+  The video is the one deliverable no task in this plan produces — flag it explicitly as outstanding
+  rather than letting the plan's completion imply the submission is complete.
 
 - [ ] **Step 6: Update `CLAUDE.md`**
 
@@ -4445,12 +4497,12 @@ git push origin main
 | §3.1 Cognito & the honest count | Task 4 provisions it; Task 8 Step 6 moves the count |
 | §4 data model | Task 5 (`DECISION#` row, written before the invocation) |
 | §5 testing, all three layers | Task 2 (pure, exhaustive), Task 5 (write path gated), Task 8 (end to end) |
-| §6 risks | Task 0 (platform + zip fallback), Task 7 Step 6 (the gate), Task 5 (free text) |
+| §6 risks | Task 0 (platform), Task 7 Step 6 (the gate), Task 5 (free text) |
 | §7 disclosure | Task 8 Step 5 |
 | §8 out of scope | Task 8 Step 5 |
 
 **Placeholder scan.** No "TBD", no "add error handling", no "similar to Task N". Every code step
-carries real code. Task 7's zip-deploy path leaves the upload URL to be substituted at runtime, which
+carries real code. Task 7's Git-connected deploy needs a one-time browser authorization, which
 is a value that does not exist until the API returns it — not a placeholder.
 
 **Type consistency.** Checked across tasks: `CaseSummary` / `LedgerRow` / `Decision` / `CaseDetail` /

@@ -54,6 +54,15 @@ Identity was un-deferred by Plan 3 Task 4, which ships the Cognito pool whose ID
 anchor for every dashboard read and the one write. **Gateway stays deferred** with its written reason
 (spec §8, README). **Never describe Grace as using five.**
 
+**And state the Identity claim narrowly, because two different things share the name.** What shipped is
+a **Cognito user pool** (`grace-caseworkers` / `us-east-1_HXs3b0APR`) whose ID token `verifySession`
+validates against the pool's published JWKS, issuer, audience, expiry, `token_use: "id"`, and
+`custom:role === "caseworker"`. What did **not** ship is an **AgentCore Gateway JWT authorizer**
+(`customJWTAuthorizer` with inbound claim rules) — the runtime is still IAM-authorised. Both statements
+are honest; merging them is not. Appendix D's protections (an explicit `Deny` on
+`GetWorkloadAccessTokenForUserId`, an opaque `sub` that is never a name or an email) remain enforced in
+the runtime role either way.
+
 **Two deployed facts that must not be overclaimed:**
 
 1. Every ledger row carries a `trace_id` **key**, but its value is `NULL` in the deployed runtime, and
@@ -898,8 +907,8 @@ Task state:
 | 2 — `lib/authorize.ts` | **done** — `web/lib/authorize.ts`, 19 tests (21 with Task 1's smoke), four gates green, Python unchanged at 622. **Four defects in the plan's draft, three of them vacuous or dead tests; read below** |
 | 3 — `lib/cases.ts` | **done** — `web/lib/{env,cases}.ts`, **61 vitest tests** (39 cases + 20 authorize + 2 smoke), four gates green, Python unchanged at 622. **Ten defects in the plan's draft, one of which reported an unfiled case as `acted`; three more found in independent verification. Read below** |
 | 4 — Cognito + session verification | **done** — `infra/provision_cognito.py`, `web/lib/cognito.ts`, `web/proxy.ts`, login page + callback route. **9 Python tests (631 total), 78 vitest**, five gates green. Pool `us-east-1_HXs3b0APR` live, one seeded caseworker, `custom:role` verified on the user. **Nine defects in the plan's draft, two of which broke a gate and two of which were inverted security claims; read below** |
-| 5 — `lib/decide.ts` + the write route | not started — **the draft edits one of `_escalate`'s three call sites; read below** |
-| 6 — pages | not started — **`escapeNote` double-escaped and its own test was vacuous; read below** |
+| 5 — `lib/decide.ts` + the write route | **done** — `web/lib/decide.ts`, `web/app/api/case/[id]/decide/route.ts`, `grace/entrypoint.py` (flag only), 16 Python tests (**647 total**), **122 vitest**, five gates green. **The draft decoded a streaming response as bytes, which would have reported every approve as a failure after it succeeded; read below** |
+| 6 — pages | **done** — `web/app/{page,queue,case/[id]}/`, `web/components/`, `web/lib/session.ts`, **154 vitest**, Python unchanged at 648, five gates green. **The pages had no session verification at all — a forged cookie returned 200 with every case id. Read below** |
 | 7 — Amplify | not started — **the draft sets no SSR compute role, so every read fails after a green deploy; read below** |
 | 8 — verification + docs | not started |
 
@@ -1262,6 +1271,131 @@ index, so a table-only grant leaves `/case/c-010` rendering perfectly while **`/
 empty** — the one page the product exists for, blank for exactly the three households who need a human,
 after a green deploy. Task 7's compute role must name both ARNs. `implicitDeny` rather than
 `explicitDeny`, so it can be added later without fighting a statement.
+
+**A streaming response body decoded as bytes fails *after* the work already succeeded, which is the
+worst shape a bug can have here.** `InvokeAgentRuntimeResponse.response` is typed
+`StreamingBlobTypes` (confirmed in the SDK's own `models_0.d.ts`) and arrives as a Node
+`IncomingMessage` carrying `sdkStreamMixin` — not a `Uint8Array`. Task 5's draft called
+`new TextDecoder().decode(response.response)`, which throws
+`TypeError: The "list" argument must be an instance of ... ArrayBufferView`. That throw lands in
+`lib/decide.ts`'s own `catch`, so **every** approve would have reported "Grace could not be re-run"
+while the invocation had in fact run to completion: a caseworker told Grace failed on a case Grace had
+just decided, no error anywhere, and **no test that mocks the client would notice**, because a mock
+returns whatever shape the test author imagined. `transformToString()` is the supported read.
+**When a client returns a stream, assert against the real client's types, not against your fake's.**
+
+**Grace's outcome row must not look like a human decision, and `lib/cases.ts` already depends on
+exactly how it differs.** Task 5 writes `DECISION#<ts>#outcome` with **no `decision` attribute**, and
+`readCase` discriminates on that attribute's presence, joining the outcome to its human row by their
+shared `decided_at`. Under a naive prefix test the outcome row becomes a phantom deny attributed to
+nobody (`decided_by` is absent), and an outcome written before any human decision makes
+`alreadyDecided` true — so the **first** caseworker decision on a case refuses itself as a duplicate.
+Do not change either field without reading `readCase`'s `DECISION#` branch.
+
+**The decision row is written *before* the invocation, which is deliberately the opposite of the
+ledger's discipline.** Both are right because they claim different things: a ledger row claims *Grace
+did something*, true only once a tool returned (hard rule 6); a decision row claims *a human decided*,
+true the moment they clicked. Losing that to an infrastructure error would discard the caseworker's
+work and leave the case silently unresolved. So `recordDecision` throwing means "nothing happened",
+and the route can honestly return 503 saying so.
+
+**`is True` / `=== true`, never truthiness, on any flag that crosses a JSON boundary.** An HTTP body
+can carry `"false"`, `1`, or `[0]`, all of which are truthy in Python and JavaScript; only the JSON
+boolean deserialises to a real `true`. `grace/entrypoint.py` reads
+`payload.get("caseworker_approved") is True` and `lib/decide.ts` reads `body.filed === true`. Same
+allowlist-over-truthiness polarity as `APPROVE_DECISIONS`, for the same reason: **the unrecognised
+value must be the safe one.** Both are pinned by a test that fails under a `bool()`/truthy rewrite.
+
+**Map refusal codes to HTTP status through a `Record<RefusalCode, number>`, not a ternary chain.**
+The `Record` makes adding a code in `lib/authorize.ts` a **compile error** at the route instead of a
+silent fall-through to 400 — and it immediately caught `case_incomplete`, which Task 3 added after
+Task 5's draft was written and which is a server-side "re-run the sweep" (409), not a client mistake.
+A companion runtime test asserts the map is exhaustive, because a `Record`'s keys are erased at
+compile time.
+
+**A test that mocks the data layer but not the session tests only the first refusal branch.**
+Task 5's draft `route-guard.test.ts` mocked `readFacts` and left the session unmocked, so all four
+tests refused at `no_session` and every later branch — role, status, already-decided, the decision
+allowlist, the note cap — was unreachable. Its decision-word test then papered over this with
+`expect([400, 401]).toContain(status)`, meaning **a route that returned 401 to every authenticated
+caseworker would have passed it**. The fix mints a real RS256 token so the route's own cookie parsing
+and the real `verifySession` stay in the path, and asserts each code exactly. **A range of acceptable
+status codes in an auth test is a smell: it usually means the test cannot tell which branch it reached.**
+
+**A "flag cannot loosen the verdict" test needs a fixture where the verdict could actually loosen.**
+Task 5's headline test asserted `c-010` still escalates when approved — but `FakeGraph` files nothing,
+so hard rule 6's third branch ("clean case, no renewal filed") escalates it for *every* input.
+Measured: with the plan's own sabotage `if caseworker_approved: gate = None` spliced in, `c-010` still
+came back `escalated` and every assertion held. The claim was true of the run and unproven by the test.
+Arming the store with a `renewal_submitted` row first makes `renewal_filed` return `True`, which gives
+the sabotaged code a path to `acted` — so the gate becomes the only thing between an approval and a
+household missing a document being reported as filed. That sabotage now fails three tests. **When a
+test asserts an outcome that several independent branches all produce, it is not testing the branch you
+mean; remove the other branches' alibis first.**
+
+**`vi.fn()` narrows to its first implementation's literal type.** A fake seeded with
+`status: "escalated"` makes every later `mockImplementation` returning `"acted"` or `"error"` a
+*typecheck* failure — one of the five gates, not a runtime surprise. Type the mock's return explicitly.
+
+**An Amplify manual (zip) deployment does not build the app, and Task 7's draft assumed it did.**
+Amplify runs a buildspec **only for Git-connected apps** — `StartDeployment`'s own API documentation
+says "Starts a deployment for a manually deployed app. Manually deployed apps are not connected to a Git
+repository." So the draft's `zip … web` + `create-deployment` sequence would have uploaded TypeScript
+source, deployed nothing runnable, and never executed the `buildSpec` that runs `typecheck`/`lint`/`test`.
+A zip must instead contain a **pre-built** Amplify Hosting deployment-specification bundle:
+`.amplify-hosting/static/`, `.amplify-hosting/compute/default/` with a self-contained Node entry point
+listening on **port 3000**, and a `deploy-manifest.json` whose `routes` end in a catch-all to `Compute`.
+**Next.js emits none of it** — measured, a real `npm run build` produces `.next/` with no
+`.amplify-hosting/` and no `.next/standalone` absent `output: "standalone"`. So Grace connects the
+repository (public, `github.com/mohamedsorour1998/Grace`), which is the supported SSR path.
+**That needs exactly one browser step — authorizing the AWS Amplify GitHub app — and there is no API
+for it**; `CreateApp`'s `accessToken`/`oauthToken` are legacy personal-token fields that do not cover the
+GitHub App installation. It is the only manual step in this project.
+
+**Three Amplify traps that produce a green deploy serving nothing.** First, **framework detection
+happens on the *Add repository* page**: a monorepo whose app root is not set to `web` leaves
+`platform: WEB` silently, and `WEB` has no route handlers and no middleware — the Cognito gate and the
+decide endpoint would simply not exist. Verify `platform` is `WEB_COMPUTE` with `get-app` *before*
+building, not after. Second, **`baseDirectory` is `.next` for Next 14+ regardless of SSG or SSR**;
+`next export` was removed, and a local build may still leave an `out/` directory that looks like the
+right answer but fails with `cannot find required-server-files.json`. Third, **Amplify's build image
+ships Node 18**, which Next 16 and `jose` 6 do not support — set the Node version in the build settings
+rather than discovering it as a build failure.
+
+**The pages had no session verification at all, and the surrounding documentation asserted they did.**
+This is the most serious defect the plan produced, found in Task 6. `proxy.ts`'s own docstring said it
+was "a redirect convenience, and **never the security boundary** — a forged cookie gets past it and is
+then refused by `verifySession`, which is the check that matters", and that `verifySession` "still
+refuses on every page and on the decide route." The second half was true of the decide route and
+**false of every page**: `grep verifySession` across `app/` matched only `api/auth/callback` and
+`api/case/[id]/decide`. No page read a cookie.
+
+Measured against a real `next start` on the live table, before the fix:
+
+```text
+curl localhost:3111/                                    -> 307 /login       (no cookie)
+curl -H 'Cookie: grace_session=totally.forged.token' /  -> 200, 45143 bytes,
+        all twelve case ids, all three typed escalation reasons, the 9/3 headline
+```
+
+An unsigned, unparseable **literal sentence** was a complete authentication bypass for every read in
+the application. `web/lib/session.ts`'s `requireSession()` closes it, and all three pages call it
+**before** touching `lib/cases.ts`, so an unauthenticated request performs no DynamoDB read either.
+Re-verified after the fix on the same server: `307 /login` and **zero case ids** for both `/` and
+`/queue`.
+
+**Two lessons, and the second is the general one.** A `redirect()` that throws is the right shape for
+this guard — there is no falsy return a caller can forget to branch on, the same reasoning as
+`verifySession` having no middle value. And: **a docstring asserting that some other layer performs a
+check is not evidence that it does.** The claim was written when it was true of the only consumer that
+existed, and stayed in place while the pages were added around it. When a comment says "X is verified
+elsewhere", grep for X.
+
+**A PII scanner must be shown to detect PII before its "NONE" means anything.** Task 6's live render
+check self-tests the scanner against `Yamamoto`, `Mensah`, and `+1555` and prints those detections
+first, then reports `NONE` on the real markup. Without that, "no household identity in the markup" is
+equally true of a scanner that matches nothing. Same discipline as the twelve-surname guard having a
+companion test that feeds a name in through `reason`.
 
 
 ## The one idea that matters
