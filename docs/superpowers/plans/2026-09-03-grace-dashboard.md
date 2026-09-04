@@ -4382,7 +4382,7 @@ that do not work.
 - Create: `docs/dashboard-verification.md`
 - Modify: `README.md`, `CLAUDE.md`, `docs/architecture.md`
 
-- [ ] **Step 1: Confirm the decision path is still untouched**
+- [x] **Step 1: Confirm the decision path is still untouched**
 
 ```bash
 git diff --stat 0e9de29 -- grace/authority.py grace/steering.py grace/graph.py grace/swarm.py
@@ -4392,7 +4392,7 @@ Expected: **empty**. Three plans, one deployed system, and the four files that d
 keeps their coverage are byte-identical to when Plan 1 finished. If they differ, stop and explain
 before writing a word of documentation.
 
-- [ ] **Step 2: The end-to-end approval, on the real deployed system**
+- [x] **Step 2: The end-to-end approval, on the real deployed system**
 
 Sign in as the caseworker and approve **`c-010`** — the household missing `proof_of_residency`.
 
@@ -4416,7 +4416,7 @@ Then approve **`c-011`** (material income change) and record whatever happens �
 files. That is a legitimate outcome: the gate escalated on an ambiguity a human resolved, and the
 reason is recorded.
 
-- [ ] **Step 3: Confirm no PII reached the new surfaces**
+- [x] **Step 3: Confirm no PII reached the new surfaces**
 
 ```bash
 .venv/bin/python - <<'PY'
@@ -4440,13 +4440,13 @@ PY
 
 Expected: `NONE` and `False`. The decision rows carry the opaque Cognito `sub`, never an email.
 
-- [ ] **Step 4: Write `docs/dashboard-verification.md`**
+- [x] **Step 4: Write `docs/dashboard-verification.md`**
 
 Paste real output, not paraphrase: the empty decision-path diff, the two curl probes with their status
 codes, the `c-010` approval showing zero `renewal_submitted` rows, the `c-011` approval, the PII scan,
 and the final test count.
 
-- [ ] **Step 5: Update the README honestly**
+- [x] **Step 5: Update the README honestly**
 
 - **Four AgentCore surfaces now, not three and not five** — Runtime, Memory, Identity, harness.
   Gateway stays deferred with its reason. Update the count only because Cognito actually shipped.
@@ -4481,7 +4481,7 @@ and the final test count.
   The video is the one deliverable no task in this plan produces — flag it explicitly as outstanding
   rather than letting the plan's completion imply the submission is complete.
 
-- [ ] **Step 6: Update `CLAUDE.md`**
+- [x] **Step 6: Update `CLAUDE.md`**
 
 Move the surface count from three to four **now that Identity has shipped** — the one place the
 earlier instruction said not to change in advance. Add a "What Plan 3 established" section covering at
@@ -4490,21 +4490,21 @@ input to the gate and never a bypass; the decision row is written before the inv
 inverts `action.py`; the queue must be de-duplicated by case because each sweep appends a row; and
 `WEB_COMPUTE` versus `WEB`.
 
-- [ ] **Step 7: Write the architecture diagram**
+- [x] **Step 7: Write the architecture diagram**
 
 `docs/architecture.md` with a Mermaid diagram covering the whole system — EventBridge through Step
 Functions, Lambda, Runtime, the swarm, DynamoDB, and the dashboard with Cognito. Mermaid renders on
 GitHub, so the repo satisfies the "architecture diagram" requirement without a binary asset; export a
 PNG as well if the submission form needs an image.
 
-- [ ] **Step 8: Run everything one last time**
+- [x] **Step 8: Run everything one last time**
 
 ```bash
 .venv/bin/python -m pytest              # expect 634
 cd web && npm run test && npm run build
 ```
 
-- [ ] **Step 9: Tick every checkbox in this plan, then commit**
+- [x] **Step 9: Tick every checkbox in this plan, then commit**
 
 ```bash
 git add -A

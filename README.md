@@ -11,8 +11,12 @@ for the **AWS Agents for Humans Hackathon** (Good Neighbor track).
 
 > **Status: deployed and running on AWS.** A scheduled sweep of 12 synthetic households reports
 > **9 filed autonomously, 3 escalated to a human**, confirmed from DynamoDB rather than from a log
-> line. See [deployed verification](docs/deployed-verification.md) for the evidence, including the
-> three things that did not work as planned.
+> line. A caseworker dashboard at **[grace.rosettacloud.app](https://grace.rosettacloud.app)** shows the
+> queue and lets a human decide — and approving the household with a missing document still files
+> nothing. See [deployed verification](docs/deployed-verification.md) and
+> [dashboard verification](docs/dashboard-verification.md) for the evidence, including the parts that
+> did not work. **The demo video is not yet recorded**; see
+> [still outstanding](#still-outstanding-for-submission).
 
 ---
 
@@ -92,8 +96,12 @@ EventBridge (daily sweep) → Step Functions → Lambda → AgentCore Runtime
                             DynamoDB (case ledger)         ┤
                             Family channel (SMS/transcript)┘
 
-Caseworker dashboard → API layer → invoke_agent_runtime
+Caseworker → Cognito → Amplify SSR dashboard → DynamoDB (reads)
+                                             └→ invoke_agent_runtime (a decision)
 ```
+
+The dashboard **never** talks to the runtime from the browser: a decision is recorded server-side, then
+the agent is re-invoked so the gate re-evaluates.
 
 **[Full architecture diagram →](docs/architecture.md)** — the whole system, plus the three claims it
 supports and the evidence for each. Rendered as
@@ -199,18 +207,28 @@ through `c-009` and for none of the three escalating households. The `escalation
 exactly `c-010`, `c-011`, and `c-012`, each with the gate's typed reason. Full output, including two
 negative results, is in [docs/deployed-verification.md](docs/deployed-verification.md).
 
-### Three AgentCore surfaces, not five
+### Four AgentCore surfaces, not five
 
 | Surface | State |
 |---|---|
 | **Runtime** | Shipped. Container on ARM64, IAM auth, deployed via the `agentcore` CLI and CDK. |
 | **Memory** | Shipped. `grace_household_memory`, 365-day expiry, per-household actor scoping. |
+| **Identity** | Shipped, and **narrowly**: a Cognito user pool (`grace-caseworkers` / `us-east-1_HXs3b0APR`) whose ID token is the dashboard's trust anchor. See the sentence below for what that does and does not mean. |
 | **The deploy harness** | Shipped. `infra/provision_all.py` creates every resource idempotently; a guarded teardown exists. |
 | **Gateway** | **Deferred.** The largest remaining chunk and the most common deploy-day failure — outbound auth differs per target type. The `target___tool` prefix bug stays fixed and tested in `grace/steering.py` regardless, so re-adding Gateway later cannot silently bypass the gate. |
-| **Identity / Cognito JWT** | **Deferred.** No caseworker IdP exists. A JWT authorizer whose claims gate nothing is worse than honest IAM auth. The findings that make it safe — an explicit `Deny` on `GetWorkloadAccessTokenForUserId`, an opaque `sub` — are already enforced in the runtime role. |
 
-Two surfaces are deliberately absent and named as such. Claiming five would be the one thing that
+One surface is deliberately absent and named as such. Claiming five would be the one thing that
 turns a working entry into a dishonest one.
+
+**What "Identity" means here, precisely, because two different things share the name.** What shipped
+is a **Cognito user pool whose ID token is the dashboard's trust anchor**: `verifySession` checks the
+signature against the pool's published JWKS, the issuer, the audience, the expiry, `token_use: "id"`,
+and `custom:role === "caseworker"` — and a failure of any one of those produces `null` rather than a
+lesser session. What did **not** ship is an **AgentCore Gateway JWT authorizer**
+(`customJWTAuthorizer` with inbound claim rules); the runtime is still IAM-authorised. Both are
+honest; conflating them is not. The findings that make the JWT path safe — an explicit `Deny` on
+`GetWorkloadAccessTokenForUserId`, and a `sub` that is an opaque UUID rather than a name or an email —
+remain enforced in the runtime role either way.
 
 ### Observability: the alarm is on escalation count, not error rate
 
@@ -235,7 +253,53 @@ row cannot. The reasoning is recorded in full in
 
 ---
 
-## Running it
+## The caseworker dashboard
+
+**[grace.rosettacloud.app](https://grace.rosettacloud.app)** — Next.js on Amplify SSR
+(`WEB_COMPUTE`), gated on Cognito. Accounts are **admin-created only**
+(`AllowAdminCreateUserOnly: true`), so nobody on the internet can register and reach the decide
+endpoint.
+
+Three pages, all server-rendered: the sweep at a glance, the escalation queue, and one household's
+full audit trail with an approve/deny control. Verified live with a real Cognito ID token — `/`
+renders 12 households and the headline **"9 handled alone, 3 waiting on you"**, `/queue` shows exactly
+`c-010 c-011 c-012`, and `/case/c-010` shows the gate's own reason,
+`missing_document: proof_of_residency`.
+
+### The claim that matters: a human's approval is an input to the gate, never a bypass
+
+A caseworker approved `c-010` — the household missing `proof_of_residency` — on the deployed system.
+**Grace filed nothing.**
+
+```json
+{"recorded":true,"caseId":"c-010","decision":"approve",
+ "graceOutcome":"Grace re-checked and did not file. missing_document: proof_of_residency is not on file",
+ "filed":false}
+```
+
+Confirmed from DynamoDB rather than from that response: the approval wrote a `DECISION#` row carrying
+the opaque Cognito `sub`, Grace's re-check wrote its outcome alongside it, and `renewal_submitted` for
+`c-010` is still **0**. A human approved, Grace re-checked, the gate refused again, and the document
+is still missing.
+
+**The guarantee is structural, not a checked condition.**
+`evaluate(case, today, pack=None)` has **no parameter an approval could occupy**, so the flag cannot
+reach the gate even by mistake — the most it can do is append a sentence to the reason a human reads,
+after the verdict is already final. And the dashboard **never resumes a paused graph**: resuming with
+any truthy response *approves* the blocked tool (`"needs review"` was measured filing a renewal for a
+household missing a document), so an approval becomes a durable row plus a fresh invocation, and the
+gate re-evaluates the case facts — which have not changed.
+
+Every refusal was exercised too: a forged cookie 307s to `/login` leaking **zero** case ids, the write
+route returns **401 `no_session`**, `{"decision":"Escalate."}` is refused **400 `unknown_decision`**
+(an allowlist — the unrecognised answer must be the safe one), and a case Grace handled itself returns
+**409 `not_escalated`**. Zero household names, phone numbers, or emails appear in ~151 KB of deployed
+markup or in any row of the table.
+
+Full output in **[dashboard verification](docs/dashboard-verification.md)**, including what was
+deliberately *not* run and why.
+
+---
 
 Requires Python 3.12+, AWS credentials, and Bedrock Nova access in `us-east-1`.
 
@@ -250,11 +314,18 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 The sweep runs 12 synthetic households. Nine are filed autonomously; three escalate —
 one missing a document, one with a material income change, one with conflicting sources.
 
-Two suites, deliberately separate. `pytest` runs the fast unit suite — **622 tests**, no network.
+Two suites, deliberately separate. `pytest` runs the fast unit suite — **715 tests**, no network.
 `pytest evals/` runs trajectory evals against **real Bedrock** — about 65 model invocations across five
 graph runs — and asserts the gate's ordering holds on real model behaviour: `read_case`, `check_window`,
 and `list_documents` always precede any action. They are excluded from the default run because they cost
 money and take minutes, not because they are optional.
+
+The dashboard has its own toolchain and its own suite — **157 tests** — run from `web/`:
+
+```bash
+cd web
+npm run typecheck && npm run lint && npm run test && npm run build
+```
 
 The evals pass 23/23, and honestly: that took two runs. One assertion — that an escalating case does
 *something* rather than nothing — is liveness, not safety, because the gate only ever permits or refuses
@@ -285,10 +356,11 @@ case that leaked now returns an escalation with no name in the payload, confirme
 sweep with zero household names anywhere in the output.
 
 Fixing the source did not clean up what was already written, so that was checked separately: a scan of
-all 633 rows in the DynamoDB table found the surname in three fields of two pre-fix rows, and those
-values were stripped in place without touching any key, status, deadline, or `renewal_submitted` row.
-The scan now returns clean. Log events written before the fix still contain the name and cannot be
-unwritten; that, and the exact scope of the cleanup, are recorded in
+every row in the DynamoDB table found the surname in three fields of two pre-fix rows, and those values
+were stripped in place without touching any key, status, deadline, or `renewal_submitted` row. Repeated
+scans now return clean, including the rows the dashboard's own approval wrote. Log events written before
+the fix still contain the name and cannot be unwritten; they age out with the log group's retention.
+That, and the exact scope of the cleanup, are recorded in
 [docs/deployed-verification.md](docs/deployed-verification.md#5-a-household-name-reached-cloudwatch--found-fixed-at-the-source-pre-fix-events-remain)
 rather than quietly smoothed over.
 
@@ -310,12 +382,29 @@ Recorded as decisions rather than omissions.
 | Deferred | Why |
 |---|---|
 | **AgentCore Gateway** | Largest remaining chunk; outbound auth shape differs per target type, which is the most common deploy-day failure. The gate's `target___tool` prefix handling stays tested regardless. |
-| **AgentCore Identity / Cognito JWT** | No caseworker IdP exists. A JWT authorizer whose claims gate nothing is worse than honest IAM auth. |
+| **An AgentCore Gateway JWT authorizer** | Distinct from the Cognito pool that *did* ship. The runtime stays IAM-authorised; a `customJWTAuthorizer` belongs with Gateway, above. |
 | **Real SMS** | Account is sandboxed: `MaxLimit: 1`, zero origination numbers, and sender-ID registration in the maintainer's country requires a letter of authorization, company registration, and a tax card. |
 | **Reflection loop** | Genuinely the originality differentiator, and genuinely additive. It cannot be built before a deployed sweep exists to reflect on. |
 | **Skills / progressive disclosure** | A prompt-size optimization. Grace's prompts are not the bottleneck. |
 | **Bedrock Guardrails** | Span redaction already covers the export path that matters, and every household is synthetic, so PII anonymization would protect nothing today. |
-| **Caseworker dashboard** | Next up. The escalation queue it reads is already live and populated. |
+| **CloudWatch trace correlation** | Every ledger row carries a `trace_id` key whose value is `NULL`; Runtime injects the OTEL variables without installing an in-process tracer provider, so zero spans exist. The fix requires a package this project refuses. |
+
+### Still outstanding for submission
+
+**The ≤5-minute demo video does not exist.** It is a hard requirement and no part of the build produces
+it. Nothing in this README should be read as saying the submission is complete.
+
+| Required artifact | State |
+|---|---|
+| Public repository | Present — [`mohamedsorour1998/Grace`](https://github.com/mohamedsorour1998/Grace), MIT |
+| README | This file |
+| Architecture diagram | [`docs/architecture.md`](docs/architecture.md) (Mermaid, renders on GitHub) and [`docs/architecture.png`](docs/architecture.png) |
+| **≤5-minute demo video** | **Not recorded.** Outstanding. |
+| **AWS Builder ID** | `TODO(sorour)` — see below |
+
+**AWS Builder ID:** `TODO(sorour)` — fill in before submitting. It is an account identifier that cannot
+be read from this repository or from the AWS API, so it is left as an explicit placeholder rather than
+guessed at.
 
 ---
 
@@ -336,10 +425,16 @@ grace/
 ├── observability.py  # telemetry setup + span-redaction guard
 ├── entrypoint.py     # what AgentCore Runtime invokes
 └── run.py            # local sweep CLI
-infra/                # provisioning: DynamoDB, IAM, Lambda, Step Functions, alarm
+infra/                # provisioning: DynamoDB, IAM, Lambda, Step Functions, alarm, Cognito, Amplify
 runtime_app.py        # BedrockAgentCoreApp wrapper, refuses to start unredacted
 evals/                # trajectory evals proving gate ordering holds
-docs/                 # design specs, plans, deploy runbook, deployed verification
+web/                  # Next.js caseworker dashboard (Amplify SSR)
+├── lib/authorize.ts   #   pure decision gate — is this case decidable, by this session?
+├── lib/cases.ts       #   the only DynamoDB reader, paginated and de-duplicated
+├── lib/cognito.ts     #   ID-token verification: signature, iss, aud, exp, token_use, role
+├── lib/decide.ts      #   records the decision, then re-invokes so the gate re-runs
+└── app/               #   sweep · queue · one case's audit trail
+docs/                 # design specs, plans, deploy runbook, verification evidence
 ```
 
 ---

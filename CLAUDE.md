@@ -22,18 +22,25 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 - Spec: `docs/superpowers/specs/2026-08-28-grace-design.md`
 - Plan 1 (core, local): `docs/superpowers/plans/2026-08-28-grace-core.md`
 - Plan 2 (AgentCore deploy): `docs/superpowers/plans/2026-09-03-grace-agentcore.md` — **complete**
-- Plan 3 (dashboard): `docs/superpowers/plans/2026-09-03-grace-dashboard.md` — **in progress**,
+- Plan 3 (dashboard): `docs/superpowers/plans/2026-09-03-grace-dashboard.md` — **complete**,
   spec `docs/superpowers/specs/2026-09-03-grace-dashboard-design.md`,
-  runbook `docs/dashboard-runbook.md`
+  runbook `docs/dashboard-runbook.md`,
+  evidence `docs/dashboard-verification.md`
 
 ---
 
 ## Current state
 
-**Plans 1 and 2 are both complete.** Plan 1's 9 tasks and Plan 2's 11 tasks are done. **622 unit tests
-pass** (`.venv/bin/python -m pytest`), and 23 trajectory evals pass against real Bedrock
-(`.venv/bin/python -m pytest evals/` — `testpaths = ["tests"]` excludes `evals/` from the fast suite).
-`grace sweep` runs end to end locally and reports **9 acted / 3 escalated**.
+**All three plans are complete.** Plan 1's 9 tasks, Plan 2's 11, and Plan 3's 9 are done. **715 unit
+tests pass** (`.venv/bin/python -m pytest`) plus **157 vitest tests across 7 files** in `web/`, and 23
+trajectory evals pass against real Bedrock (`.venv/bin/python -m pytest evals/` — `testpaths =
+["tests"]` excludes `evals/` from the fast suite). `grace sweep` runs end to end locally and reports
+**9 acted / 3 escalated**.
+
+**One hard submission requirement is still outstanding: the ≤5-minute demo video.** No task in any of
+the three plans produces it. The **AWS Builder ID** sits in the README as an explicit `TODO(sorour)`
+because it cannot be read from the repo or the AWS API. Everything else required — public repo, README,
+architecture diagram — exists. Do not describe the submission as complete.
 
 **The evals needed two runs to reach 23/23, and that is expected for exactly one of them.**
 `test_an_escalating_case_does_something_rather_than_nothing[c-011]` is liveness, not safety — the gate
@@ -894,9 +901,16 @@ that needs to prove *which* case was read, use `case_id`; never reintroduce a na
 ### What Plan 3 established — follow these
 
 Plan 3 adds a Next.js caseworker dashboard in `web/`, deployed to Amplify with Cognito auth. It also
-un-defers **AgentCore Identity**, which Task 4 has now shipped — so the honest surface count is
-**four**, and the "Scope is four AgentCore surfaces" paragraph above has been updated to say so. The
-README still needs the same correction when Task 8 revisits it.
+un-defers **AgentCore Identity**, which Task 4 shipped — so the honest surface count is **four**, and
+both the "Scope is four AgentCore surfaces" paragraph above and the README now say so. **Plan 3 is
+complete**; `docs/dashboard-verification.md` is the pasted evidence.
+
+**"Identity shipped" means one specific thing, and the narrow version is the only honest one.** What
+shipped is a **Cognito user pool whose ID token is the dashboard's trust anchor** — `verifySession`
+checks signature, issuer, audience, expiry, `token_use: "id"`, and `custom:role === "caseworker"`, and
+any single failure yields `null` rather than a lesser session. What did **not** ship is an **AgentCore
+Gateway JWT authorizer** (`customJWTAuthorizer` with inbound claim rules); the runtime is still
+IAM-authorised. Never let the two collapse into "Grace uses AgentCore Identity" without the qualifier.
 
 Task state:
 
@@ -910,7 +924,7 @@ Task state:
 | 5 — `lib/decide.ts` + the write route | **done** — `web/lib/decide.ts`, `web/app/api/case/[id]/decide/route.ts`, `grace/entrypoint.py` (flag only), 16 Python tests (**647 total**), **122 vitest**, five gates green. **The draft decoded a streaming response as bytes, which would have reported every approve as a failure after it succeeded; read below** |
 | 6 — pages | **done** — `web/app/{page,queue,case/[id]}/`, `web/components/`, `web/lib/session.ts`, **154 vitest**, Python unchanged at 648, five gates green. **The pages had no session verification at all — a forged cookie returned 200 with every case id. Read below** |
 | 7 — Amplify | **done** — `infra/provision_amplify.py`, **715 Python tests**, app `dbi97xicbjbv8` live at `https://grace.rosettacloud.app` serving real data. **Thirteen defects in the plan's draft; four of my own tests initially survived sabotage. Read below** |
-| 8 — verification + docs | not started |
+| 8 — verification + docs | **done** — `docs/dashboard-verification.md`, four-surface README with the AWS Builder ID field, dashboard tier added to `docs/architecture.md`. **715 Python / 157 vitest, four gates green.** The end-to-end approval was executed against the live system: **approving `c-010` filed nothing.** Read below |
 
 **`web/` runs its own toolchain, and `npm run build` is the gate that matters** — it is what Amplify
 runs, so a green `typecheck` and `test` with a failing `build` is not a deployable app. Four commands,
@@ -1402,11 +1416,13 @@ companion test that feeds a name in through `reason`.
 `https://grace.rosettacloud.app` — Amplify app `dbi97xicbjbv8`, `WEB_COMPUTE`, custom domain on
 Route 53, compute role `grace-amplify-compute-role` at app and branch level. Verified live with a real
 Cognito ID token: `/` renders 12 cases and the **"9 handled alone / 3 waiting on you"** headline,
-`/queue` shows exactly `c-010 c-011 c-012` de-duplicated from 19 GSI rows, `/case/c-010` shows its real
-`missing_document: proof_of_residency`. **Zero household identity across 144,916 bytes** of deployed
-markup. A forged cookie 307s to `/login` with **zero** case ids; the write route returns **401
-`no_session`**; `"Escalate."` is refused **400 `unknown_decision`**; and the table is unchanged at 651
-rows with **zero `DECISION#` rows**, so every refusal was a real refusal.
+`/queue` shows exactly `c-010 c-011 c-012` de-duplicated from the GSI's escalation rows, `/case/c-010`
+shows its real `missing_document: proof_of_residency`. **Zero household identity** across ~151 KB of
+deployed markup. A forged cookie 307s to `/login` with **zero** case ids; the write route returns **401
+`no_session`**; `"Escalate."` is refused **400 `unknown_decision`**; an unknown case **404
+`unknown_case`**; and a case Grace handled itself **409 `not_escalated`**. Task 8 then executed the
+approval those refusals guard: **approving `c-010` wrote a `DECISION#` row and filed nothing** — see
+`docs/dashboard-verification.md`.
 
 Five deploy defects, and the pattern is what matters: **a green build proves nothing about a running
 SSR app.** Builds 1–4 all reported SUCCEED or failed for reasons that misdescribed themselves.
@@ -1442,6 +1458,75 @@ branches and try again.` And `except BadRequestException` around `create_branch`
 compute role*, which all three of `CreateApp`/`CreateBranch`/`UpdateApp` report with that same code —
 so a script could report success with no credentials in the SSR runtime. Match on the message, not the
 code.
+
+### What Task 8 established — follow these
+
+**A caseworker's approval is an input to the gate, never a bypass — and the four load-bearing facts
+sit in four different files.** Say all four or none: (1) `web/` contains no resume vocabulary, so no
+paused graph is ever resumed with a truthy response; (2) the approval is recorded as a durable
+`DECISION#` row and the runtime is **re-invoked**, so the gate re-evaluates *case facts*; (3)
+`evaluate` has no parameter an approval could occupy; (4) `caseworker_approved` reaches only
+`_escalate`'s wording. Drop any one and the claim becomes "we told it not to", which is what every
+other agent says.
+
+**The decision row is written *before* the invocation, and that inverts `action.py`'s ordering on
+purpose.** `web/lib/decide.ts` issues `PutItemCommand` (line ~118) then `InvokeAgentRuntimeCommand`
+(line ~173), so a runtime failure still leaves a durable record that a human decided. `action.py` is
+the opposite — a ledger row must never claim an action that did not happen (hard rule 6). **The rule
+that reconciles them: write the row first when the row records a *decision*, write it after when the row
+records an *effect*.** A human's decision is a fact the moment they make it; a filing is only a fact
+once the tool confirms it.
+
+**Middleware checks *presence*; the route and every page verify the *token*.** `web/proxy.ts` only asks
+whether the cookie exists — it runs on the edge and its own docstring says it is "never the security
+boundary". `verifySession` refuses independently on all three pages and on the decide route, which is
+why a forged cookie 307s to `/login` and the write route answers 401 rather than either one trusting
+the redirect. Never move an authorisation decision into `proxy.ts`, and never remove `verifySession`
+from a page because middleware "already covers it".
+
+**The queue must be de-duplicated by case, because every sweep appends a fresh escalation row.** The
+GSI held 19 rows for three households before Task 8 and 20 after; `/queue` renders exactly `c-010
+c-011 c-012` either way. **The distinct case set is the claim; the row count is not.** A reader that
+rendered rows would show the same family three times and make a caseworker think the backlog was
+growing. Also: `listQueue`'s `filed` is `false` by construction — the GSI projects escalation rows
+only, so it cannot see a `renewal_submitted` row.
+
+**The end-to-end safety claim is executed, not argued: approving `c-010` filed nothing.** A real
+caseworker session POSTed `{"decision":"approve"}` to the deployed route for the household missing
+`proof_of_residency`; the response said `filed: false`, and DynamoDB confirms `renewal_submitted` for
+`c-010` is still **0** while two `DECISION#` rows exist. **Confirm this from the store, never from the
+route's own response** — hard rule 6 applies to a verification step as much as to the agent.
+
+**`c-011`'s approval in the plan's Step 2 was deliberately not run, and skipping it was the right
+call.** The plan invites approving `c-011` too, noting a filing there would be legitimate. But `c-011`
+is one of the three households whose *un-filed* state is the demo's central evidence, and a filing
+consumes that irreversibly to re-confirm a property `c-010` already proves. **When a plan step would
+spend the demo's own evidence on something already established, report instead of executing** — and say
+in the artifact that it was skipped and why, so the gap is visible rather than looking like an oversight.
+
+**Measure the baseline before a write, or the delta is unattributable.** The table was scanned *first*
+(651 rows, **zero** `DECISION#` rows), then again after (663 rows). All twelve new rows carry an `sk`
+timestamp inside the probe window and all are on `c-010`: 2 decision, 9 ledger, 1 escalation — and the
+9 ledger rows end in `family_message_sent`, never `renewal_submitted`. Row counts have now moved
+633 → 643 → 651 → 663 in two days, so **never write a row count into documentation as a constant** —
+write the invariants instead: `renewal_submitted` exists for exactly `c-001`–`c-009` and for none of
+`c-010`/`c-011`/`c-012`.
+
+**A PII scanner that matches nothing reports `NONE` too.** The table-wide scan (663 rows) and the
+deployed-markup scan (~151 KB across five responses) both returned `NONE` for all twelve surnames,
+`+1555`, and `@`. That is only meaningful because `web/__tests__` feeds a name in through `reason` —
+the exact path that reached CloudWatch in Plan 2 — and asserts the scanner catches it.
+
+**Cite the EventBridge-scheduled execution precisely.** One of the last three `grace-sweep` executions
+was schedule-triggered rather than manual, identified by its **composite execution name**
+(`<uuid>_<uuid>`, the shape EventBridge generates) where manual invocations get a plain UUID. That is a
+stronger claim than Plan 2's doc records — the automation genuinely fires unattended — but say "one of
+the three", not "all three".
+
+**The demo video is the one hard submission requirement nothing in three plans produces.** Neither
+`README.md` nor `docs/dashboard-verification.md` may imply the submission is complete. The **AWS Builder
+ID** is likewise not derivable from the repo or the AWS API; it sits in the README as an explicit
+`TODO(sorour)` field rather than a guessed value.
 
 
 ## The one idea that matters

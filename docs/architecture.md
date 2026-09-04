@@ -32,10 +32,13 @@ flowchart TB
         MEM[("AgentCore Memory<br/>per-household facts<br/>365-day expiry")]
     end
 
-    subgraph human["The human half"]
-        DASH["Next.js dashboard on Amplify SSR<br/>sweep · queue · one case's audit trail"]
-        COG["Cognito <code>grace-caseworkers</code><br/>admin-create only · custom:role"]
+    subgraph human["The human half — grace.rosettacloud.app"]
+        direction TB
         CW(["caseworker"])
+        COG["Cognito <code>grace-caseworkers</code><br/>admin-create only · <code>custom:role</code><br/>hosted UI"]
+        SSR["Amplify SSR <code>WEB_COMPUTE</code><br/><code>requireSession</code> verifies every request<br/>sweep · queue · one case's audit trail"]
+        AUTHZ{{"<code>authorize()</code> — pure TS<br/>is this case decidable?"}}
+        DEC["<code>lib/decide.ts</code><br/>writes the row, <i>then</i> re-invokes<br/>maxAttempts 1"]
     end
 
     ALARM["CloudWatch alarm<br/><code>escalations &lt; 3</code>"]
@@ -53,18 +56,38 @@ flowchart TB
     DECIDE <--> MEM
     DDB --> ALARM
 
-    CW --> COG
-    COG --> DASH
-    DASH -->|"reads, server-side"| DDB
-    DASH -->|"approve → re-invoke, gate re-runs"| LAM
+    CW -->|"sign in"| COG
+    COG -->|"ID token → httpOnly cookie"| SSR
+    SSR -->|"reads, server-side only"| DDB
+    SSR --> AUTHZ
+    AUTHZ -->|"permitted"| DEC
+    DEC -->|"1 · DECISION# row"| DDB
+    DEC ==>|"2 · InvokeAgentRuntime<br/><b>never resumes a paused graph</b>"| DECIDE
 
     classDef gate fill:#B4530A,stroke:#7a3806,color:#fff
     classDef store fill:#E4E1D8,stroke:#b8b3a5,color:#1C1F23
     classDef human fill:#2F6F4E,stroke:#1f4a34,color:#fff
-    class GATE gate
+    class GATE,AUTHZ gate
     class DDB,MEM store
-    class CW,COG,DASH human
+    class CW,COG,SSR,DEC human
 ```
+
+**The browser never reaches the agent.** A caseworker's decision goes to a server-side route, which
+records it durably and *then* re-invokes the runtime — so the request re-enters the graph at `decide`
+and the same authority gate runs again on the same case facts. There is no path from the client to
+`InvokeAgentRuntime`, and no path that resumes a paused graph.
+
+### The dashboard tier, in the order a request travels
+
+| Step | Component | What it refuses |
+|---|---|---|
+| 1 | `proxy.ts` (edge) | A request with **no** session cookie → 307 `/login`. *Presence only* — never the security boundary. |
+| 2 | `requireSession` → `verifySession` | A cookie whose signature, issuer, audience, expiry, `token_use`, or `custom:role` fails → `null`, then 307. Runs on **every page and the write route**, independently. |
+| 3 | `lib/cases.ts` | The only DynamoDB reader. Paginated with a page cap that **throws** rather than truncating, because a truncated Query drops the newest rows — exactly where `renewal_submitted` lives. |
+| 4 | `authorize()` | Pure TypeScript, no I/O. A case that is not escalated, already decided, unknown, or whose last run reached no outcome. Session checks run **before** fact checks, so refusal codes cannot enumerate case ids. |
+| 5 | `lib/decide.ts` | Writes the `DECISION#` row, then invokes with `maxAttempts: 1` — the call is **not idempotent**, and each retry would re-run the whole graph. |
+| 6 | `authority.py` | The gate, unchanged. It has no parameter an approval could occupy. |
+
 
 ---
 
@@ -104,14 +127,23 @@ verdict. On a real run the referee concluded *CLEAR* for `c-012` and the case es
 
 ### 3. A human's approval is an input to the gate, never a bypass
 
-The dashboard's dotted line to the gate is labelled *never resumes a paused graph*, and that is the
-sharpest thing in this diagram.
+The dashboard's path to `decide` is the sharpest thing in this diagram, and it is now **executed rather
+than asserted**.
 
 Resuming a paused agent with any truthy response **approves the blocked tool** — measured against the
 real executor, `"needs review"` resumed a graph and filed a renewal for a household missing a required
 document. So the deployed path has no resume at all. A caseworker's approval instead becomes a durable
-`DECISION#` row, and Grace is re-invoked so the gate re-evaluates the **case facts**. Approving `c-010`
-files nothing, because the document is still missing.
+`DECISION#` row, and Grace is re-invoked so the gate re-evaluates the **case facts**.
+
+**Verified on the deployed system:** a real caseworker session approved `c-010`, the household missing
+`proof_of_residency`. The route returned `filed: false`, and DynamoDB confirms `renewal_submitted` for
+`c-010` is still **0** while the `DECISION#` row records who decided and what Grace did instead. A human
+approved, Grace re-checked, the gate refused again.
+
+The guarantee is **structural**: `evaluate(case, today, pack=None)` has no parameter an approval could
+occupy, so the flag cannot reach the gate even by mistake. It appends a sentence to the reason a human
+reads, after the verdict is already final. Evidence in
+[`dashboard-verification.md`](dashboard-verification.md#3-the-approval-that-files-nothing--the-whole-safety-argument-executed).
 
 ---
 
@@ -123,8 +155,8 @@ files nothing, because the document is still missing.
 | **Real SMS delivery** | The account is sandboxed: `MaxLimit: 1`, zero origination numbers, and Egypt sender-ID registration needs a letter of authorization, company registration, and a tax card. `TranscriptChannel` is the always-works path and the demo never depends on SMS. |
 | **CloudWatch trace correlation** | Every ledger row carries a `trace_id` key, but its value is `NULL` in the deployed runtime: Runtime injects the OTEL environment variables without installing an in-process tracer provider, so zero spans exist. Fixing it would require `aws-opentelemetry-distro`, which is forbidden here. `NULL` is honest, and the DynamoDB escalation queue is the demo's evidence instead. |
 
-**Three AgentCore surfaces are in use** — Runtime, Memory, and the deploy harness. Cognito adds
-Identity as a fourth when Plan 3 ships. Never five.
+**Four AgentCore surfaces are in use** — Runtime, Memory, Identity (the Cognito pool whose ID token is
+the dashboard's trust anchor, *not* a Gateway JWT authorizer), and the deploy harness. Never five.
 
 ---
 
