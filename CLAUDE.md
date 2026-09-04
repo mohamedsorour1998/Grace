@@ -893,7 +893,7 @@ Task state:
 | 0 — preflight | **done** — eight of the plan's dependency pins were wrong; corrected from real registry data |
 | 1 — scaffold `web/` | **done** — commit `e3ea347`, four gates green (`typecheck`, `lint`, `test`, `build`), Python suite unchanged at 622. **Two more version pins and three config defects; read below** |
 | 2 — `lib/authorize.ts` | **done** — `web/lib/authorize.ts`, 19 tests (21 with Task 1's smoke), four gates green, Python unchanged at 622. **Four defects in the plan's draft, three of them vacuous or dead tests; read below** |
-| 3 — `lib/cases.ts` | not started — **pre-verified against the live table; read `docs/plan3-live-data-findings.md` before writing a fixture** |
+| 3 — `lib/cases.ts` | **done** — `web/lib/{env,cases}.ts`, **61 vitest tests** (39 cases + 20 authorize + 2 smoke), four gates green, Python unchanged at 622. **Ten defects in the plan's draft, one of which reported an unfiled case as `acted`; three more found in independent verification. Read below** |
 | 4 — Cognito + session verification | not started — **pre-verified against a real minted ID token and `jose` 6.2.10; the draft's JWKS injection had no environment gate. Read below** |
 | 5 — `lib/decide.ts` + the write route | not started — **the draft edits one of `_escalate`'s three call sites; read below** |
 | 6 — pages | not started — **`escapeNote` double-escaped and its own test was vacuous; read below** |
@@ -1026,6 +1026,102 @@ it still using invented ones, leaving the implementor to guess. The ordering tes
 `c-010`/`c-011`/`c-012` deadlines **plus a third row**, so deadline order, escalation-time order, and
 GSI order all differ on the same input — which is what makes the assertion distinguish "sorted by
 deadline" from "whatever the GSI returned".
+
+**"Not escalated" is not the same claim as "Grace filed the renewal" — hard rule 6 at the read
+boundary.** Task 3's draft classified a case as `pending ? "escalated" : "acted"`, so a household with
+no pending escalation and no `renewal_submitted` row was reported **acted**: silently counted among the
+nine while nothing had been filed for it. The shipped reader requires the ledger row that proves a
+filing (`pending ? "escalated" : filed ? "acted" : "error"`), which also makes `CaseStatus`'s `error`
+variant reachable — `authorize` already refuses it as undecidable, so it was otherwise a shipped,
+tested, unreachable guard. **`listQueue`'s `filed` is `false` by construction, not by measurement**: the
+`escalation-queue` GSI projects escalation rows only, so that query cannot see a renewal row. Never
+render `filed` from `listQueue`; `listCases` reads the ledger for all twelve cases instead.
+
+**A fix that makes a dead branch reachable is not finished until you read what that branch says.**
+Requiring evidence for `acted` (above) made `CaseStatus`'s `error` variant reachable for the first
+time — and `authorize` was refusing `acted` and `error` with the same code and the same sentence,
+"Grace handled this case itself; there is nothing to decide." Harmless while unreachable; false the
+moment it was not, because `error` means nothing was filed **and** nothing escalated. That is the
+unconfirmed-success claim hard rule 6 exists to forbid, aimed at the person who could still save the
+family: a caseworker told Grace handled it moves on. Split into a `case_incomplete` code reading
+"Grace's last run on this case reached no outcome. Re-run the sweep before deciding." Both still
+refuse — only the wording changed, and the polarity was never wrong. **When a change widens the set of
+inputs a branch can see, re-read that branch's message as well as its logic.**
+
+**Three guards in `lib/cases.ts` survived the implementor's own 24-sabotage sweep, and two were
+documented-but-untested.** Its header comment says `readEnv()` sits outside `readCase`'s `try` "on
+purpose"; moving it inside passed all 58 tests, and the consequence is that a missing
+`GRACE_TABLE_NAME` makes all twelve households read back `null` — `/` renders an empty caseload,
+`/case/[id]` renders not-found, and nothing logs. Separately, `MAX_PAGES` was pinned only through
+`listQueue`, which throws; `readCase` **catches**, so an uncapped loop there hangs the SSR request
+instead of failing it (Plan 1 Task 6's resume loop, on the request path). **A comment explaining why
+a line is where it is does not test that it stays there** — if a sentence in a docstring states a
+safety property, there should be an assertion with the same content.
+
+**A sabotage that crashes the test runner scores as SURVIVED on an assertion-counting harness.**
+Removing `MAX_PAGES` entirely kills the vitest worker with `SIGABRT` mid-file; the JSON reporter then
+records **zero** failed assertions, with the file's other tests simply absent from the report.
+Raising the cap to a large finite number instead produces an ordinary failure. So a sabotage harness
+must distinguish "no test failed" from "the run did not complete" — check the reporter's own
+accounting and the number of tests that reported at all, not the exit code, and never read a green
+assertion count from a run that aborted.
+
+**An ISO timestamp compared as a string inverts, and the obvious fixture cannot catch it.** `Z` (0x5A)
+sorts above `.` (0x2E), so `"…T05:00:01Z" > "…T05:00:01.500000+00:00"` is `true` while the offset row is
+the *later* instant — the **older** row wins a newest-wins dedup. Grace writes `+00:00` microsecond
+stamps and nothing stops another writer using `Z`. Compare with `Date.parse`, in **both** places that
+pick a newest escalation (`listQueue` and `readCase` each have their own picker; fixing one does not fix
+the other). **The stamps in such a test must differ within the same second** — a fixture an hour apart
+agrees under both orderings, because the hour differs before the `Z`/`.` byte is reached, and a
+string-comparison sabotage against it *survived*. The test now asserts its own fixture disagrees before
+asserting the behaviour.
+
+**`parseInt` on a DynamoDB `N` chosen by a `.`-test reads a large number back as `1`.** boto3
+serializes `Decimal` in canonical form, so `1e30` arrives as `{"N": "1E+30"}` — no `.` in it — and
+`parseInt("1E+30", 10)` is **1**, a value a factor of 1e30 too small with no error anywhere. Use
+`Number()`. One such row exists live (`c-002`, the type round-trip row, which carries the table's only
+`BOOL` and `N` values).
+
+**`as NodeJS.ProcessEnv` does not compile under Next 16.** It declares `NODE_ENV` as a **required**
+property (`next/types/global.d.ts:23`), so `{ AWS_REGION: "x" } as NodeJS.ProcessEnv` fails with
+`TS2352`. `readEnv` takes `EnvSource = Readonly<Record<string, string | undefined>>` — what it actually
+needs, and `process.env` is assignable to it. Casting through `unknown` would reintroduce Task 2's
+"the promise stops being checked" hole.
+
+**A placeholder belongs to the renderer, never to the data layer.** The draft's `str(row.program, "—")`
+was structurally always a dash, because no escalation row carries `program` at all (measured across all
+18; `d_program` exists only on `renewal_submitted` rows). A presentation dash inside `lib/cases.ts` is a
+magic value a caller cannot tell from real data — return `""` and let Task 6's `{summary.deadline || "—"}`
+decide. Same division of labour as `authority.py` leaving escaping to whoever renders `detail`.
+
+**Grace's own outcome row must not count as a human decision.** Task 5 writes
+`sk: DECISION#<ts>#outcome`, which shares the prefix `readCase` collects decisions by and carries no
+`decision` attribute. Under a naive prefix test it becomes a phantom **deny attributed to nobody**
+(`decided_by` is absent), and an outcome written before any human decision makes `alreadyDecided` true —
+so the **first** caseworker decision on a case refuses itself as a duplicate. `readCase` discriminates
+on the presence of `decision` and joins the outcome to its decision by their shared `decided_at`; the
+draft read `outcome` off the human row, where it is never written, making `Decision.outcome`
+structurally always `null`. An **unrecognised** decision word must still *count* as a decision (or the
+case becomes decidable twice) while *displaying* as a deny — the opposite polarity to `authorize`'s
+allowlist, and for the same reason: never imply a human authorised a filing they did not.
+
+**The live table is 643 rows and the GSI holds 18, not 633/17** — a sweep ran between
+`docs/plan3-live-data-findings.md` and Task 3. Treat both as measurements with a date, not constants.
+Also: `d_trace_id` is **not** universally present — 613 of 625 ledger rows carry it as `{"NULL": true}`
+and **12 rows on `c-003` lack the attribute entirely**, so a reader must handle absent *and* `NULL`.
+
+**A `queryAll` on an SSR request path needs a page cap, and it must throw rather than truncate.**
+Plan 1 Task 6 ran an uncapped resume loop to 500 rounds; here a service repeating a `LastEvaluatedKey`
+hangs a page instead of failing it, which is worse. Truncation is worse still — a DynamoDB Query drops
+the *newest* rows, exactly where `renewal_submitted` lives, so a filed renewal reads as unfiled.
+`readCase` turns a throw into `null` (fail closed) and would turn a truncation into a confident wrong
+answer.
+
+**`node --experimental-strip-types` cannot run `web/`'s modules**, so a live-data check goes through
+vitest. Node's ESM resolver requires file extensions and `lib/cases.ts` imports `"./env"`; the plan's
+`npx tsx` fallback has the same problem. A temporary test file plus a `vitest.*.mts` config **inside
+`web/`** (outside it, `vitest/config` does not resolve) works, and `disableConsoleIntercept: true` with
+`reporters: ["verbose"]` is what makes the output visible. Delete both afterwards.
 
 **The JS SDK retries `InvokeAgentRuntime` three times by default, and the knob is not boto3's.**
 Plan 2 established the hazard — the call is **not idempotent**, so each attempt re-runs the whole graph

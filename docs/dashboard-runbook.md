@@ -288,6 +288,137 @@ is what makes it re-runnable.
 
 ---
 
+## `lib/env.ts` and `lib/cases.ts` (Task 3)
+
+The dashboard's only DynamoDB reader. `authorize.ts` decides; this file measures the facts it decides
+over. Final state is **26 new tests** (**58** with Tasks 1 and 2), all four `web/` gates green, and the
+Python suite unchanged at **622 passed**.
+
+### The red step
+
+With `lib/env.ts` moved aside, Vitest 5 again says *package* where the plan predicted *module*:
+
+```text
+Error: Cannot find package '@/lib/env' imported from …/__tests__/cases.test.ts
+ Test Files  1 failed | 2 passed (3)
+      Tests  21 passed (21)
+```
+
+### Ten defects in the plan's draft
+
+Five were already recorded in `docs/plan3-live-data-findings.md`; implementing it found five more.
+Ordered by consequence, worst first.
+
+| # | Defect | Consequence |
+|---|---|---|
+| 1 | `pending ? "escalated" : "acted"` | A case with **no escalation and no `renewal_submitted` row** reported as handled autonomously — a family counted among the nine while nothing was filed. Hard rule 6, inverted. Now `… : filed ? "acted" : "error"`. |
+| 2 | Naive `sk.startsWith("DECISION#")` | Task 5's own `DECISION#<ts>#outcome` write counted as a decision: a phantom **deny attributed to nobody**, and `alreadyDecided` true from Grace's write — so the **first** human decision refuses itself as a duplicate. |
+| 3 | `parseInt` chosen by a `.`-test | boto3 writes `Decimal` canonically, so `1e30` is `{"N": "1E+30"}` with no `.` — `parseInt("1E+30", 10)` is **1**. A number read back 1e30 too small, silently. One such row is live (`c-002`). |
+| 4 | String `>` on timestamps | `Z` (0x5A) sorts above `.` (0x2E), so the **older** row wins a newest-wins dedup. Both `listQueue` and `readCase` have their own picker; both needed fixing. |
+| 5 | `outcome` read off the human decision row | Task 5 never writes it there, so `Decision.outcome` was structurally always `null`. Joined on the shared `decided_at` instead. |
+| 6 | Unbounded `do/while` in `queryAll` | A repeated `LastEvaluatedKey` **hangs** an SSR page rather than failing it. Capped at 100 pages and it throws; `readCase` turns that into `null`. |
+| 7 | `str(row.program, "—")` | Structurally always the dash: no escalation row carries `program` (measured across all 18). A presentation dash in a data layer is a magic value. Returns `""`; Task 6 renders the dash. |
+| 8 | `deadline` read only from an escalation row | Empty for **all nine acted cases**. The same fact is `d_cert_end` on the renewal row, verified equal to the fixture `cert_end`. |
+| 9 | `as NodeJS.ProcessEnv` | **Does not compile.** Next 16 declares `NODE_ENV` required (`next/types/global.d.ts:23`) → `TS2352`. Reproduced with only the draft's own two lines. `readEnv` now takes a structural `EnvSource`. |
+| 10 | `required()` returned the untrimmed value | `" grace-cases "` passes as present and the spaces reach the SDK, failing as a `ResourceNotFoundException` naming a table that looks right in the log. |
+
+Two smaller ones: `listCases` merged `listQueue`'s rows, whose `filed: false` is **unmeasured** (the GSI
+projects escalation rows only), mixing two reliabilities in the summary page's hard-rule-6 column — it
+now reads all twelve from the ledger. And the draft's `readEnv` tests only exercised
+`GRACE_TABLE_NAME`: deleting the `GRACE_RUNTIME_ARN` check left every one of them passing.
+
+### 24 sabotages, all caught — but only after one survived
+
+A throwaway harness applies one mutation at a time, runs vitest, and restores; it is deleted rather
+than committed, since the record of which test caught what is the durable artifact. On the first pass
+**23 of 24** failed the test written for them and one **survived**: replacing `instant()` with a string
+comparison.
+
+The test was vacuous. Its fixtures were an hour apart (`04:00:00Z` vs `05:00:00.000000+00:00`), and the
+hour differs *before* the `Z`/`.` byte is ever compared, so string order and instant order agreed:
+
+```text
+MY FIXTURE   string says B newer? true   instant says B newer? true   AGREE -> test cannot fail
+DISAGREEING  string says D newer? false  instant says D newer? true   DISAGREE -> test can fail
+```
+
+Fixed to stamps differing **within the same second**, with the test now asserting its own fixture
+disagrees before asserting the behaviour — so a future edit cannot quietly make it vacuous again. A
+second test was added for `readCase`'s own escalation picker, which had none. Both fail under the
+sabotage now. This is the fourth consecutive task where the sabotage step found something the
+implementation and a green suite did not.
+
+### Read against the live table (Step 6)
+
+**`node --experimental-strip-types` cannot run these modules** — Node's ESM resolver requires file
+extensions and `cases.ts` imports `"./env"`, giving `ERR_MODULE_NOT_FOUND`. The plan's `npx tsx`
+fallback has the same problem. Run it through **vitest**, which already resolves the `@/` alias: a
+temporary `web/live-check.test.ts` and `web/vitest.live.mts` (the config must be inside `web/`, or
+`vitest/config` does not resolve), with `disableConsoleIntercept: true` and `reporters: ["verbose"]` to
+make the output visible. Both deleted afterwards.
+
+```text
+QUEUE: 3 rows (GSI holds 18)
+  c-012  2026-10-12  filed=false  prog=""  A caseworker must decide. source_conflict: household size 5
+  c-010  2026-10-18  filed=false  prog=""  missing_document: proof_of_residency is not on file (Grace h
+  c-011  2026-10-22  filed=false  prog=""  material_income_change: Income moved 30.0%, above the 5.0% i
+
+CASES: 12  acted=9 escalated=3 error=0 filed=9
+  c-001 acted  prog=medicaid deadline=2026-10-15 filed=true   … through c-009
+  c-010 escalated prog=- deadline=2026-10-18 filed=false
+  c-011 escalated prog=- deadline=2026-10-22 filed=false
+  c-012 escalated prog=- deadline=2026-10-12 filed=false
+
+c-001: 52 ledger rows, chronological=true, trace_id null on 52 of 52
+c-010: 65 ledger rows, chronological=true, trace_id null on 65 of 65
+c-011: 41 ledger rows, chronological=true, trace_id null on 41 of 41
+c-012: 42 ledger rows, chronological=true, trace_id null on 42 of 42
+
+PII scan of everything the reader returned: CLEAN
+```
+
+**Three queued cases from 18 GSI rows**, in deadline order `c-012`, `c-010`, `c-011` — the assertion the
+fake cannot make. **9 acted / 3 escalated / 0 error**, matching the deployed sweep and derived per case
+from the ledger. `trace_id` is **null on all 200 rows read**, which is the honest reading of Runtime
+never installing an in-process tracer provider, rendered as "not traced".
+
+### The table grew, and the strip held
+
+Re-measured during this task: **643 rows** (not 633) and the GSI holds **18** (not 17) — a sweep ran in
+between, so both numbers are measurements with a date. A table-wide scan of all 643 rows for every
+fixture surname and for `+1555` returns **clean**, confirming the 2026-09-04 strip held.
+
+Also corrected in `docs/plan3-live-data-findings.md`: `d_trace_id` is `NULL` on **613 of 625** ledger
+rows, and **12 rows on `c-003` lack the attribute entirely** — so a reader must tolerate absent as well
+as `NULL`, which the findings doc's "essentially every row" could have been read as ruling out.
+
+### Re-verified independently, against the shipped files
+
+Everything above is the implementor's account. Re-run by the verifier on the committed code, with a
+separately-written harness of 30 sabotages rather than the implementor's 24:
+
+- **All four `web/` gates green plus 622 Python** — `tsc --noEmit` silent, `eslint .` clean output,
+  `next build` compiled, and `git diff` against Task 1's commit shows `grace/`, `evals/`, `infra/`,
+  and `fixtures/` untouched.
+- **The live read re-measured through the modified code**: queue `c-012, c-010, c-011`; **12 cases,
+  9 acted / 3 escalated / 0 error / 9 filed**; **625 ledger rows scanned, every case chronological,
+  zero hits** across all twelve fixture surnames plus `+1555` and `Household`.
+- **Three sabotages survived the suite as shipped**, each now covered by a test that was watched
+  failing: `readEnv()` moved inside `readCase`'s `try` (every household reads back `null`, dashboard
+  looks healthy), the per-case `MAX_PAGES` cap raised (`readCase` catches the throw, so an uncapped
+  loop hangs the SSR page rather than failing it), and the `error` status reaching `authorize`'s
+  `not_escalated` message.
+
+**One measurement artifact worth recording.** Removing `MAX_PAGES` entirely does not produce a test
+failure — the vitest worker dies with `SIGABRT` mid-file, and a JSON reporter records that as *zero*
+failed assertions with the file's other tests simply absent. A harness that counts failed assertions
+would score it SURVIVED. Raising the cap to a large finite number instead makes it fail as a normal
+assertion. **When a sabotage can crash the runner rather than fail an assertion, "the suite went red"
+and "a test caught it" are different signals** — check the reporter's own accounting, not just the
+exit code.
+
+---
+
 ## Running locally
 
 Filled in by Task 6.

@@ -546,7 +546,7 @@ implicitly. Everything it needs arrives as an argument, which is what makes it e
   export interface DecisionAttempt { decision: DecisionKind; note: string; }
   export type RefusalCode =
     | "no_session" | "session_expired" | "wrong_role"
-    | "unknown_case" | "not_escalated" | "already_decided"
+    | "unknown_case" | "not_escalated" | "case_incomplete" | "already_decided"
     | "unknown_decision" | "note_too_long";
   export interface Refusal { permitted: false; code: RefusalCode; message: string; }
   export interface Permit { permitted: true; decidedBy: string; decision: DecisionKind; note: string; }
@@ -676,12 +676,27 @@ describe("authorize — refusals", () => {
   it("refuses a case Grace handled itself", () => {
     // Deciding an `acted` case would let a human retroactively "approve"
     // something already filed, which the audit trail would then imply they
-    // authorised. `error` is not decidable either: a case whose sweep failed has
-    // no measured verdict to approve.
-    for (const status of ["acted", "error"] as const) {
-      expect(refusalOf(authorize(session(), escalated({ status }), approve, NOW)).code)
-        .toBe("not_escalated");
-    }
+    // authorised.
+    expect(refusalOf(authorize(session(), escalated({ status: "acted" }), approve, NOW)).code)
+      .toBe("not_escalated");
+  });
+
+  it("distinguishes a failed sweep from a case Grace handled", () => {
+    // Both are undecidable, and until `lib/cases.ts` required evidence for
+    // `acted` this branch could only ever see `acted`, so one message covered
+    // both. It should not: `error` means nothing was filed AND nothing
+    // escalated, so "Grace handled this case itself" is a false claim about a
+    // family whose renewal is still outstanding — the shape hard rule 6
+    // forbids. The codes must differ, and the message must not say Grace
+    // handled it.
+    const incomplete = refusalOf(authorize(session(), escalated({ status: "error" }), approve, NOW));
+    const acted = refusalOf(authorize(session(), escalated({ status: "acted" }), approve, NOW));
+    expect(incomplete.code).toBe("case_incomplete");
+    expect(incomplete.code).not.toBe(acted.code);
+    expect(incomplete.message).not.toMatch(/handled this case itself/);
+    // And it must still be a refusal, not a permit — the point is the wording,
+    // not a relaxation.
+    expect(incomplete.permitted).toBe(false);
   });
 
   it("refuses a second decision on the same case", () => {
@@ -907,6 +922,7 @@ export type RefusalCode =
   | "wrong_role"
   | "unknown_case"
   | "not_escalated"
+  | "case_incomplete"
   | "already_decided"
   | "unknown_decision"
   | "note_too_long";
@@ -962,6 +978,22 @@ export function authorize(
   if (facts === null) {
     return refuse("unknown_case", "No such case.");
   }
+  // Both refusals keep the case undecidable; they differ only in what they tell
+  // the caseworker, and the difference is whether the sentence is true. `acted`
+  // means Grace filed — there is a `renewal_submitted` row proving it. `error`
+  // means the sweep reached no outcome at all: nothing was filed and nothing
+  // escalated, so "Grace handled this case itself" would be a false claim about
+  // a family whose renewal is still outstanding, and hard rule 6 is exactly
+  // about not making that claim without the tool confirmation behind it. The
+  // caseworker needs to know the sweep must be re-run, not that they can move
+  // on. `lib/cases.ts` makes `error` reachable by requiring evidence for
+  // `acted`; before that this branch could only ever see `acted`.
+  if (facts.status === "error") {
+    return refuse(
+      "case_incomplete",
+      "Grace's last run on this case reached no outcome. Re-run the sweep before deciding.",
+    );
+  }
   if (facts.status !== "escalated") {
     return refuse(
       "not_escalated",
@@ -997,8 +1029,10 @@ export function authorize(
 - [x] **Step 4: Run the tests**
 
 Run: `cd web && npm run test && npm run typecheck`
-Expected: PASS, **19** `authorize.test.ts` tests (21 including Task 1's two smoke tests). The
+Expected: PASS, **20** `authorize.test.ts` tests (22 including Task 1's two smoke tests). The
 draft said 14 — that was the count before the vacuity and reachability fixes above added five.
+The twentieth arrived with Task 3, which made `CaseStatus`'s `error` variant reachable and so
+split `not_escalated` into two codes; see the `case_incomplete` branch above.
 
 - [x] **Step 5: Prove the allowlist test is not vacuous**
 
@@ -1058,236 +1092,134 @@ server-side; the browser never sees a credential or a table name.
   export function readFacts(caseId: string, client?: DynamoDBClient): Promise<CaseFacts | null>;
   ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
-**Read `docs/plan3-live-data-findings.md` before you write a single fixture.** The real table was
-measured before this task was written, and five things about it differ from the draft below. Fixtures
-that disagree with reality produce a parser that passes its tests and fails on the live table, which
-is the one failure mode Step 6 exists to catch late and this note exists to prevent early:
+**What shipped, and the ten defects in this task's original draft.** `docs/plan3-live-data-findings.md`
+recorded five things the draft got wrong about real rows; implementing it found five more, plus two
+places where that findings doc had itself gone stale. Everything below was measured, not reasoned.
 
-1. **Timestamps are `+00:00`, never `Z`** — real values are
-   `2026-09-03T14:17:01.231621+00:00`, i.e. `datetime.isoformat()` with an offset and microseconds.
-   The fixtures below use `Z`. Both parse as dates, but **anything that string-matches or slices a
-   trailing `Z` breaks on every real row.** Prefer at least one fixture in the real shape.
-2. **`d_trace_id` is DynamoDB type `NULL`** on essentially every ledger row — present, not absent,
-   with value `{"NULL": true}`. The only two value types in the whole table are `S` and `NULL`.
-3. **The GSI holds 17 rows for 3 households** (`c-010` 6, `c-012` 6, `c-011` 5). Dedup is not
-   hypothetical.
-4. **Real deadlines are `c-010` → `2026-10-18`, `c-011` → `2026-10-22`, `c-012` → `2026-10-12`.** The
-   fixtures below now use these (the draft invented `2026-10-05`), and the ordering test carries a
-   third row so that deadline order, escalation-time order, and GSI order all differ — which is what
-   makes it distinguish "sorted by deadline" from "whatever the GSI returned". Soonest-first is
-   `c-012`, `c-010`, `c-011`.
-5. **Escalation rows carry `question` as well as `reason`**, and no `program` attribute exists on
-   them at all — so `str(escalation?.program, "—")` in Step 4 always yields the placeholder. Either
-   read the program from somewhere real or drop the field; do not ship a column that is structurally
-   always a dash.
+**The table grew between the findings doc and this task.** It is **643 rows, not 633**, and the GSI
+holds **18, not 17** — `c-010` 7, `c-012` 6, `c-011` 5. A sweep ran in between. The 17-vs-3 framing is
+still the point; the number is not a constant.
 
-`web/__tests__/cases.test.ts`:
+**`d_trace_id` is not universally present, and the findings doc says "essentially every ledger row"
+where a reader could read "every".** Measured: 613 of 625 ledger rows carry it as `{"NULL": true}`, and
+**12 rows on `c-003` have no `d_trace_id` attribute at all**. So a reader must handle absent *and*
+`NULL`, which is why `plain(undefined)` returns `null` rather than throwing.
 
-```ts
-import { describe, expect, it, vi } from "vitest";
-import { readEnv } from "@/lib/env";
-import { listQueue, readCase, readFacts } from "@/lib/cases";
+1. **`as NodeJS.ProcessEnv` does not compile.** Next 16 declares `NODE_ENV` as a **required** property
+   on that interface (`next/types/global.d.ts:23`), so the draft's
+   `readEnv({ AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv)` fails with
+   `error TS2352: … Property 'NODE_ENV' is missing in type … but required in type 'ProcessEnv'`.
+   Reproduced in isolation with only the draft's own two lines, so it is the draft's defect and not an
+   interaction. `readEnv` now takes `EnvSource = Readonly<Record<string, string | undefined>>` — what
+   it actually needs, and `process.env` is assignable to it. Casting through `unknown` instead would
+   have been the "promise stops being checked" hole Task 2 found in `DecisionAttempt`.
 
-/** The slice of DynamoDBClient these functions use. Records every command so a
- *  test can assert the query shape, not just the parsed result. */
-class FakeDynamo {
-  public sent: Array<Record<string, unknown>> = [];
-  constructor(private pages: Array<Record<string, unknown>>) {}
-  async send(command: { input: Record<string, unknown> }): Promise<unknown> {
-    this.sent.push(command.input);
-    return this.pages[Math.min(this.sent.length - 1, this.pages.length - 1)];
-  }
-}
+2. **`parseInt` on a `.`-test reads a large number back as `1`.** The draft's
+   `v.N.includes(".") ? parseFloat : parseInt(v.N, 10)` is wrong for the form Python actually writes:
+   boto3 serializes `Decimal` in canonical form, so `1e30` arrives as `{"N": "1E+30"}` — **no `.` in
+   it** — and `parseInt("1E+30", 10)` is **1**. A value a factor of 1e30 too small, with no error
+   anywhere. One such row exists live (`c-002`, the type round-trip row, carrying `d_zero`/`d_f`/`d_i`
+   and the table's only `BOOL` and `N` values). Fixed to `Number()`, with a finiteness check.
 
-const S = (s: string) => ({ S: s });
+3. **`pending ? "escalated" : "acted"` claims a filing that may not exist.** Hard rule 6 at the
+   measurement boundary: "not escalated" is not the same claim as "Grace filed the renewal". A case
+   with no pending escalation and no `renewal_submitted` row was reported **acted** — a family
+   silently counted in the nine while nothing was filed for them. Now
+   `pending ? "escalated" : filed ? "acted" : "error"`, which also makes `CaseStatus`'s `error`
+   variant reachable; `authorize` already refuses it as undecidable, so a shipped-and-tested guard
+   was otherwise dead code.
 
-const ledgerRow = (at: string, kind: string, extra: Record<string, unknown> = {}) => ({
-  pk: S("CASE#c-011"), sk: S(`LEDGER#${at}#000001`),
-  case_id: S("c-011"), at: S(at), kind: S(kind), ...extra,
-});
+4. **`Decision.outcome` was structurally always `null`.** The draft read `str(row.outcome)` off the
+   human decision row, where Task 5 never writes it — Task 5 writes the outcome to a **separate** row.
+   The two are now joined on their shared `decided_at`.
 
-describe("readEnv", () => {
-  it("throws naming the variable that is missing", () => {
-    // A missing table name must fail at startup with a readable message, not
-    // as `undefined` inside an SDK call three layers down. Same reasoning as
-    // Plan 2's GRACE_STORE allowlist, which raises on blank.
-    expect(() => readEnv({ AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv))
-      .toThrow(/GRACE_TABLE_NAME/);
-  });
+5. **The `DECISION#` prefix defect, fixed here rather than left for Task 5.** Task 5's `writeOutcome`
+   writes `sk: DECISION#<ts>#outcome`, which also starts with the prefix and carries no `decision`
+   attribute. Under the naive prefix test it becomes a phantom decision — a **deny attributed to
+   nobody**, since `decided_by` is absent and the draft's fallback is `"deny"` — and, worse, an outcome
+   written before any human decision makes `alreadyDecided` true, so the **first** caseworker decision
+   on a case refuses itself as a duplicate. `readCase` now discriminates on the presence of `decision`.
+   Task 5 may keep its sort key as drafted.
 
-  it("rejects a variable that is set but blank", () => {
-    // `process.env.X ?? default` only defaults on absence. Plan 2 found a blank
-    // GRACE_STORE bypassing its default and silently discarding a ledger.
-    expect(() => readEnv({
-      AWS_REGION: "us-east-1", GRACE_TABLE_NAME: "",
-      GRACE_ESCALATION_INDEX: "escalation-queue", GRACE_RUNTIME_ARN: "arn:x",
-    } as NodeJS.ProcessEnv)).toThrow(/GRACE_TABLE_NAME/);
-  });
+6. **A string `>` on timestamps inverts, and the obvious fixture cannot catch it.** `Z` (0x5A) sorts
+   above `.` (0x2E), so `"…T05:00:01Z" > "…T05:00:01.500000+00:00"` is `true` while the offset row is
+   the later instant — the **older** row wins a newest-wins comparison. Both `listQueue` and `readCase`
+   pick a newest escalation, so both needed fixing and both needed a test. Comparison is now
+   `Date.parse`-based, with an unparseable stamp sorting as older than everything so a corrupt row
+   cannot displace a good one.
 
-  it("reads a complete environment", () => {
-    const env = readEnv({
-      AWS_REGION: "us-east-1", GRACE_TABLE_NAME: "grace-cases",
-      GRACE_ESCALATION_INDEX: "escalation-queue",
-      GRACE_RUNTIME_ARN: "arn:aws:bedrock-agentcore:us-east-1:1:runtime/grace",
-    } as NodeJS.ProcessEnv);
-    expect(env.tableName).toBe("grace-cases");
-  });
-});
+   **The first version of that test was vacuous and the sabotage caught it.** Fixtures an hour apart
+   (`04:00:00Z` vs `05:00:00.000000+00:00`) agree under both orderings, because the hour differs before
+   the `Z`/`.` byte is ever reached — replacing `instant()` with a string comparison **survived**. The
+   stamps must differ *within the same second*. The test now asserts its own fixture disagrees
+   (`expect(olderZ > newerOffset).toBe(true)`) before asserting the behaviour, so a future edit cannot
+   quietly make it vacuous again.
 
-describe("listQueue", () => {
-  it("queries the sparse GSI, not a table scan", async () => {
-    const fake = new FakeDynamo([{ Items: [] }]);
-    await listQueue(fake as never);
-    const input = fake.sent[0]!;
-    expect(input.IndexName).toBe("escalation-queue");
-    expect(input.KeyConditionExpression).toContain("#s = :s");
-    expect(JSON.stringify(input)).toContain("PENDING_CASEWORKER");
-    // A Scan would read every ledger row in the table to find three cases.
-    expect(JSON.stringify(input)).not.toContain("FilterExpression");
-  });
+7. **`program` was structurally always the placeholder — and the fix is not a placeholder.** No
+   escalation row carries `program`: measured across all 18, whose only attributes are
+   `pk`/`sk`/`case_id`/`status`/`escalated_at`/`deadline`/`reason`/`question`. `d_program` lives **only**
+   on `renewal_submitted` ledger rows, which an escalated case by definition lacks. So the program is
+   genuinely not in the table for the three escalated households, and is real for the nine that filed.
+   `readCase` reads it from the renewal row; the data layer returns `""` and never `"—"`, because a
+   presentation dash inside a data layer is a magic value a caller cannot distinguish from real data —
+   and Task 6 already renders `{summary.deadline || "—"}`.
 
-  it("orders by soonest deadline, because that is the caseworker's urgency", async () => {
-    // Real deadlines, and one row in the real `+00:00` shape rather than `Z`.
-    // Escalation time here is c-012 first, deadline order is c-012 first too —
-    // so a third row (c-010, escalated earliest, deadline in between) is what
-    // makes the two orderings disagree and the assertion meaningful.
-    const rows = [
-      { pk: S("CASE#c-010"), sk: S("ESCALATION#2026-09-03T04:20:03.568119+00:00"), case_id: S("c-010"),
-        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T04:20:03.568119+00:00"),
-        reason: S("missing_document"), deadline: S("2026-10-18") },
-      { pk: S("CASE#c-011"), sk: S("ESCALATION#2026-09-03T05:00:01Z"), case_id: S("c-011"),
-        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T05:00:01Z"),
-        reason: S("material_income_change"), deadline: S("2026-10-22") },
-      { pk: S("CASE#c-012"), sk: S("ESCALATION#2026-09-03T06:00:00Z"), case_id: S("c-012"),
-        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T06:00:00Z"),
-        reason: S("source_conflict"), deadline: S("2026-10-12") },
-    ];
-    const fake = new FakeDynamo([{ Items: rows }]);
-    const queue = await listQueue(fake as never);
-    // Deadline order, not GSI order and not escalation-time order — all three
-    // differ on this input, which is the point.
-    expect(queue.map(c => c.caseId)).toEqual(["c-012", "c-010", "c-011"]);
-  });
+8. **`deadline` was empty for all nine acted cases.** The draft read it only from an escalation row.
+   The same fact — the certification end date — is recorded as `d_cert_end` on a renewal row, verified
+   equal to the fixture `cert_end` for every case. Without the fallback the `/` page renders a dash for
+   every household Grace handled.
 
-  it("collapses repeat escalations of one household to a single row", async () => {
-    // Every sweep appends a fresh ESCALATION# row, so the GSI legitimately holds
-    // 17 rows for 3 households. A queue listing the same family five times is a
-    // caseworker deciding the same case five times.
-    const dup = (ts: string) => ({
-      pk: S("CASE#c-010"), sk: S(`ESCALATION#${ts}`), case_id: S("c-010"),
-      status: S("PENDING_CASEWORKER"), escalated_at: S(ts),
-      reason: S("missing_document"), deadline: S("2026-10-18"),
-    });
-    const fake = new FakeDynamo([{ Items: [dup("2026-09-01T00:00:00Z"), dup("2026-09-03T00:00:00Z")] }]);
-    const queue = await listQueue(fake as never);
-    expect(queue).toHaveLength(1);
-    // The newest escalation wins: it carries the most recent reason.
-    expect(queue[0]!.caseId).toBe("c-010");
-  });
+9. **`listCases` had a `readCase` inside a `for` loop and merged in `listQueue`'s rows.** Those rows
+   carry `filed: false` **by construction** — the GSI projects escalation rows only, so that query
+   cannot see a `renewal_submitted` row — which means the summary page's hard-rule-6 field came from
+   two different sources with different reliability. It now reads all twelve cases from the ledger,
+   concurrently, one measurement path for all of them. `listQueue` still exists for `/queue`, and its
+   `filed: false` is commented as unmeasured.
 
-  it("follows LastEvaluatedKey", async () => {
-    // Truncation would silently drop households from a work queue.
-    const one = (id: string) => ({
-      pk: S(`CASE#${id}`), sk: S("ESCALATION#2026-09-03T00:00:00Z"), case_id: S(id),
-      status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T00:00:00Z"),
-      reason: S("r"), deadline: S("2026-10-01"),
-    });
-    const fake = new FakeDynamo([
-      { Items: [one("c-010")], LastEvaluatedKey: { pk: S("CASE#c-010") } },
-      { Items: [one("c-011")] },
-    ]);
-    const queue = await listQueue(fake as never);
-    expect(fake.sent).toHaveLength(2);
-    expect(queue.map(c => c.caseId).sort()).toEqual(["c-010", "c-011"]);
-  });
-});
+10. **`queryAll` had an unbounded `do/while` on the SSR request path.** Plan 1 Task 6 ran a resume loop
+    to 500 rounds before being hard-killed; here a service returning the same `LastEvaluatedKey` hangs
+    a page rather than failing it. Capped at 100 pages (the largest live case is 72 rows, so the cap is
+    unreachable by data), and it **throws** rather than truncating — `readCase` turns a throw into
+    `null`, and truncation into a confident wrong answer. The draft also spread
+    `ExclusiveStartKey: undefined` into every input, which is sent explicitly; it is now omitted on the
+    first page.
 
-describe("readCase", () => {
-  it("returns ledger rows in chronological order", async () => {
-    // The evals read ledger position to assert reads precede actions; the
-    // caseworker reads it as a story. Both need append order.
-    const fake = new FakeDynamo([{ Items: [
-      ledgerRow("2026-09-03T03:06:05Z", "tool_call", { d_tool: S("read_case") }),
-      ledgerRow("2026-09-03T03:06:06Z", "tool_result", { d_status: S("success") }),
-      ledgerRow("2026-09-03T03:06:09Z", "family_message_sent", { d_ref: S("recorded:1") }),
-    ] }]);
-    const detail = await readCase("c-011", fake as never);
-    expect(detail?.ledger.map(r => r.kind))
-      .toEqual(["tool_call", "tool_result", "family_message_sent"]);
-  });
+Two smaller corrections: `required()` checked `value.trim()` and returned the **untrimmed** `value`, so
+`" grace-cases "` passed as present and the spaces reached the SDK, where the failure is a
+`ResourceNotFoundException` naming a table that looks right in the log line. And the draft's `readEnv`
+tests only ever exercised `GRACE_TABLE_NAME` — dropping the `GRACE_RUNTIME_ARN` check entirely left
+every one of them passing, so the test loops over all three names.
 
-  it("strips the d_ prefix from detail keys", async () => {
-    const fake = new FakeDynamo([{ Items: [
-      ledgerRow("2026-09-03T03:06:05Z", "tool_call", { d_tool: S("read_case"), d_trace_id: { NULL: true } }),
-    ] }]);
-    const detail = await readCase("c-011", fake as never);
-    expect(detail?.ledger[0]!.detail.tool).toBe("read_case");
-    // NULL must read back as null, not the string "None" — Plan 2's finding.
-    expect(detail?.ledger[0]!.detail.trace_id).toBeNull();
-  });
+**Test-side lessons applied.** `FakeDynamo` can fail the way the real service fails (it rejects a
+missing `KeyConditionExpression`, an undefined `:placeholder`, an unknown `IndexName`, and a wrong
+table name) — Plan 2's "a fake that only ever succeeds is worse than no fake". `detailOf` narrows
+`CaseDetail | null` by **throwing**, because `detail?.ledger` silently compares `undefined` on `null`
+and that is Task 2's vacuity lesson in its other TypeScript shape. The hard-rule-9 guard lists **all
+twelve** fixture surnames plus `+1555` and `Household`, and a companion test feeds `Mensah` in through
+`reason` — the exact path that reached CloudWatch — so "no name in this row" cannot be true of every
+input.
 
-  it("returns null for a case with no rows at all", async () => {
-    const fake = new FakeDynamo([{ Items: [] }]);
-    expect(await readCase("c-999", fake as never)).toBeNull();
-  });
+`web/__tests__/cases.test.ts` — see the shipped file. **26 tests**: 6 `readEnv`, 8 `listQueue`,
+10 `readCase`, 2 `listCases`, 6 `readFacts` (32 assertions' worth of properties across them), bringing
+the vitest suite to **58**.
 
-  it("never surfaces a household name or phone", async () => {
-    // Hard rule 9. Even if a row somehow carried one, the reader must not
-    // hand it to a page. Belt and braces on top of read_case's own fix.
-    const fake = new FakeDynamo([{ Items: [
-      ledgerRow("2026-09-03T03:06:05Z", "escalated", {
-        d_question: S("Does the household still qualify?"),
-      }),
-    ] }]);
-    const detail = await readCase("c-011", fake as never);
-    const blob = JSON.stringify(detail);
-    for (const n of ["Mensah", "Rivera", "Okonkwo", "+1555"]) {
-      expect(blob).not.toContain(n);
-    }
-  });
-});
-
-describe("readFacts", () => {
-  it("reports escalated and undecided for a queued case", async () => {
-    const fake = new FakeDynamo([{ Items: [
-      { pk: S("CASE#c-011"), sk: S("ESCALATION#2026-09-03T00:00:00Z"), case_id: S("c-011"),
-        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T00:00:00Z"),
-        reason: S("material_income_change"), deadline: S("2026-10-22") },
-    ] }]);
-    const facts = await readFacts("c-011", fake as never);
-    expect(facts).toEqual({ caseId: "c-011", status: "escalated", alreadyDecided: false });
-  });
-
-  it("reports alreadyDecided once a DECISION row exists", async () => {
-    const fake = new FakeDynamo([{ Items: [
-      { pk: S("CASE#c-011"), sk: S("ESCALATION#2026-09-03T00:00:00Z"), case_id: S("c-011"),
-        status: S("PENDING_CASEWORKER"), escalated_at: S("2026-09-03T00:00:00Z"),
-        reason: S("r"), deadline: S("2026-10-22") },
-      { pk: S("CASE#c-011"), sk: S("DECISION#2026-09-03T01:00:00Z"), case_id: S("c-011"),
-        decided_by: S("7f3a91"), decided_at: S("2026-09-03T01:00:00Z"),
-        decision: S("approve"), note: S("ok") },
-    ] }]);
-    const facts = await readFacts("c-011", fake as never);
-    expect(facts?.alreadyDecided).toBe(true);
-  });
-
-  it("returns null when the read throws, rather than guessing", async () => {
-    // Fail closed. An unreadable case must not authorise a decision, and
-    // `authorize` refuses on null facts.
-    const boom = { send: () => Promise.reject(new Error("throttled")) };
-    expect(await readFacts("c-011", boom as never)).toBeNull();
-  });
-});
-```
-
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd web && npm run test`
-Expected: FAIL — `Cannot find module '@/lib/env'`.
+Actual, with `lib/env.ts` moved aside:
 
-- [ ] **Step 3: Write `web/lib/env.ts`**
+```text
+Error: Cannot find package '@/lib/env' imported from …/__tests__/cases.test.ts
+ Test Files  1 failed | 2 passed (3)
+      Tests  21 passed (21)
+```
+
+Note the wording, as in Task 2: Vitest 5 says **package** where this plan used to predict *module*.
+The 21 passing are Task 1's and Task 2's; none of this file's tests ran.
+
+- [x] **Step 3: Write `web/lib/env.ts`**
 
 ```ts
 /**
@@ -1302,6 +1234,12 @@ Expected: FAIL — `Cannot find module '@/lib/env'`.
  * None of these are `NEXT_PUBLIC_`. A table name or runtime ARN in the client
  * bundle is not a secret exactly, but it is a map of the backend, and nothing
  * in the browser needs it.
+ *
+ * `runtimeArn` is required even though `lib/cases.ts` never uses it. That is
+ * deliberate: this function is the app's single startup check, and a dashboard
+ * whose read pages work while its decide route is misconfigured is worse than
+ * one that refuses to start — the caseworker would only discover it at the
+ * moment they tried to decide.
  */
 
 export interface Env {
@@ -1311,7 +1249,20 @@ export interface Env {
   runtimeArn: string;
 }
 
-function required(source: NodeJS.ProcessEnv, name: string): string {
+/** What this function actually needs: something it can look a name up in.
+ *
+ *  Deliberately NOT `NodeJS.ProcessEnv`, which the plan's draft used. Next 16
+ *  declares `NODE_ENV` as a **required** property on that interface
+ *  (`next/types/global.d.ts:23`), so `{ GRACE_TABLE_NAME: "x" } as NodeJS.ProcessEnv`
+ *  does not compile — `error TS2352: … Property 'NODE_ENV' is missing`. Every
+ *  test would have to either invent a `NODE_ENV` it does not care about or cast
+ *  through `unknown`, and a double cast is exactly the "the promise stops being
+ *  checked" hole Task 2 found in `DecisionAttempt`.
+ *
+ *  `process.env` is assignable to this, so the default still works. */
+export type EnvSource = Readonly<Record<string, string | undefined>>;
+
+function required(source: EnvSource, name: string): string {
   const value = source[name];
   if (value === undefined || value.trim() === "") {
     throw new Error(
@@ -1319,10 +1270,14 @@ function required(source: NodeJS.ProcessEnv, name: string): string {
       `cannot guess their names.`,
     );
   }
-  return value;
+  // Return the TRIMMED value, not the raw one. Checking `value.trim()` and then
+  // returning `value` accepts `" grace-cases "` as present and hands the spaces
+  // to the SDK, where the failure is a ResourceNotFoundException naming a table
+  // that looks correct in the log line.
+  return value.trim();
 }
 
-export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
+export function readEnv(source: EnvSource = process.env): Env {
   return {
     region: source.AWS_REGION?.trim() || "us-east-1",
     tableName: required(source, "GRACE_TABLE_NAME"),
@@ -1332,7 +1287,7 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
 }
 ```
 
-- [ ] **Step 4: Write `web/lib/cases.ts`**
+- [x] **Step 4: Write `web/lib/cases.ts`**
 
 ```ts
 /**
@@ -1344,32 +1299,68 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
  * same discipline as `grace/authority.py` (pure) against `grace/steering.py`
  * (the adapter).
  *
- * Three behaviours that look like details and are not:
+ * Five behaviours that look like details and are not:
  *
- * **Queries paginate.** A DynamoDB Query caps at 1MB and signals more with
- * `LastEvaluatedKey`. Plan 2 hit this three separate times — `ledger()`,
- * `ListMemories`, and the runtime lookup — and in each case truncation was
- * silent. Here a dropped page removes a household from a work queue.
+ * **Queries paginate, with a cap.** A DynamoDB Query caps at 1MB and signals
+ * more with `LastEvaluatedKey`. Plan 2 hit this three separate times —
+ * `ledger()`, `ListMemories`, and the runtime lookup — and in each case
+ * truncation was silent. Here a dropped page removes a household from a work
+ * queue. The page cap is Plan 1 Task 6's lesson in a different loop: an
+ * unbounded `while` on the SSR request path hangs the page rather than failing
+ * it, so exhausting the cap throws and `readCase` fails closed.
  *
- * **The queue is de-duplicated by case.** Every sweep appends a fresh
- * `ESCALATION#` row, so the GSI legitimately holds 17 rows for 3 households.
- * A caseworker must see three.
+ * **The queue is de-duplicated by case, newest wins, compared as time.** Every
+ * sweep appends a fresh `ESCALATION#` row, so the GSI legitimately holds 18
+ * rows for 3 households. A caseworker must see three.
  *
  * **A failed read returns `null`, never a guess.** `authorize` refuses on null
  * facts, so an unreadable case cannot be decided. That is the fail-closed
  * direction Tasks 3 and 4 of Plan 1 established for the gate itself.
+ *
+ * **`acted` requires evidence, and a case with neither is an `error`.** Hard
+ * rule 6 in the other direction: "not escalated" is not the same claim as
+ * "Grace filed the renewal". A case with no pending escalation and no
+ * `renewal_submitted` row is reported `error`, which `authorize` already
+ * refuses as undecidable — the variant is otherwise unreachable, which would
+ * make a shipped and tested guard dead code.
+ *
+ * **Placeholders belong to the renderer, not here.** An unknown program or
+ * deadline reads back as `""`, never `"—"`. A presentation dash inside the data
+ * layer is a magic value a caller cannot tell from real data, and Task 6
+ * already writes `{summary.deadline || "—"}`. Same division of labour as
+ * `authority.py` leaving escaping to whichever surface renders `detail`.
  */
 
 import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
-import type { AttributeValue } from "@aws-sdk/client-dynamodb";
+import type { AttributeValue, QueryCommandInput } from "@aws-sdk/client-dynamodb";
 import { readEnv } from "./env";
 import type { CaseFacts } from "./authorize";
-import type { CaseDetail, CaseSummary, Decision, LedgerRow } from "./types";
+import type { CaseDetail, CaseStatus, CaseSummary, Decision, LedgerRow } from "./types";
 
 const LEDGER = "LEDGER#";
 const ESCALATION = "ESCALATION#";
 const DECISION = "DECISION#";
 const PENDING = "PENDING_CASEWORKER";
+const FILED = "renewal_submitted";
+
+/** The caseload, as a constant rather than as a discovered set.
+ *
+ *  There is no index over "every case", and the SSR role deliberately holds no
+ *  `dynamodb:Scan` — a bug with Scan could read all 643 ledger rows, and the
+ *  audit trail is the one thing this project rests on. So enumeration has to
+ *  come from somewhere, and a named constant that is visibly wrong when the
+ *  caseload changes is better than a permission that is invisibly dangerous. */
+export const CASE_IDS: readonly string[] = Array.from(
+  { length: 12 },
+  (_, n) => `c-${String(n + 1).padStart(3, "0")}`,
+);
+
+/** Refuse to spin. 643 rows live in the whole table today and the largest
+ *  single case holds 72, so any real query finishes in one page; a hundred is
+ *  unreachable by data and reachable only by a service returning the same
+ *  `LastEvaluatedKey` forever. Throwing beats truncating, because `readCase`
+ *  turns a throw into `null` and a truncation into a confident wrong answer. */
+const MAX_PAGES = 100;
 
 let shared: DynamoDBClient | undefined;
 function defaultClient(): DynamoDBClient {
@@ -1378,13 +1369,24 @@ function defaultClient(): DynamoDBClient {
 }
 
 /** Read one attribute as a plain value. `NULL` becomes `null`, never the string
- *  "None" — Plan 2's round-trip finding. */
+ *  "None" — Plan 2's round-trip finding, and the reason it matters here is that
+ *  `d_trace_id` is `{"NULL": true}` on 613 of 625 live ledger rows. Runtime
+ *  never installed an in-process tracer provider, so "not traced" is the honest
+ *  reading and the dashboard must render it as such rather than as an error. */
 function plain(v: AttributeValue | undefined): string | number | boolean | null {
   if (v === undefined) return null;
   if (v.NULL) return null;
   if (v.S !== undefined) return v.S;
   if (v.BOOL !== undefined) return v.BOOL;
-  if (v.N !== undefined) return v.N.includes(".") ? Number.parseFloat(v.N) : Number.parseInt(v.N, 10);
+  // `Number()`, not `parseInt`/`parseFloat` chosen by a `.` test. Python writes
+  // these through boto3's serializer, which emits `Decimal`'s canonical form —
+  // measured: `1e30` arrives as `{"N": "1E+30"}` and `-1e21` as `{"N": "-1E+21"}`,
+  // neither of which contains a `.`. `parseInt("1E+30", 10)` is **1**, so a
+  // large number would read back as a small one with no error anywhere.
+  if (v.N !== undefined) {
+    const n = Number(v.N);
+    return Number.isFinite(n) ? n : null;
+  }
   return null;
 }
 
@@ -1393,16 +1395,39 @@ function str(v: AttributeValue | undefined, fallback = ""): string {
   return typeof p === "string" ? p : fallback;
 }
 
+/** Order two ISO timestamps by the instant they name, not by their spelling.
+ *
+ *  Real rows are `datetime.isoformat()` output — `2026-09-03T23:39:22.314855+00:00`,
+ *  offset-suffixed and microsecond-precision, never `Z`. A string `>` on mixed
+ *  spellings inverts: `"...T05:00:01Z" > "...T05:00:01.5+00:00"` is `true`
+ *  because `Z` (0x5A) sorts above `.` (0x2E), so the *earlier* row would win a
+ *  newest-wins comparison. Plan 2 found the same class of bug in the sort key
+ *  itself, where a non-UTC offset sorted bytewise against a UTC one.
+ *
+ *  An unparseable timestamp sorts as older than everything, so a corrupt row
+ *  cannot displace a good one as "newest". */
+function instant(v: AttributeValue | undefined): number {
+  const t = Date.parse(str(v));
+  return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY;
+}
+
 async function queryAll(
   client: DynamoDBClient,
-  input: Record<string, unknown>,
+  input: QueryCommandInput,
 ): Promise<Record<string, AttributeValue>[]> {
   const items: Record<string, AttributeValue>[] = [];
   let startKey: Record<string, AttributeValue> | undefined;
+  let pages = 0;
   do {
-    const page = (await client.send(
-      new QueryCommand({ ...input, ExclusiveStartKey: startKey } as never),
-    )) as { Items?: Record<string, AttributeValue>[]; LastEvaluatedKey?: Record<string, AttributeValue> };
+    if (pages >= MAX_PAGES) {
+      throw new Error(
+        `Query on ${input.TableName} did not terminate within ${MAX_PAGES} pages.`,
+      );
+    }
+    const page = await client.send(
+      new QueryCommand(startKey === undefined ? input : { ...input, ExclusiveStartKey: startKey }),
+    );
+    pages += 1;
     items.push(...(page.Items ?? []));
     startKey = page.LastEvaluatedKey;
   } while (startKey);
@@ -1424,17 +1449,29 @@ export async function listQueue(client: DynamoDBClient = defaultClient()): Promi
   const newest = new Map<string, Record<string, AttributeValue>>();
   for (const row of rows) {
     const id = str(row.case_id);
+    if (id === "") continue;
     const seen = newest.get(id);
-    if (!seen || str(row.escalated_at) > str(seen.escalated_at)) newest.set(id, row);
+    if (!seen || instant(row.escalated_at) > instant(seen.escalated_at)) newest.set(id, row);
   }
 
   return [...newest.values()]
     .map((row): CaseSummary => ({
       caseId: str(row.case_id),
       status: "escalated",
-      program: str(row.program, "—"),
+      // No escalation row carries a program: measured across all 18 live rows,
+      // whose only attributes are pk/sk/case_id/status/escalated_at/deadline/
+      // reason/question. `d_program` exists solely on `renewal_submitted`
+      // ledger rows, which an escalated case by definition does not have — so
+      // for these three households the program is genuinely not in the table,
+      // and `""` says so. `listCases` fills it in for the nine that filed.
+      program: "",
       deadline: str(row.deadline),
       reason: str(row.reason) || null,
+      // NOT MEASURED, and false by construction rather than by evidence: the
+      // GSI projects escalation rows only, so this query cannot see whether a
+      // `renewal_submitted` row exists. Hard rule 6 says it must not — and a
+      // page that wants to *check* that must use `listCases`, which reads the
+      // ledger. Do not render this field from `listQueue`.
       filed: false,
     }))
     .sort((a, b) => a.deadline.localeCompare(b.deadline) || a.caseId.localeCompare(b.caseId));
@@ -1442,19 +1479,17 @@ export async function listQueue(client: DynamoDBClient = defaultClient()): Promi
 
 /** Every case the ledger knows about, for the sweep summary. */
 export async function listCases(client: DynamoDBClient = defaultClient()): Promise<CaseSummary[]> {
-  const queue = await listQueue(client);
-  const escalated = new Set(queue.map(c => c.caseId));
-  const summaries: CaseSummary[] = [...queue];
-  // The twelve fixture cases are the caseload; anything not escalated and
-  // carrying a renewal_submitted row was handled autonomously.
-  for (let n = 1; n <= 12; n += 1) {
-    const id = `c-${String(n).padStart(3, "0")}`;
-    if (escalated.has(id)) continue;
-    const detail = await readCase(id, client);
-    if (detail === null) continue;
-    summaries.push(detail.summary);
-  }
-  return summaries.sort((a, b) => a.caseId.localeCompare(b.caseId));
+  // Read each case rather than merging `listQueue` with a per-case pass. One
+  // source means `filed`, `program`, and `deadline` are measured the same way
+  // for all twelve, and the 9-acted/3-escalated split on `/` is derived from
+  // the ledger — which is what hard rule 6 is actually about. Concurrent
+  // because twelve sequential round trips is twelve times the page latency for
+  // no benefit; the reads are independent.
+  const details = await Promise.all(CASE_IDS.map(id => readCase(id, client)));
+  return details
+    .filter((d): d is CaseDetail => d !== null)
+    .map(d => d.summary)
+    .sort((a, b) => a.caseId.localeCompare(b.caseId));
 }
 
 /** One household: its ledger, its decisions, and what Grace concluded. */
@@ -1462,6 +1497,9 @@ export async function readCase(
   caseId: string,
   client: DynamoDBClient = defaultClient(),
 ): Promise<CaseDetail | null> {
+  // Outside the `try` on purpose. A missing environment variable is a
+  // misconfiguration, not an unreadable case, and collapsing it to `null` would
+  // report every household as "no such case" on a dashboard that looks healthy.
   const env = readEnv();
   let rows: Record<string, AttributeValue>[];
   try {
@@ -1469,6 +1507,11 @@ export async function readCase(
       TableName: env.tableName,
       KeyConditionExpression: "pk = :pk",
       ExpressionAttributeValues: { ":pk": { S: `CASE#${caseId}` } },
+      // Sort-key order is chronological because `infra/naming.py` normalizes
+      // every stamp to UTC before building it, so DynamoDB's bytewise range
+      // comparison is a time comparison. That is why the ledger needs no
+      // client-side sort — and why the test asserts this flag rather than
+      // shuffling its fixture.
       ScanIndexForward: true,
     });
   } catch {
@@ -1479,8 +1522,11 @@ export async function readCase(
 
   const ledger: LedgerRow[] = [];
   const decisions: Decision[] = [];
+  const outcomes = new Map<string, string>();
   let escalation: Record<string, AttributeValue> | undefined;
   let filed = false;
+  let program = "";
+  let certEnd = "";
 
   for (const row of rows) {
     const sk = str(row.sk);
@@ -1490,36 +1536,72 @@ export async function readCase(
         if (key.startsWith("d_")) detail[key.slice(2)] = plain(value);
       }
       const kind = str(row.kind);
-      if (kind === "renewal_submitted") filed = true;
+      if (kind === FILED) {
+        filed = true;
+        // The only real source for either field. An escalated case has no
+        // `renewal_submitted` row, so it has no program in the table at all.
+        program = str(row.d_program) || program;
+        certEnd = str(row.d_cert_end) || certEnd;
+      }
       ledger.push({ at: str(row.at), kind, detail });
     } else if (sk.startsWith(DECISION)) {
-      // `startsWith(DECISION)` is NOT sufficient on its own — Task 5 writes
-      // Grace's outcome to `DECISION#<ts>#outcome`, which also starts with the
-      // prefix. Counting that row as a decision makes `alreadyDecided` true
-      // from Grace's own write rather than from a human's, so the *first*
-      // caseworker decision would refuse itself as a second one. Distinguish
-      // the two shapes here (an outcome row carries no `decision` attribute) or
-      // give the outcome its own prefix in Task 5. Either way, `readFacts` must
-      // count only rows a human wrote.
+      // `startsWith(DECISION)` is NOT sufficient on its own. Task 5 writes
+      // Grace's own outcome to `DECISION#<ts>#outcome`, which also starts with
+      // the prefix and carries no `decision` attribute. Counted as a decision
+      // it would put a phantom second row on the page — a denial attributed to
+      // nobody, because `decided_by` is absent and the `decision` fallback is
+      // "deny" — next to the approval a caseworker actually made. An audit
+      // trail that invents a decision is worse than one that omits an outcome.
+      //
+      // So discriminate on the presence of `decision`, and attach the outcome
+      // to the human row it belongs to by its shared `decided_at`. The draft
+      // read `outcome` off the human row, where it is never written, which made
+      // `Decision.outcome` structurally always `null`.
+      const decision = str(row.decision);
+      if (decision === "") {
+        const at = str(row.decided_at);
+        if (at !== "") outcomes.set(at, str(row.outcome));
+        continue;
+      }
       decisions.push({
         decidedAt: str(row.decided_at),
         decidedBy: str(row.decided_by),
-        decision: str(row.decision) === "approve" ? "approve" : "deny",
+        // An allowlist would be the wrong shape here: an unrecognised word must
+        // still *count* as a decision, or `alreadyDecided` goes false and the
+        // case becomes decidable a second time. Falling back to "deny" is the
+        // cautious display — showing an approval no human made would imply they
+        // authorised a filing, which is hard rule 5's forbidden direction.
+        decision: decision === "approve" ? "approve" : "deny",
         note: str(row.note),
-        outcome: str(row.outcome) || null,
+        outcome: null,
       });
     } else if (sk.startsWith(ESCALATION)) {
-      if (!escalation || str(row.escalated_at) > str(escalation.escalated_at)) escalation = row;
+      if (!escalation || instant(row.escalated_at) > instant(escalation.escalated_at)) {
+        escalation = row;
+      }
     }
   }
 
+  for (const d of decisions) {
+    const outcome = outcomes.get(d.decidedAt);
+    if (outcome !== undefined && outcome !== "") d.outcome = outcome;
+  }
+
   const pending = escalation !== undefined && str(escalation.status) === PENDING;
+  // `acted` is a claim that Grace filed, so it needs the ledger row that proves
+  // it. Neither pending nor filed is an `error`: something ran and reached no
+  // outcome, and `authorize` refuses that as undecidable.
+  const status: CaseStatus = pending ? "escalated" : filed ? "acted" : "error";
   return {
     summary: {
       caseId,
-      status: pending ? "escalated" : "acted",
-      program: str(escalation?.program, "—"),
-      deadline: str(escalation?.deadline),
+      status,
+      program,
+      // The escalation row's `deadline` and a renewal row's `d_cert_end` are the
+      // same fact — the certification end date — recorded by whichever path the
+      // case took. Verified equal to the fixture `cert_end` for every case.
+      // Without the fallback, all nine acted cases render a dash on `/`.
+      deadline: escalation ? str(escalation.deadline) : certEnd,
       reason: escalation ? str(escalation.reason) || null : null,
       filed,
     },
@@ -1543,54 +1625,126 @@ export async function readFacts(
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
-Run: `cd web && npm run test && npm run typecheck`
-Expected: PASS — 3 `readEnv`, 4 `listQueue`, 4 `readCase`, 3 `readFacts`.
+Run: `cd web && npm run test && npm run typecheck && npm run lint && npm run build`
+Actual: **61 tests passed** across 3 files — 39 in `cases.test.ts`, 20 in `authorize.test.ts`,
+2 smoke; `tsc --noEmit` silent; `eslint .` clean output, not merely exit 0; `next build` compiled
+successfully with routes `/` and `/_not-found` prerendered.
 
-- [ ] **Step 6: Read the real table once, to prove the parser matches reality**
+The implementor's own run reported **58**. Independent verification added three, each because a
+sabotage survived the suite as shipped:
 
-```bash
-cd web
-GRACE_TABLE_NAME=grace-cases GRACE_ESCALATION_INDEX=escalation-queue \
-GRACE_RUNTIME_ARN=arn:aws:bedrock-agentcore:us-east-1:339712964409:runtime/grace_grace-oTyyvo8stE \
-AWS_REGION=us-east-1 \
-npx tsx -e '
-import { listQueue, readCase } from "./lib/cases";
-const q = await listQueue();
-console.log("queue:", q.map(c => `${c.caseId} ${c.deadline} ${c.reason}`));
-const d = await readCase("c-011");
-console.log("c-011 ledger kinds:", d?.ledger.map(r => r.kind));
-console.log("c-011 filed:", d?.summary.filed);
-'
+| Added test | The sabotage that survived without it |
+|---|---|
+| `throws on a misconfigured environment instead of reporting no such case` | Moving `readEnv()` inside `readCase`'s `try`. Every household then reads back `null`, so `/` renders an empty caseload and `/case/[id]` renders not-found — on a dashboard that is otherwise healthy and logs nothing. The file's header comment said "outside the `try` on purpose"; nothing checked it. |
+| `turns a non-terminating per-case read into null, not a hung page` | Raising `MAX_PAGES`. `listQueue` pinned the cap, but `readCase` catches the throw, so the uncapped loop there never terminates and the SSR page hangs rather than failing — Plan 1 Task 6's resume loop on the request path. (With the cap removed entirely the vitest worker dies with SIGABRT, which a JSON reporter records as zero failed assertions — so "the suite went red" is not the same signal as "a test caught it".) |
+| `distinguishes a failed sweep from a case Grace handled` | Deleting the `case_incomplete` branch. See below — this one is a defect in Task 2's file that only became reachable here. |
+
+**Making `error` reachable exposed a false statement in `authorize`.** Task 2 refused `acted` and
+`error` with the same code and the same message, "Grace handled this case itself; there is nothing
+to decide." That was harmless while `error` was unreachable. It is not harmless now: `error` means
+nothing was filed *and* nothing escalated, so telling a caseworker Grace handled it is precisely the
+unconfirmed success claim hard rule 6 exists to forbid — and it invites them to move on from a
+family whose renewal is still outstanding. Split into `case_incomplete`, "Grace's last run on this
+case reached no outcome. Re-run the sweep before deciding." Both still refuse; only the wording
+changed. **A fix that makes a dead branch reachable is not finished until you read what that branch
+says** — the shipped guard was correct in polarity and wrong in content.
+
+**Then sabotage every property, one at a time.** A throwaway harness (written, run, and deleted —
+no task commits one; the evidence is this table) applies 24 single-line mutations to
+the shipped files, runs vitest, and restores. All 24 are caught, each by the test written for it:
+
+| Sabotage | Test that failed |
+|---|---|
+| newest-wins dedup → first-wins | `collapses repeat escalations…` + `compares escalation times as instants…` |
+| remove dedup entirely | same two |
+| `instant()` → string comparison | `compares escalation times as instants…` + `picks the newest escalation by instant here too…` |
+| drop the deadline sort | `orders by soonest deadline…` |
+| stop following `LastEvaluatedKey` | `follows LastEvaluatedKey`, `paginates the per-case read too`, `refuses to page forever…` |
+| never send `ExclusiveStartKey` | `follows LastEvaluatedKey` |
+| raise the page cap to 10000 | `refuses to page forever rather than hanging the request` |
+| the draft's `parseInt`/`.`-test | `reads a number back at its magnitude…` |
+| the draft's `pending ? escalated : acted` | `reports error, not acted, for a case that ran and reached no outcome` |
+| the draft's naive `DECISION#` prefix | `does not count Grace's own outcome row…`, `attaches an outcome…`, `stays decidable when only Grace's outcome row exists` |
+| outcome read off the human row | `attaches an outcome to the decision it belongs to` |
+| unknown decision word → approve | `shows an unrecognised decision word as a deny, and still counts it` |
+| `NULL` → the string `"None"` | `strips the d_ prefix from detail keys` |
+| merge every column into `detail` | `strips the d_ prefix from detail keys` |
+| the draft's structural `"—"` | `reports no program rather than inventing one` |
+| `filed: true` from the GSI | `does not claim a renewal was filed…` |
+| let a read error escape `readCase` | `returns null when the read throws…` (both copies) |
+| drop `ScanIndexForward` | `returns ledger rows in chronological order` |
+| drop the `cert_end` deadline fallback | `reports acted only with a renewal_submitted row to prove it` |
+| `listCases` reads only 3 cases | `reads every case in the caseload and reports the split from the ledger` |
+| `GRACE_RUNTIME_ARN` no longer required | `names each required variable in turn…` |
+| blank env value passes | `rejects a variable that is set but blank, or only whitespace` |
+| return the untrimmed value | `trims a padded value instead of handing spaces to the SDK` |
+| `alreadyDecided` always false | `reports alreadyDecided once a human DECISION row exists` |
+
+**One survived on the first pass**, which is why this step is not optional: the `instant()` sabotage.
+See defect 6 above — the fixture's timestamps were an hour apart, so string order and instant order
+agreed and the assertion could not fail. Fixed, and a second test added for `readCase`'s own picker.
+
+- [x] **Step 6: Read the real table once, to prove the parser matches reality**
+
+`node --experimental-strip-types` **cannot run this**: Node's ESM resolver requires file extensions, so
+`import { readEnv } from "./env"` inside `cases.ts` fails with `ERR_MODULE_NOT_FOUND`. The plan's
+`npx tsx` suggestion has the same problem in reverse (tsx is not installed and the extensionless
+imports are a bundler convention). Run it through **vitest**, which already resolves the `@/` alias and
+extensionless siblings — a temporary `web/live-check.test.ts` plus a `web/vitest.live.mts` config
+(the config must live inside `web/` or `vitest/config` does not resolve), both deleted afterwards.
+
+Actual output against the live table:
+
+```text
+QUEUE: 3 rows (GSI holds 18)
+  c-012  2026-10-12  filed=false  prog=""  A caseworker must decide. source_conflict: household size 5
+  c-010  2026-10-18  filed=false  prog=""  missing_document: proof_of_residency is not on file (Grace h
+  c-011  2026-10-22  filed=false  prog=""  material_income_change: Income moved 30.0%, above the 5.0% i
+
+CASES: 12  acted=9 escalated=3 error=0 filed=9
+  c-001 acted     prog=medicaid deadline=2026-10-15 filed=true
+  …
+  c-010 escalated prog=-        deadline=2026-10-18 filed=false
+  c-011 escalated prog=-        deadline=2026-10-22 filed=false
+  c-012 escalated prog=-        deadline=2026-10-12 filed=false
+
+c-001: 52 ledger, 0 decisions, filed=true, status=acted, deadline=2026-10-15, prog="medicaid"
+  kinds: {"tool_call":24,"tool_result":23,"renewal_submitted":5}
+  first: 2026-09-03T01:28:48.870392+00:00 tool_call {"trace_id":null,"tool":"read_case"}
+  chronological=true  trace_id: string on 0, null on 52 of 52
+c-010: 65 ledger, chronological=true, trace_id null on 65 of 65
+c-011: 41 ledger, chronological=true, trace_id null on 41 of 41
+c-012: 42 ledger, chronological=true, trace_id null on 42 of 42
+
+PII scan of everything the reader returned: CLEAN
 ```
 
-Expected: exactly **three** queued cases (`c-010`, `c-011`, `c-012`) despite the GSI holding **17**
-rows, and `c-011` showing `filed: false`. **A queue longer than three means the de-duplication is
-wrong** — that is the assertion this step exists for, and the fake cannot make it.
+**Three queued cases from 18 GSI rows**, in deadline order `c-012`, `c-010`, `c-011` — the assertion
+the fake cannot make. **9 acted / 3 escalated / 0 error**, matching the deployed sweep, derived
+per case from the ledger rather than from the GSI. Every ledger read back chronological, and
+`trace_id` **null on every one of 200 rows** — the honest reading of Runtime never installing an
+in-process tracer provider, rendered as "not traced" rather than as an error.
 
-**Also check what the reader hands the pages for `c-012`.** Two pre-fix rows in the live table used to
-contain a household surname in `reason`/`question`/`d_question` — the referee's deliberation prose,
-from before `read_case` stopped returning `display_name`. **Those three values were stripped on
-2026-09-04** (see `docs/plan3-live-data-findings.md` for exactly what was and was not touched), so a
-table-wide scan of all 633 rows for every fixture surname and for `+1555` now returns clean. Do not
-build a render-time name filter on the strength of that history; the fix is at the source, which is
-where CLAUDE.md requires it. Task 8 re-runs the scan as a check rather than as a hope.
+A table-wide re-scan of all **643** rows for every fixture surname and for `+1555` returns **clean**,
+confirming the 2026-09-04 strip held as the table grew from 633.
 
-If `tsx` is unavailable, `npx tsx` will fetch it; otherwise write the snippet to a temporary `.mts`
-file and run it with `node --experimental-strip-types`.
-
-- [ ] **Step 7: Confirm the Python suite is untouched**
+- [x] **Step 7: Confirm the Python suite is untouched**
 
 Run: `.venv/bin/python -m pytest`
-Expected: **622 passed**.
+Actual: **622 passed**, 2 warnings, 26.76s. `web/` is additive.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
-git add web/lib/env.ts web/lib/cases.ts web/__tests__/cases.test.ts
+git add web/lib/env.ts web/lib/cases.ts web/__tests__/cases.test.ts \
+        web/lib/authorize.ts web/__tests__/authorize.test.ts
 git commit -m "feat: the dashboard's only DynamoDB reader, paginated and de-duplicated"
 ```
+
+`authorize.ts` is in this commit because requiring evidence for `acted` made its `error` branch
+reachable, which changed what that branch must say. See the `case_incomplete` note in Step 5.
 
 ---
 ## Task 4: Cognito — the pool, and server-side session verification

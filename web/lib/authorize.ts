@@ -52,6 +52,7 @@ export type RefusalCode =
   | "wrong_role"
   | "unknown_case"
   | "not_escalated"
+  | "case_incomplete"
   | "already_decided"
   | "unknown_decision"
   | "note_too_long";
@@ -106,6 +107,22 @@ export function authorize(
   // tell them apart even if a later edit wanted to.
   if (facts === null) {
     return refuse("unknown_case", "No such case.");
+  }
+  // Both refusals keep the case undecidable; they differ only in what they tell
+  // the caseworker, and the difference is whether the sentence is true. `acted`
+  // means Grace filed — there is a `renewal_submitted` row proving it. `error`
+  // means the sweep reached no outcome at all: nothing was filed and nothing
+  // escalated, so "Grace handled this case itself" would be a false claim about
+  // a family whose renewal is still outstanding, and hard rule 6 is exactly
+  // about not making that claim without the tool confirmation behind it. The
+  // caseworker needs to know the sweep must be re-run, not that they can move
+  // on. `lib/cases.ts` makes `error` reachable by requiring evidence for
+  // `acted`; before that this branch could only ever see `acted`.
+  if (facts.status === "error") {
+    return refuse(
+      "case_incomplete",
+      "Grace's last run on this case reached no outcome. Re-run the sweep before deciding.",
+    );
   }
   if (facts.status !== "escalated") {
     return refuse(

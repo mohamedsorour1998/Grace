@@ -14,6 +14,10 @@ came from a query, not from a guess.
 Two `sk` prefixes exist today — `LEDGER#` (616 rows) and `ESCALATION#` (17). **No `DECISION#` row
 exists yet**, so Task 5 introduces that prefix rather than joining one.
 
+> **Re-measured during Task 3 (2026-09-04, later the same day): 643 rows, `LEDGER#` 625,
+> `ESCALATION#` 18** — `c-010` 7, `c-012` 6, `c-011` 5. A sweep ran in between. Every count in this
+> document is a measurement with a date, not a constant; the 18-vs-3 *ratio* is the durable finding.
+
 ## Five things the plan's fixtures get wrong about real rows
 
 1. **Timestamps are `+00:00`, never `Z`.** Real values look like
@@ -27,8 +31,12 @@ exists yet**, so Task 5 introduces that prefix rather than joining one.
    The GSI range key is therefore escalation *time*, which is **not** the ordering the queue page
    wants — see 4.
 
-3. **`d_trace_id` is DynamoDB type `NULL`, not a missing attribute and not an empty string.** The
-   attribute is present on essentially every ledger row with value `{"NULL": true}`. A reader doing
+3. **`d_trace_id` is DynamoDB type `NULL`, not a missing attribute and not an empty string —
+   *usually*.** The attribute is present with value `{"NULL": true}` on **613 of 625** ledger rows.
+   Task 3 found the exception by handling both cases: **12 rows on `c-003` carry no `d_trace_id` at
+   all**, so a reader must tolerate absent *and* `NULL`. (One row, on `c-002`, carries a real 32-hex
+   string — it is the type round-trip row, and the table's only `BOOL` and `N` values live there too.)
+   A reader doing
    `item.d_trace_id?.S` gets `undefined` and must not treat that as "field absent"; a reader that
    assumes `.S` exists on every attribute will crash. The only two value types in the whole table are
    `S` and `NULL`. This is the deliberate consequence of Runtime not installing an in-process tracer
@@ -42,7 +50,9 @@ exists yet**, so Task 5 introduces that prefix rather than joining one.
    and a Query caps at 1MB, so **the reader must still paginate** — the same reasoning Plan 2 applied
    to `ledger()`.
 
-5. **Real deadlines are not the plan's.** `c-010` → `2026-10-18`, `c-011` → `2026-10-22`,
+5. **Real deadlines are not the plan's**, and they are the *certification end* dates —
+   `d_cert_end` on a `renewal_submitted` row records the same fact for the nine cases that filed, so
+   an acted case's deadline is readable even though it has no escalation row. `c-010` → `2026-10-18`, `c-011` → `2026-10-22`,
    `c-012` → `2026-10-12`. The plan's ordering test asserts `["c-011", "c-012"]` from invented
    deadlines of `2026-10-05` and `2026-10-12`. With the real values, soonest-deadline-first is
    `c-012` (10-12), `c-010` (10-18), `c-011` (10-22) — the **reverse** of escalation-time order for

@@ -80,12 +80,27 @@ describe("authorize — refusals", () => {
   it("refuses a case Grace handled itself", () => {
     // Deciding an `acted` case would let a human retroactively "approve"
     // something already filed, which the audit trail would then imply they
-    // authorised. `error` is not decidable either: a case whose sweep failed has
-    // no measured verdict to approve.
-    for (const status of ["acted", "error"] as const) {
-      expect(refusalOf(authorize(session(), escalated({ status }), approve, NOW)).code)
-        .toBe("not_escalated");
-    }
+    // authorised.
+    expect(refusalOf(authorize(session(), escalated({ status: "acted" }), approve, NOW)).code)
+      .toBe("not_escalated");
+  });
+
+  it("distinguishes a failed sweep from a case Grace handled", () => {
+    // Both are undecidable, and until `lib/cases.ts` required evidence for
+    // `acted` this branch could only ever see `acted`, so one message covered
+    // both. It should not: `error` means nothing was filed AND nothing
+    // escalated, so "Grace handled this case itself" is a false claim about a
+    // family whose renewal is still outstanding — the shape hard rule 6
+    // forbids. The codes must differ, and the message must not say Grace
+    // handled it.
+    const incomplete = refusalOf(authorize(session(), escalated({ status: "error" }), approve, NOW));
+    const acted = refusalOf(authorize(session(), escalated({ status: "acted" }), approve, NOW));
+    expect(incomplete.code).toBe("case_incomplete");
+    expect(incomplete.code).not.toBe(acted.code);
+    expect(incomplete.message).not.toMatch(/handled this case itself/);
+    // And it must still be a refusal, not a permit — the point is the wording,
+    // not a relaxation.
+    expect(incomplete.permitted).toBe(false);
   });
 
   it("refuses a second decision on the same case", () => {
