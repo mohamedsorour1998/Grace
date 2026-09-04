@@ -909,7 +909,7 @@ Task state:
 | 4 — Cognito + session verification | **done** — `infra/provision_cognito.py`, `web/lib/cognito.ts`, `web/proxy.ts`, login page + callback route. **9 Python tests (631 total), 78 vitest**, five gates green. Pool `us-east-1_HXs3b0APR` live, one seeded caseworker, `custom:role` verified on the user. **Nine defects in the plan's draft, two of which broke a gate and two of which were inverted security claims; read below** |
 | 5 — `lib/decide.ts` + the write route | **done** — `web/lib/decide.ts`, `web/app/api/case/[id]/decide/route.ts`, `grace/entrypoint.py` (flag only), 16 Python tests (**647 total**), **122 vitest**, five gates green. **The draft decoded a streaming response as bytes, which would have reported every approve as a failure after it succeeded; read below** |
 | 6 — pages | **done** — `web/app/{page,queue,case/[id]}/`, `web/components/`, `web/lib/session.ts`, **154 vitest**, Python unchanged at 648, five gates green. **The pages had no session verification at all — a forged cookie returned 200 with every case id. Read below** |
-| 7 — Amplify | not started — **the draft sets no SSR compute role, so every read fails after a green deploy; read below** |
+| 7 — Amplify | **done** — `infra/provision_amplify.py`, **715 Python tests**, app `dbi97xicbjbv8` live at `https://grace.rosettacloud.app` serving real data. **Thirteen defects in the plan's draft; four of my own tests initially survived sabotage. Read below** |
 | 8 — verification + docs | not started |
 
 **`web/` runs its own toolchain, and `npm run build` is the gate that matters** — it is what Amplify
@@ -1396,6 +1396,52 @@ check self-tests the scanner against `Yamamoto`, `Mensah`, and `+1555` and print
 first, then reports `NONE` on the real markup. Without that, "no household identity in the markup" is
 equally true of a scanner that matches nothing. Same discipline as the twelve-surname guard having a
 companion test that feeds a name in through `reason`.
+
+### The dashboard is deployed, and five things had to be fixed after a *green* build
+
+`https://grace.rosettacloud.app` — Amplify app `dbi97xicbjbv8`, `WEB_COMPUTE`, custom domain on
+Route 53, compute role `grace-amplify-compute-role` at app and branch level. Verified live with a real
+Cognito ID token: `/` renders 12 cases and the **"9 handled alone / 3 waiting on you"** headline,
+`/queue` shows exactly `c-010 c-011 c-012` de-duplicated from 19 GSI rows, `/case/c-010` shows its real
+`missing_document: proof_of_residency`. **Zero household identity across 144,916 bytes** of deployed
+markup. A forged cookie 307s to `/login` with **zero** case ids; the write route returns **401
+`no_session`**; `"Escalate."` is refused **400 `unknown_decision`**; and the table is unchanged at 651
+rows with **zero `DECISION#` rows**, so every refusal was a real refusal.
+
+Five deploy defects, and the pattern is what matters: **a green build proves nothing about a running
+SSR app.** Builds 1–4 all reported SUCCEED or failed for reasons that misdescribed themselves.
+
+1. **`serverExternalPackages` made the AWS SDK absent at runtime.** Every page returned 500 with a
+   *valid* session — sign-in worked, then the first DynamoDB import failed with
+   `Cannot find module '@aws-sdk/client-dynamodb-3e32f4e24bb075d4'`, naming a module nobody published
+   (Turbopack appends a content hash to an external's name). Marking a package external emits a bare
+   `require` and omits it from the bundle, and Amplify's SSR bundle ships only what the trace includes.
+   It was protecting nothing: no chunk under `.next/static/` references the SDK, because `lib/cases.ts`
+   and `lib/decide.ts` are imported only from server components and a route handler.
+2. **Amplify environment variables never reach the SSR runtime** — documented as intentional. Without a
+   bridge every read is `undefined` after a green deploy. `amplify.yml` writes them to
+   `.env.production` before `next build`, verified end to end.
+3. **`update_app(environmentVariables=...)` is a full replace, and the console writes its own keys into
+   the same map.** Sending a map built from a stale read deleted `AMPLIFY_MONOREPO_APP_ROOT`,
+   `AMPLIFY_DIFF_DEPLOY`, and the Node-22 pin; the next build died at clone time with
+   `Cannot read 'next' version in package.json` — which reads like a packaging problem, not a deleted
+   variable. **Read fresh and merge**, and preserve every `AMPLIFY_*` / `_LIVE_UPDATES` key you do not
+   own.
+4. **A monorepo app root and a flat buildspec are mutually exclusive.** Without
+   `AMPLIFY_MONOREPO_APP_ROOT` the build cannot find Next; with it, a top-level `frontend:` spec is
+   rejected as `Monorepo spec provided without "applications" key`. Both fail at clone time. `amplify.yml`
+   is committed in the `applications:`/`appRoot: web` form, where `baseDirectory` is `.next` — the
+   `web/` prefix belongs only to the single-app form.
+5. **Amplify rejects any variable starting with the reserved `AWS` prefix** (`AWS_REGION` included), and
+   two keys entered by hand carried whitespace (`GRACE_TABLE_NAME  `, `GRACE_ESCALATION _INDEX`), which
+   read as absent to an exact-key lookup. `readEnv` trims *values* but cannot trim a malformed *key*.
+
+**`create_branch` before the repository is connected blocks the connection permanently** — measured:
+`Cannot connect your app to repository while manually deployed branch still exists. Please delete all
+branches and try again.` And `except BadRequestException` around `create_branch` swallows a *rejected
+compute role*, which all three of `CreateApp`/`CreateBranch`/`UpdateApp` report with that same code —
+so a script could report success with no credentials in the SSR runtime. Match on the message, not the
+code.
 
 
 ## The one idea that matters

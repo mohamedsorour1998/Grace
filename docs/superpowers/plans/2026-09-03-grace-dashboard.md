@@ -3926,7 +3926,7 @@ before it works locally, so if Amplify fights, the demo still exists.
 - Consumes: `infra.naming`, `infra.provision_cognito.provision`
 - Produces: `infra.provision_amplify.build_spec() -> str`, `infra.provision_amplify.provision(...) -> dict`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `tests/test_infra_amplify.py`:
 
@@ -3990,12 +3990,12 @@ def test_no_public_variable_carries_backend_detail():
         assert not name.startswith("NEXT_PUBLIC_"), name
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `.venv/bin/python -m pytest tests/test_infra_amplify.py -v`
 Expected: FAIL — `ImportError: cannot import name 'provision_amplify' from 'infra'`.
 
-- [ ] **Step 3: Write `infra/provision_amplify.py`**
+- [x] **Step 3: Write `infra/provision_amplify.py`**
 
 **This draft is missing the SSR compute role, and without it the whole task fails silently in the
 worst way.** Verified against the live API and the Amplify documentation on 2026-09-04:
@@ -4083,8 +4083,18 @@ PLATFORM = "WEB_COMPUTE"
 # Resource names only. Amplify environment variables are visible in the console
 # and in build logs, so a credential here would be a credential in a log. The
 # app's service role supplies AWS access; these just say which resources.
+# **`AWS_REGION` is NOT here, and must not be added.** Amplify rejects any
+# variable starting with the reserved `AWS` prefix — measured, the build fails
+# with `Environment variables cannot start with the reserved prefix "AWS"`. That
+# reservation protects the credentials the SSR execution role injects
+# (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, …); letting a user override them would break
+# the very reads the compute role exists to permit.
+#
+# Nothing is lost: `readEnv` defaults the region rather than requiring it —
+# verified that `region` resolves to `us-east-1` when the variable is absent,
+# blank, or whitespace, while the other five still throw when missing. And the
+# Lambda runtime supplies `AWS_REGION` to the compute functions anyway.
 ENVIRONMENT_VARIABLES: dict[str, str] = {
-    "AWS_REGION": naming.REGION,
     "GRACE_TABLE_NAME": naming.TABLE,
     "GRACE_ESCALATION_INDEX": naming.ESCALATION_GSI,
     # Filled in by `provision` from the deployed runtime and the Cognito pool.
@@ -4094,6 +4104,28 @@ ENVIRONMENT_VARIABLES: dict[str, str] = {
     "COGNITO_DOMAIN": "",
     "DASHBOARD_URL": "",
 }
+
+
+# **`update_app(environmentVariables=...)` is a FULL REPLACE of the whole map, and
+# the console writes keys of its own into it.** Measured the hard way on the live
+# app: sending a map built from a *stale* read deleted
+# `AMPLIFY_MONOREPO_APP_ROOT`, `AMPLIFY_DIFF_DEPLOY`, and `_LIVE_UPDATES` (the
+# Node-22 pin), and the next build failed at clone time with
+# `CustomerError: Cannot read 'next' version in package.json. If you are using
+# monorepo, please ensure that AMPLIFY_MONOREPO_APP_ROOT is set correctly.` —
+# 59 seconds in, before any phase ran, which reads like a repository problem
+# rather than a variable someone removed.
+#
+# So a converge path must **read fresh and merge**, never write a remembered map:
+#
+#     cur = dict(client.get_app(appId=app_id)["app"]["environmentVariables"])
+#     cur.update(ENVIRONMENT_VARIABLES)
+#     client.update_app(appId=app_id, environmentVariables=cur)
+#
+# and it must preserve any `AMPLIFY_*` / `_LIVE_UPDATES` key it does not own.
+# Same shape as Cognito's `UpdateUserPoolClient` full replace — check every
+# update API for this before writing the converge branch, because the failure is
+# a *deletion* of settings nobody remembers setting.
 
 
 def build_spec_commands() -> list[str]:
@@ -4213,7 +4245,7 @@ if __name__ == "__main__":
         print(f"{key}: {value}")
 ```
 
-- [ ] **Step 4: Write `web/amplify.yml` and run the Python tests**
+- [x] **Step 4: Write `web/amplify.yml` and run the Python tests**
 
 Write `build_spec()`'s output to `web/amplify.yml` so the spec is reviewable in the repo as well as
 set on the app. Then:
@@ -4225,7 +4257,7 @@ set on the app. Then:
 
 Expected: 6 new tests pass; the suite is **634 passed**. Report the real number.
 
-- [ ] **Step 5: Provision and deploy**
+- [x] **Step 5: Provision and deploy**
 
 ```bash
 export AWS_PAGER=""
@@ -4300,7 +4332,7 @@ Expected: `SUCCEED`. **If the build fails, read the build log before changing an
 likely causes are a missing environment variable (the build runs `npm run test`, which needs none, but
 the runtime needs all of them) and the platform being wrong.
 
-- [ ] **Step 6: Prove the deployed auth gate actually holds**
+- [x] **Step 6: Prove the deployed auth gate actually holds**
 
 The single most important check in this task:
 
@@ -4328,7 +4360,7 @@ Expected: no item containing `probe`. **If a decision row appeared, stop and do 
 unauthenticated caller reached the write path, which is the one outcome this whole design exists to
 prevent.
 
-- [ ] **Step 7: Record the deploy and commit**
+- [x] **Step 7: Record the deploy and commit**
 
 Append to `docs/dashboard-runbook.md`: the app id, the URL, which deploy path worked, the exact
 environment variables set, and the two curl probes with their observed responses.
