@@ -290,161 +290,33 @@ The sign-in page is Cognito's classic hosted UI, styled with the dashboard's own
 signing in does not look like a different product than the app it guards. A test pins the two together,
 because a colour changed in one place and not the other is invisible until someone views both pages.
 
-### How a household gets into Grace — and the honest limitation
+### How a household gets into Grace
 
-**There is no intake form.** The twelve households come from `fixtures/households.yaml`, and the
-dashboard is deliberately **read-plus-decide only** — its single write path records a caseworker's
-decision. Nothing in `grace/cases/` exposes a create or update method at all; that is capability
-absence applied to the data layer, not an oversight.
+**A caseworker can add one at [`/new`](https://grace.rosettacloud.app/new).** Case id, program, state,
+certification end date, income, household size, and which documents are on file. Grace picks it up on
+its next sweep, reads the rules for that program, and either files the renewal or escalates it with a
+reason.
 
-To add a household today you edit the fixture and re-run the sweep:
+**The form collects no household identity — no name, no phone number, no address — and that absence is
+the design.** An intake form is exactly where identity feels natural to collect, and `read_case`
+returning `display_name` is precisely how a household surname reached CloudWatch (see
+[what did not work](#what-shipped-and-what-did-not)). Grace does not need to know who a family is in
+order to know whether their paperwork is complete; a real deployment's identity stays in the system of
+record that referred the household, keyed by case id. `web/lib/intake.ts` refuses any identity-shaped
+field **and** any field it does not recognise — an allowlist, so the guard cannot be walked around with
+a field name nobody anticipated.
 
-```bash
-# 1. Add a household to fixtures/households.yaml. Quote every scalar — an unquoted
-#    `no`/`yes` parses as a boolean and an unquoted phone number as an integer.
-#    Phone numbers must use the reserved +1555 range (hard rule 3, and a test asserts it).
+Case records live in DynamoDB alongside the ledger, under a `RECORD#v1` sort key. That matters more
+than it sounds: before Plan 4 the records were seeded from `fixtures/households.yaml` into the
+container image at build time, so a form writing to DynamoDB would have rendered on the dashboard and
+been **invisible to the agent**. A submitted case is only real if the sweep can see it.
 
-# 2. Check the gate's verdict locally before spending anything on Bedrock.
-.venv/bin/python -c "
-from datetime import date
-from grace.cases.store import load_fixture_cases
-from grace.authority import evaluate
-from grace.rules.pack import load_pack
-today = date(2026, 10, 1)
-for c in load_fixture_cases():
-    r = evaluate(c, today, load_pack(c.program, c.state))
-    print(c.case_id, 'ESCALATE' if r.escalated else 'act',
-          sorted({x.code for x in r.reasons}))
-"
+A newly submitted case shows the status **`new`** rather than `error`. That distinction is deliberate:
+`error` reads "Grace's last run on this case reached no outcome — re-run the sweep", which would be a
+false claim about a run that never happened.
 
-# 3. Run the sweep end to end locally.
-.venv/bin/python -m grace.run sweep --auto escalate
-
-# 4. Deployed: the caseload is also enumerated in web/lib/cases.ts as CASE_IDS,
-#    which is generated as c-001..c-0NN from a length. Bump that length to match.
-#    It is a constant rather than a discovered set because there is no index over
-#    "every case", and the SSR role deliberately holds no dynamodb:Scan — a bug
-#    with Scan could read all ~660 ledger rows, and the audit trail is the one
-#    thing this project rests on.
-```
-
-**Why it is built this way.** A real deployment would receive households from the source of truth that
-already holds them — a state eligibility system, a clinic's case-management database — rather than from
-a form a caseworker retypes. Grace is the process that watches the clock; it is not the system of
-record, and inventing an intake UI would have implied it was. The fixture is the seam where that
-integration goes.
-
-If you are evaluating this project, the practical consequence is that **the twelve households are the
-demo surface**, and their 9/3 split is the claim being made.
-
-### The claim that matters: a human's approval is an input to the gate, never a bypass
-
-A caseworker approved `c-010` — the household missing `proof_of_residency` — on the deployed system.
-**Grace filed nothing.**
-
-```json
-{"recorded":true,"caseId":"c-010","decision":"approve",
- "graceOutcome":"Grace re-checked and did not file. missing_document: proof_of_residency is not on file",
- "filed":false}
-```
-
-Confirmed from DynamoDB rather than from that response: the approval wrote a `DECISION#` row carrying
-the opaque Cognito `sub`, Grace's re-check wrote its outcome alongside it, and `renewal_submitted` for
-`c-010` is still **0**. A human approved, Grace re-checked, the gate refused again, and the document
-is still missing.
-
-**The guarantee is structural, not a checked condition.**
-`evaluate(case, today, pack=None)` has **no parameter an approval could occupy**, so the flag cannot
-reach the gate even by mistake — the most it can do is append a sentence to the reason a human reads,
-after the verdict is already final. And the dashboard **never resumes a paused graph**: resuming with
-any truthy response *approves* the blocked tool (`"needs review"` was measured filing a renewal for a
-household missing a document), so an approval becomes a durable row plus a fresh invocation, and the
-gate re-evaluates the case facts — which have not changed.
-
-Every refusal was exercised too: a forged cookie 307s to `/login` leaking **zero** case ids, the write
-route returns **401 `no_session`**, `{"decision":"Escalate."}` is refused **400 `unknown_decision`**
-(an allowlist — the unrecognised answer must be the safe one), and a case Grace handled itself returns
-**409 `not_escalated`**. Zero household names, phone numbers, or emails appear in ~151 KB of deployed
-markup or in any row of the table.
-
-Full output in **[dashboard verification](docs/dashboard-verification.md)**, including what was
-deliberately *not* run and why.
-
----
-
-Requires Python 3.12+, AWS credentials, and Bedrock Nova access in `us-east-1`.
-
-```bash
-uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python -e ".[dev]"
-
-.venv/bin/python -m pytest                            # tests
-.venv/bin/python -m grace.run sweep --auto escalate   # local sweep
-```
-
-The sweep runs the twelve seeded synthetic households. Nine are filed autonomously; three escalate —
-one missing a document, one with a material income change, one with conflicting sources.
-
-Two suites, deliberately separate. `pytest` runs the fast unit suite — **715 tests**, no network.
-`pytest evals/` runs trajectory evals against **real Bedrock** — about 65 model invocations across five
-graph runs — and asserts the gate's ordering holds on real model behaviour: `read_case`, `check_window`,
-and `list_documents` always precede any action. They are excluded from the default run because they cost
-money and take minutes, not because they are optional.
-
-The dashboard has its own toolchain and its own suite — **157 tests** — run from `web/`:
-
-```bash
-cd web
-npm run typecheck && npm run lint && npm run test && npm run build
-```
-
-The evals pass 23/23, and honestly: that took two runs. One assertion — that an escalating case does
-*something* rather than nothing — is liveness, not safety, because the gate only ever permits or refuses
-a tool call and never forces one. A model that deliberates and then answers in prose fails it while
-behaving correctly. No safety eval has failed, including the one that blocks submission if it does. The
-[verification doc](docs/deployed-verification.md#7-trajectory-evals-against-real-bedrock) records both
-runs rather than only the good one.
-
-To deploy the whole stack into a fresh account:
-
-```bash
-.venv/bin/python -m infra.provision_all      # idempotent; verified across three runs
-```
-
-### Data
-
-**All household data in this repository is synthetic.** Names are obviously fictional and
-phone numbers use the reserved `+1555` range; a test asserts both. No real personal, health,
-or financial data is used anywhere.
-
-Household identity is also kept away from the models: `read_case` returns no name and no phone
-number. That is a fix rather than a precaution — it used to return the household's name, a referee
-quoted it into its deliberation, and the text reached a CloudWatch log group inside a Step Functions
-payload, a path that span redaction does not cover. The name is removed at the source, with a
-regression test over all 12 fixtures, because a model that can read a name will eventually quote it
-somewhere nobody is filtering. **The fix is deployed** — runtime version 2, and re-invoking the exact
-case that leaked now returns an escalation with no name in the payload, confirmed across a full 9/3
-sweep with zero household names anywhere in the output.
-
-Fixing the source did not clean up what was already written, so that was checked separately: a scan of
-every row in the DynamoDB table found the surname in three fields of two pre-fix rows, and those values
-were stripped in place without touching any key, status, deadline, or `renewal_submitted` row. Repeated
-scans now return clean, including the rows the dashboard's own approval wrote. Log events written before
-the fix still contain the name and cannot be unwritten; they age out with the log group's retention.
-That, and the exact scope of the cleanup, are recorded in
-[docs/deployed-verification.md](docs/deployed-verification.md#5-a-household-name-reached-cloudwatch--found-fixed-at-the-source-pre-fix-events-remain)
-rather than quietly smoothed over.
-
-### Notifications
-
-The family channel sits behind an interface with two implementations: real SMS via AWS End
-User Messaging, and a transcript view. **The AWS account's SMS is sandboxed** —
-`TEXT_MESSAGE_MONTHLY_SPEND_LIMIT` has `MaxLimit: 1` (about $1/month) and there are **zero
-origination numbers** — so `TranscriptChannel` is the deliberate always-works path and **the demo
-never depends on SMS delivery**. The interface is the point: the gate decides whether a family may be
-contacted, and swapping the transport does not touch that decision.
-
----
+You can still add households by editing `fixtures/households.yaml` and re-running the sweep; the
+twelve seeded ones arrive that way, and `infra/seed_cases.py` writes them into the table.
 
 ## What shipped, and what did not
 

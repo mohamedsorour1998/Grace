@@ -1866,15 +1866,33 @@ hosted UI (`ManagedLoginVersion: 1`); managed login v2 would allow real layout c
 sign-in URL shape, so `hostedUiUrl`'s `/login` path and the whole OAuth round trip would need
 re-testing for a cosmetic gain.
 
-**There is no way to submit a new case, and that is deliberate — say so rather than treating it as a
-gap.** `grace/cases/` exposes no create or update method at all; the twelve households come from
-`fixtures/households.yaml`, and the dashboard is read-plus-decide only (its one write records a
-caseworker's decision). A real deployment would receive households from the system that already holds
-them — a state eligibility system, a clinic's case-management database — so the fixture is the seam
-where that integration goes. Adding one means editing the fixture, re-running the sweep, and bumping
-the generated length behind `CASE_IDS` in `web/lib/cases.ts`. The README documents this under
-"How a household gets into Grace". **Do not build an intake form to close the apparent gap**: it would
-imply Grace is the system of record, which it is not.
+**Case intake exists as of Plan 4, and the shape of it is the point.** `/new` writes a `RECORD#v1` row
+and `DynamoDBCaseStore` reads records from the table, so a submitted household is genuinely seen by the
+agent. Before Plan 4, `build_store()` passed `load_fixture_cases()` into the store — records were baked
+into the container image, so a form writing to DynamoDB would have rendered on the dashboard and been
+**invisible to the sweep**. If you touch the store, keep that property: a case the dashboard shows and
+the agent cannot see is the exact failure three plans were spent eliminating.
+
+**The intake form collects no household identity, and `web/lib/intake.ts` enforces it.** No name, phone,
+address, or email — the validator refuses any identity-shaped field *and* any unrecognised field, which
+is an allowlist rather than a denylist so it cannot be walked around with a field name nobody
+anticipated. **Do not add an identity field to make the form feel complete**: `read_case` returning
+`display_name` is how a surname reached CloudWatch, and the fix there was removing the field rather
+than filtering its consumers.
+
+**A new case's status is `new`, not `error`.** `error`'s message reads "Grace's last run on this case
+reached no outcome — re-run the sweep", which is a false claim about a run that never happened. Adding
+the variant made three `switch` statements in `case-table.tsx` fail to compile, which is those switches
+working as designed: they carry no `default:` precisely so a new status is a compile error rather than
+a silent inheritance of `acted`'s green.
+
+**Sign-in is at `auth.rosettacloud.app`** — managed login v2 on Grace's own domain, ACM certificate in
+`us-east-1` (CloudFront is global and reads certificates only from there, regardless of the pool's
+region). A hand-built Next.js login page was considered and rejected: it would post the caseworker's
+password to a Grace route handler, moving the credential through Grace's servers and turning a page
+into a password-guessing surface. **Prefer the option that does not enlarge the credential surface.**
+The `grace-caseworkers` prefix domain is kept as a working fallback, which is why `HOSTED_UI_CSS` is
+still load-bearing rather than dead code.
 
 ### Known infrastructure limits
 
