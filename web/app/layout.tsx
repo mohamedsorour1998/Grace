@@ -7,12 +7,17 @@ export const metadata: Metadata = {
   description: "Renewals Grace filed, and the cases it refused to decide.",
 };
 
-/** Two destinations, because there are two questions: what happened in the last
- *  sweep, and what is waiting on me. Anything else would be navigation for its
- *  own sake. */
+/** Three destinations, because there are three things a caseworker does here:
+ *  see what happened in the last sweep, work what is waiting on them, and add a
+ *  household. Anything else would be navigation for its own sake.
+ *
+ *  `/new` is in this list because a page nothing links to is a page nobody can
+ *  use — the intake form shipped reachable only by typing the URL, which is
+ *  indistinguishable from not having shipped it. */
 const NAV = [
   { href: "/", label: "Sweep" },
   { href: "/queue", label: "Queue" },
+  { href: "/new", label: "Add case" },
 ];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

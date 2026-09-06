@@ -200,8 +200,15 @@ export function IntakeForm() {
               ))}
             </div>
             <p className="mt-2 text-xs text-muted">
-              Leave a document unticked and Grace will escalate rather than file — which is the
-              behaviour worth demonstrating.
+              <span className="font-medium text-ink">Nothing is uploaded here, on purpose.</span>{" "}
+              Grace records <em>that</em> a document is on file and when it arrived — never the
+              document itself. A proof of income carries a name, an address and an employer, so
+              storing one would put back exactly the identity this form refuses to collect. The file
+              stays with whoever collected it; Grace tracks the clock on it.
+            </p>
+            <p className="mt-2 text-xs text-muted">
+              Leave one unticked and Grace will escalate rather than file — which is the behaviour
+              worth demonstrating.
             </p>
           </fieldset>
 

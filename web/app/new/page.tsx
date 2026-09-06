@@ -37,6 +37,12 @@ export default async function NewCase() {
           could eventually repeat — so it holds none that could identify anyone.
         </p>
         <p>
+          <span className="font-medium text-ink">No documents are uploaded either.</span> Grace
+          records that a proof is on file and when it arrived — never the file. It checks whether
+          paperwork is complete and current, not whether it is authentic; that judgement stays with
+          the people who collected it.
+        </p>
+        <p>
           All data in this deployment is <span className="font-medium text-ink">synthetic</span>.
         </p>
       </div>
