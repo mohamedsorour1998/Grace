@@ -2,6 +2,10 @@
 
 **Nobody should lose healthcare over a missed letter.**
 
+During the Medicaid unwinding, **more than 25 million people lost coverage — and about 69% of those
+losses were procedural**, not eligibility. Roughly **17 million people** lost health insurance they
+still qualified for, because of paperwork.
+
 Grace is an AI agent that watches every family's benefit-renewal deadline, files the renewals
 that are unambiguous, chases the one missing document in the family's own language — and wakes
 a human caseworker only when eligibility is genuinely in doubt.
@@ -22,9 +26,18 @@ for the **AWS Agents for Humans Hackathon** (Good Neighbor track).
 
 ## The problem
 
-During Medicaid unwinding, the majority of disenrollments were **procedural** — people who
-still qualified but missed a letter, a deadline, or one document. They did not become
-ineligible. They lost coverage to paperwork.
+When pandemic-era continuous coverage ended on **31 March 2023**, states resumed annual Medicaid
+eligibility checks. Enrolment had reached a record **94 million**. Over the unwinding that followed,
+**more than 25 million people lost Medicaid coverage.**
+
+**About 69% of those losses were procedural** — missing forms, missed deadlines, one document that never
+arrived. Not people who stopped qualifying. People who still qualified and lost coverage anyway.
+
+> That is roughly **17 million people** who lost health insurance they were entitled to, because of
+> paperwork.
+
+The failure is silent by design. Nobody gets an error message. A renewal simply does not happen, and a
+family finds out at a pharmacy counter when a prescription is refused.
 
 The people holding this together are caseworkers at clinics, food banks, and school districts,
 tracking recertification windows for hundreds of households across programs with different
@@ -32,6 +45,12 @@ clocks, in languages the notices are not written in.
 
 **One sentence:** a family that still qualifies is stuck re-proving it, over and over, and
 loses coverage when a single letter goes unanswered.
+
+<sub>Sources: [Medicaid.gov unwinding resources](https://www.medicaid.gov/resources-for-states/coronavirus-disease-2019-covid-19/archived-unwinding-and-returning-regular-operations-after-covid-19)
+and [KFF](https://www.kff.org/medicaid/10-things-to-know-about-the-unwinding-of-the-medicaid-continuous-enrollment-provision/)
+for enrolment and coverage losses; [JAMA Health Forum](https://jamanetwork.com/journals/jama-health-forum/fullarticle/2825467)
+for the procedural share. All household data in this repository is synthetic.</sub>
+
 
 ## Who it's for
 

@@ -58,19 +58,33 @@ Do not stage a fake approval to make the demo cleaner. The whole entry rests on 
 
 ### 0:00–0:45 · The problem, and who it is for
 
-*No screen needed — a title slide is fine.*
+*No screen needed — a title slide is fine. **Put the numbers on the slide**; they carry this section.*
 
-> During Medicaid unwinding, **most disenrollments were procedural**. Not people who stopped
-> qualifying — people who missed a letter, a deadline, or one document. They lost coverage to
+> When pandemic-era continuous coverage ended in March 2023, states resumed annual Medicaid eligibility
+> checks. Enrolment had reached a record **94 million**. Over the unwinding that followed, **more than
+> 25 million people lost Medicaid coverage.**
+>
+> **About 69% of those losses were procedural.** Missing forms. Missed deadlines. One document that
+> never arrived. Not people who stopped qualifying — people who still qualified and lost coverage
+> anyway.
+>
+> That is roughly **17 million people** who lost health insurance they were entitled to, because of
 > paperwork.
 >
-> This is for the **caseworker** carrying hundreds of those files, and for the **family** who never
-> finds out they were dropped until a pharmacy turns them away.
+> This is for the **caseworker** holding hundreds of those files at once, and for the **family** who
+> finds out at a pharmacy counter when a prescription is refused.
 >
-> It matters because the failure is silent. Nobody gets an error. A renewal simply does not happen,
-> and a family loses health coverage they were entitled to.
+> It matters because the failure is silent. Nobody gets an error message. A renewal simply does not
+> happen.
 
-`<replace this text by a screenshot of the title slide — "Grace: an agent that keeps families from losing benefits over paperwork">`
+`<replace this text by a screenshot of the title slide — "Grace" with the three figures: 94M enrolled, 25M+ lost coverage, 69% procedural>`
+
+**Sources, if anyone asks.** 94M peak enrolment and 25M+ losses:
+[Medicaid.gov unwinding resources](https://www.medicaid.gov/resources-for-states/coronavirus-disease-2019-covid-19/archived-unwinding-and-returning-regular-operations-after-covid-19)
+and [KFF](https://www.kff.org/medicaid/10-things-to-know-about-the-unwinding-of-the-medicaid-continuous-enrollment-provision/).
+The 69% procedural share:
+[JAMA Health Forum](https://jamanetwork.com/journals/jama-health-forum/fullarticle/2825467).
+The ~17 million figure is 69% of 25 million — say "roughly" or "about", never a precise count.
 
 ### 0:45–1:15 · What Grace does
 
