@@ -48,10 +48,15 @@ import type { SessionIdentity } from "./types";
 import { CASEWORKER_ROLE } from "./authorize";
 
 /** The programs Grace holds a rule pack for. An allowlist, matching
- *  `grace/rules/packs/*.yaml` — `tests/test_intake_contract.py` reads that
- *  directory and asserts these two sets are equal, so adding a pack without
- *  updating this constant fails a test rather than shipping a form that offers a
- *  program the gate cannot evaluate. */
+ *  `grace/rules/packs/*.yaml` — `__tests__/intake.test.ts` reads that directory
+ *  and asserts these two sets are equal, so adding a pack without updating this
+ *  constant fails a test rather than shipping a form that offers a program the
+ *  gate cannot evaluate.
+ *
+ *  **That test named a file that did not exist until now.** This comment said
+ *  `tests/test_intake_contract.py`; there is no such file, and never was. A
+ *  docstring asserting that some other layer performs a check is not evidence
+ *  that it does — the Plan 3 finding, in the same repository, one plan later. */
 export const PROGRAMS = ["medicaid", "snap"] as const;
 
 /** Likewise for states. One today; the same disk-derived test guards it. */
@@ -111,9 +116,9 @@ const IDENTITY_MARKERS = [
  *  item that is absurd on its face.
  *
  *  `MAX_DOCUMENTS` mirrors `grace/cases/record.py`'s constant of the same name,
- *  and the contract test asserts the two agree — a form that accepted more
- *  documents than the reader will parse would write a row the agent then refuses
- *  to load. */
+ *  and `__tests__/intake.test.ts` reads that constant off the Python source and
+ *  asserts the two agree — a form that accepted more documents than the reader
+ *  will parse would write a row the agent then refuses to load. */
 export const MAX_DOCUMENTS = 32;
 export const MAX_INCOME_CENTS = 100_000_000;
 export const MAX_HOUSEHOLD_SIZE = 30;
@@ -130,6 +135,22 @@ const MAX_YEAR = 2100;
 const CASE_ID = /^c-[0-9]{3}$/;
 
 const ISO_DATE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+
+/** What may be written as `created_by`: an opaque identifier and nothing else.
+ *
+ *  The value is the caseworker's Cognito `sub`, and it becomes a durable
+ *  `RECORD#v1` attribute so the case page can say *whose* assertion the document
+ *  status is — Grace takes a caseworker's word that a document was sent to the
+ *  state and cannot verify it, and hard rule 6 is about never letting an
+ *  assertion read as a confirmed fact.
+ *
+ *  It is checked here because nothing upstream checks it. `verifySession` asks
+ *  only that `sub` is a non-empty string, so an identity provider issuing an
+ *  email as the subject would put an address into a row a model reads and Step
+ *  Functions logs — the exact path a surname took to CloudWatch in Plan 2.
+ *  Mirrors `_OPAQUE_SUBJECT` in `grace/cases/record.py`, which refuses the same
+ *  shapes on the Python side; the contract test below pins the pair. */
+const OPAQUE_SUBJECT = /^[A-Za-z0-9._:-]{1,128}$/;
 
 /** The sort key of a case record. One row per case, version in the key, so a
  *  future v2 shape is a new row an old reader simply does not match rather than
@@ -171,6 +192,7 @@ export type IntakeRefusalCode =
   | "no_session"
   | "session_expired"
   | "wrong_role"
+  | "identity_subject"
   | "identity_field"
   | "unknown_field"
   | "bad_case_id"
@@ -291,6 +313,19 @@ export function validateIntake(
   if (session.role !== CASEWORKER_ROLE) {
     return refuse("wrong_role", "This account may not add cases.");
   }
+  // Still a session check, so it sits with the others and ahead of every field
+  // check. The subject is about to be written onto a durable row as the
+  // provenance of a document assertion, and an email or a name there is identity
+  // in a place hard rule 9 forbids. Refused rather than silently dropped:
+  // dropping it would leave the case page saying nobody asserted the document
+  // status, which is a different false claim rather than a safe default.
+  if (!OPAQUE_SUBJECT.test(session.sub)) {
+    return refuse(
+      "identity_subject",
+      "This account's identifier is not an opaque id, so it cannot be recorded " +
+      "as the source of a document assertion.",
+    );
+  }
 
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
     return refuse("unknown_field", "Send a JSON object.");
@@ -395,11 +430,21 @@ export function validateIntake(
  *  function's output to that file; `tests/test_case_record.py` compares the
  *  Python writer's to the same file.
  *
- *  `createdAt` is a parameter rather than a clock read so the comparison can be
- *  byte for byte. */
+ *  `createdAt` and `createdBy` are parameters rather than a clock read and a
+ *  reach into the permit, so the comparison can be byte for byte.
+ *
+ *  `createdBy` is a third parameter rather than a field on `CaseRecordInput`
+ *  because it is **not a case fact**. Everything in `CaseRecordInput` is
+ *  something the gate reasons over; this is provenance about the row — who
+ *  asserted that these documents were sent. Keeping it out of the record input
+ *  is the same separation as `grace/cases/record.py` reading it with its own
+ *  function rather than putting it on `Case`, and for the same reason: an
+ *  identifier inside the object a model receives is how `display_name` reached
+ *  CloudWatch. */
 export function toRecordItem(
   input: CaseRecordInput,
   createdAt: Date,
+  createdBy: string,
 ): Record<string, AttributeValue> {
   return {
     pk: { S: `CASE#${input.caseId}` },
@@ -436,6 +481,11 @@ export function toRecordItem(
     // compares bytewise; this field is not a sort key, but two records written
     // at the same instant must still read back as the same time.
     created_at: { S: utcIsoWithOffset(createdAt) },
+    // `NULL` when nobody asserted this record — the shape `infra/seed_cases.py`
+    // writes for the twelve fixture households. The key is always present so the
+    // attribute set matches the Python writer's exactly; a reader that required
+    // it would otherwise parse a seeded case and refuse a submitted one.
+    created_by: createdBy === "" ? { NULL: true } : { S: createdBy },
   };
 }
 

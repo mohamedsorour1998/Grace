@@ -99,6 +99,10 @@ def test_the_pinned_item_decodes_to_the_pinned_case():
         for d in case.documents
     ] == expected["documents"]
     assert list(case.source_conflicts) == expected["source_conflicts"]
+    # Read separately, because it is deliberately NOT a field on `Case`: the
+    # gate's snapshot must not carry an identifier at all, so provenance about
+    # the record has its own reader.
+    assert record.created_by_from_item(SHAPE["item"]) == expected["created_by"]
 
 
 def test_the_pinned_item_is_exactly_what_the_writer_emits():
@@ -108,8 +112,20 @@ def test_the_pinned_item_is_exactly_what_the_writer_emits():
     would merely be an example; with it, either writer drifting from the other
     fails its own test rather than producing a row the other language cannot
     parse — a case that renders on the dashboard and is invisible to the agent.
+
+    `created_by` has to be carried across explicitly because `from_item` returns
+    a `Case`, which does not hold it. That is the point of the round trip rather
+    than an inconvenience: if a future edit put the id on `Case`, every model in
+    the graph would receive it.
     """
-    assert record.to_item(record.from_item(SHAPE["item"]), created_at=PINNED) == SHAPE["item"]
+    assert (
+        record.to_item(
+            record.from_item(SHAPE["item"]),
+            created_at=PINNED,
+            created_by=record.created_by_from_item(SHAPE["item"]),
+        )
+        == SHAPE["item"]
+    )
 
 
 def test_the_directory_item_matches_the_pinned_shape():
@@ -118,9 +134,16 @@ def test_the_directory_item_matches_the_pinned_shape():
 
 
 def test_the_writer_emits_exactly_the_declared_attribute_set():
-    """`RECORD_ATTRIBUTES` is what `tests/test_intake_contract.py` compares the
+    """`RECORD_ATTRIBUTES` is what `web/__tests__/intake.test.ts` compares the
     TypeScript writer against, so it has to be the truth about this writer
-    rather than a list someone remembered to update."""
+    rather than a list someone remembered to update.
+
+    That comparison named `tests/test_intake_contract.py` here and
+    `fixtures/case-record-shape.json` in `web/lib/intake.ts`'s docstring, and
+    neither existed on the TypeScript side — `grep case-record-shape web/`
+    matched nothing at all. Both writers claimed to assert against the pinned
+    item; only this one did.
+    """
     assert set(record.to_item(_case(), created_at=PINNED)) == set(record.RECORD_ATTRIBUTES)
     assert len(record.RECORD_ATTRIBUTES) == len(set(record.RECORD_ATTRIBUTES))
 
@@ -155,6 +178,22 @@ def test_no_record_row_carries_a_name_a_phone_or_a_household_id():
     assert checked == 12
 
 
+def test_the_asserters_id_never_reaches_the_object_the_gate_reasons_over():
+    """`created_by` is provenance about the row, not a case fact.
+
+    `Case` is what `evaluate` receives and what every model in the graph is
+    handed — `read_case` builds its output from one. An identifier added there
+    would be inside a model's context on every invocation, which is exactly how
+    `display_name` reached a referee's prose and then CloudWatch. So the reader
+    is a free function and the field stays off the dataclass, checked here rather
+    than trusted.
+    """
+    assert "created_by" not in Case.__dataclass_fields__
+    assert "created_by" not in Household.__dataclass_fields__
+    case = record.from_item(SHAPE["item"])
+    assert SHAPE["decoded"]["created_by"] not in json.dumps(case, default=str)
+
+
 def test_the_identity_guard_can_actually_fail():
     """The companion that makes the guard above mean something.
 
@@ -171,6 +210,72 @@ def test_the_identity_guard_can_actually_fail():
         )
     )
     assert "Mensah" in blob
+
+
+@pytest.mark.parametrize(
+    "not_opaque",
+    [
+        "caseworker@example.gov",
+        "Ada Lovelace",
+        "ada lovelace",
+        "sub with spaces",
+        "name<script>",
+        "x" * 129,
+        "sub\nnewline",
+        # The one an anchored `^...$` lets through. Python's `$` also matches
+        # immediately before a trailing newline, so `^[A-Za-z0-9._:-]{1,128}$`
+        # accepts this — measured — while JavaScript's `$` does not, which would
+        # leave the two writers disagreeing about the same value. `\Z` is what
+        # closes it. A trailing newline in a durable id is also the shape that
+        # splits one log line into two.
+        "2448a4e8-c021-70f6-382c-e8acbb6cc956\n",
+        "\n2448a4e8",
+    ],
+)
+def test_a_created_by_that_is_not_opaque_is_refused_rather_than_stripped(not_opaque: str):
+    """The provenance line's identity discipline, enforced at the writer.
+
+    `verifySession` only checks that `sub` is a non-empty string, so nothing
+    upstream refuses an email — and `created_by` is exactly the field someone
+    would one day fill with a username "because it is more readable". A record
+    row is read by a model and logged by Step Functions, which is the path a
+    surname took to CloudWatch in Plan 2.
+
+    Refused rather than silently dropped: dropping it would leave the case page
+    saying nobody asserted the document status, which is a *different* false
+    claim rather than a safe default.
+    """
+    with pytest.raises(record.InvalidCaseRecord, match="opaque"):
+        record.to_item(_case(), created_at=PINNED, created_by=not_opaque)
+
+
+@pytest.mark.parametrize(
+    "opaque",
+    [
+        "2448a4e8-c021-70f6-382c-e8acbb6cc956",  # a real Cognito sub's shape
+        "us-east-1:8b1c0e1e-0000-4000-8000-000000000000",
+        "abc123",
+    ],
+)
+def test_an_opaque_created_by_is_accepted(opaque: str):
+    """Both directions, or "refuses" is true of every input and proves nothing."""
+    item = record.to_item(_case(), created_at=PINNED, created_by=opaque)
+    assert item["created_by"] == {"S": opaque}
+    assert record.created_by_from_item(item) == opaque
+
+
+def test_an_unasserted_record_says_so_rather_than_inventing_an_id():
+    """The twelve seeded households were written from a fixture; no caseworker
+    asserted anything about them. `NULL` is the honest value, and a placeholder
+    like "system" would be a magic value a renderer could not tell from a real
+    id — the same objection `lib/cases.ts` raises to a presentation dash."""
+    item = record.to_item(_case(), created_at=PINNED)
+    assert item["created_by"] == {"NULL": True}
+    assert record.created_by_from_item(item) == ""
+    # And an older row written before this field existed reads the same way.
+    absent = dict(SHAPE["item"])
+    del absent["created_by"]
+    assert record.created_by_from_item(absent) == ""
 
 
 def test_a_rebuilt_household_has_no_identity_to_leak():

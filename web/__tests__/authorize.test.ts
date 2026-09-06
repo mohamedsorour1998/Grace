@@ -103,6 +103,27 @@ describe("authorize — refusals", () => {
     expect(incomplete.permitted).toBe(false);
   });
 
+  it("distinguishes a case no sweep has looked at from one Grace handled", () => {
+    // The same lesson as the test above, one variant later. `new` was declared
+    // in `lib/types.ts` and rendered in `case-table.tsx` while nothing could
+    // produce it, so it fell to `not_escalated` — whose message tells the
+    // caseworker who *just submitted the case* that "Grace handled this case
+    // itself; there is nothing to decide." Grace has not looked at it. When a
+    // change widens the set of inputs a branch can see, re-read that branch's
+    // message as well as its logic.
+    const unswept = refusalOf(authorize(session(), escalated({ status: "new" }), approve, NOW));
+    const acted = refusalOf(authorize(session(), escalated({ status: "acted" }), approve, NOW));
+    const failed = refusalOf(authorize(session(), escalated({ status: "error" }), approve, NOW));
+    expect(unswept.code).toBe("case_not_swept");
+    expect(new Set([unswept.code, acted.code, failed.code]).size).toBe(3);
+    expect(unswept.message).not.toMatch(/handled this case/);
+    // Nor the `error` wording, which claims a run happened and reached nothing.
+    expect(unswept.message).not.toMatch(/re-run/i);
+    expect(unswept.message).toMatch(/no sweep/i);
+    // Still a refusal. The polarity was never wrong; only the wording.
+    expect(unswept.permitted).toBe(false);
+  });
+
   it("refuses a second decision on the same case", () => {
     expect(refusalOf(authorize(session(), escalated({ alreadyDecided: true }), approve, NOW)).code)
       .toBe("already_decided");

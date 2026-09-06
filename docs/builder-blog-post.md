@@ -117,7 +117,7 @@ injection cannot point Grace at a different family, because there is no paramete
 **3. A deterministic gate.** `grace/authority.py` is pure Python — no model, no I/O, no network —
 mapping case facts to *act* or *escalate*. Any error during verification escalates. Fail closed.
 
-### Two choices worth explaining
+### Three choices worth explaining
 
 **Deadline math is a tool, not an agent.** Deterministic work does not need a model. Early on I let a
 model compare a document's received date against a freshness window; on a real sweep it got that wrong
@@ -132,6 +132,31 @@ qualifies, a verifier (Nova Pro) adversarially checks each claim against readabl
 of the same model agreeing proves nothing and nothing should referee its own argument. The nine clean
 households never pay for any of it.
 
+**Grace stores no documents, because it is not the party that receives them.** The instinct is to add
+an upload. The domain says otherwise: the family sends documents to the **state**, whose eligibility
+system is the system of record — it attempts an *ex parte* renewal from wage data it already holds,
+mails a form if that fails, requests specific documents if it still cannot verify, and a state worker
+decides. The 69% procedural loss happens between the notice and the submission. Grace's users are
+*navigators* — clinics, food banks, school family-support offices — and what a navigator actually knows
+is *"I helped this family send their paystub on the 20th"*. **Status, not custody.**
+
+So a document in Grace is an id and a date, and the interface says **"documents sent to the state"**
+rather than "documents on file" — three words that had implied custody nobody has. Storing the file
+would have put the maximum-PII payload in the system (a proof of income carries a name, an address, an
+employer, often an SSN) into an architecture whose whole rule is "no household identity anywhere", and
+bought the gate nothing: it reads two dates and never opens a document. What Grace has is a
+caseworker's **assertion**, so the case page names it as one — *"Document status asserted by
+`2448a4e8-…` at intake on 2026-09-06. Grace tracks the deadline on it and does not verify it
+independently."* The opaque id, never a name; both writers refuse a subject that is not opaque.
+
+The seam where a real answer would arrive is code rather than a sentence in a README:
+`grace/cases/document_source.py`, a protocol whose distinguishing method is `provenance()` — every
+source must say *how it knows* — with the shipped implementation reading the record and the state one
+**raising `NotImplementedError`**. A stub returning an empty tuple would not read as "unknown": the gate
+takes `()` as "this family has sent nothing", so every household would escalate for reasons that were
+not true, silently. What it needs is a per-state data-sharing agreement, which is a legal instrument,
+not a sprint.
+
 ### Milestones
 
 The gate came first — a pure-Python authority module, table-tested exhaustively, before any agent
@@ -139,7 +164,7 @@ existed. Then the local sweep (twelve seeded households, 9 filed / 3 escalated),
 EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Last, the safety claim executed
 against live infrastructure.
 
-**716 Python tests and 157 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
+**863 Python tests and 210 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
 holds against real Bedrock calls.
 
 ---

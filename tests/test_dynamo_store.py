@@ -810,6 +810,32 @@ def test_create_case_writes_the_directory_row_before_the_record():
     assert order == ["CASE#c-013", naming.RECORD_SK]
 
 
+def test_create_case_records_who_asserted_the_record_and_refuses_a_name():
+    """The Python writer must be able to express `created_by`, not only the
+    TypeScript one.
+
+    A store that could not pass it would silently write `NULL` on every Python
+    path, which is the two-writers-one-shape drift `record.py` exists to prevent
+    — and it would do so while every existing test still passed. The refusal is
+    the same one `to_item` makes: an email or a name in this field would put
+    identity into a row a model reads and Step Functions logs (hard rule 9).
+    """
+    store = _dynamo_store([])
+    store.create_case(_new_case("c-013"), created_by="2448a4e8-c021-70f6-382c-e8acbb6cc956")
+    item = store._record_item("c-013")
+    assert item is not None
+    assert record.created_by_from_item(item) == "2448a4e8-c021-70f6-382c-e8acbb6cc956"
+
+    # Seeding asserts nothing, so it writes nothing rather than a placeholder.
+    store.create_case(_new_case("c-014"))
+    seeded = store._record_item("c-014")
+    assert seeded is not None
+    assert record.created_by_from_item(seeded) == ""
+
+    with pytest.raises(record.InvalidCaseRecord, match="opaque"):
+        store.create_case(_new_case("c-015"), created_by="caseworker@example.gov")
+
+
 def test_a_ledger_row_can_be_written_for_a_case_that_exists_only_in_the_table():
     """Otherwise the audit trail would be empty for exactly the household that
     most needs one: the newly submitted case Grace has just run on."""

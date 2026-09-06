@@ -293,9 +293,9 @@ because a colour changed in one place and not the other is invisible until someo
 ### How a household gets into Grace
 
 **A caseworker can add one at [`/new`](https://grace.rosettacloud.app/new).** Case id, program, state,
-certification end date, income, household size, and which documents are on file. Grace picks it up on
-its next sweep, reads the rules for that program, and either files the renewal or escalates it with a
-reason.
+certification end date, income, household size, and which documents have been sent to the state. Grace
+picks it up on its next sweep, reads the rules for that program, and either files the renewal or
+escalates it with a reason.
 
 **The form collects no household identity — no name, no phone number, no address — and that absence is
 the design.** An intake form is exactly where identity feels natural to collect, and `read_case`
@@ -307,21 +307,58 @@ field **and** any field it does not recognise — an allowlist, so the guard can
 a field name nobody anticipated.
 
 **Grace stores no documents, and there is no upload.** A document in Grace is two facts — which kind
-it is, and the date it arrived:
+it is, and the date it was sent:
 
 ```yaml
 - {id: "proof_of_income", received: "2026-09-20"}
 ```
 
 That is the entire record. There is no S3 bucket and no file anywhere in the system. Grace reasons
-about the *clock* on a document — is it present, is it still inside the rule pack's freshness window,
-has it expired — and never about its contents.
+about the *clock* on a document — has it been sent, is it still inside the rule pack's freshness
+window, has it expired — and never about its contents.
 
-Two consequences worth stating rather than glossing. Storing the file would reintroduce exactly the
-identity the intake form refuses to collect: a proof of income carries a name, an address, and an
-employer. And **Grace takes the caseworker's word that the document exists** — it cannot verify the
-assertion. In a real deployment that assertion would arrive from the eligibility system that actually
-received the file, rather than from a checkbox; the intake form is where that integration attaches.
+**The family sends documents to the state, and the state's eligibility system is the system of
+record.** That sequence is the domain fact the whole design rests on: the state attempts an *ex parte*
+renewal from wage and tax data it already holds; if that fails it mails a renewal form; if it still
+cannot verify something it requests specific documents; the family submits them to the **state** by
+portal, mail, or in person; a state worker decides. **The 69% procedural loss happens between the
+notice and the submission** — the letter never arrives, or the document never gets sent.
+
+Grace is not any of those parties. Its users are **navigators** — community clinics, food banks, school
+family-support offices — and what a navigator actually knows is *"I helped this family upload their
+paystub on the 20th"*. That is **status, not custody**, and it is exactly what a `Document` records.
+The interface used to say "documents on file", which implied Grace or the org held the paperwork.
+Neither does. It now says **documents sent to the state**, and each entry reads *sent 2026-09-20*.
+
+**So the claim is an assertion, and the dashboard says whose.** Every `RECORD#v1` row carries a
+`created_by` — the caseworker's opaque Cognito `sub`, never a name or an email; both writers *refuse* a
+subject that is not opaque rather than stripping one — and `/case/[id]` renders one line above the
+documents:
+
+> Document status asserted by `2448a4e8-…` at intake on 2026-09-06. Grace tracks the deadline on it
+> and does not verify it independently.
+
+Hard rule 6 says never claim an action succeeded without tool confirmation. That sentence is its
+mirror: a claim Grace never confirmed and could not, labelled as one, for the person who is about to
+act on it.
+
+**The integration point is real code, not a promise.** `grace/cases/document_source.py` defines a
+`DocumentSource` protocol whose distinguishing method is `provenance()` — every source must be able to
+say *how it knows*. `AssertedDocumentSource` is what ships and returns the record's own documents.
+`StateEligibilityDocumentSource` **raises `NotImplementedError`** and its docstring states what a real
+one needs: a per-state data-sharing agreement, credentials issued under it, and a query for whether a
+household has a current verification on file — a status and a date, never the file. It is deliberately
+not wired in. A stub returning an empty tuple would not read as "unknown": to `evaluate`, `()` is the
+positive claim that the family has sent nothing, so all twelve households would escalate for reasons
+that are not true with no error anywhere. This is what **AgentCore Gateway** was deferred for — an
+outbound call to a system Grace does not own.
+
+**Two things deliberately not built, with the reasons.** *Document storage:* a proof of income carries
+a name, an address, an employer, and often an SSN — the maximum-PII payload, in a system whose entire
+architecture is "no household identity anywhere". It also buys the gate nothing, because
+`document_problems` reads two dates and never opens a document. *Ex parte renewal modelling:* it is
+the lever that actually prevents the 69%, and it is something the **state** does from data Grace cannot
+get. Building it would mean simulating a capability Grace does not have.
 
 Case records live in DynamoDB alongside the ledger, under a `RECORD#v1` sort key. That matters more
 than it sounds: before Plan 4 the records were seeded from `fixtures/households.yaml` into the
@@ -330,7 +367,15 @@ been **invisible to the agent**. A submitted case is only real if the sweep can 
 
 A newly submitted case shows the status **`new`** rather than `error`. That distinction is deliberate:
 `error` reads "Grace's last run on this case reached no outcome — re-run the sweep", which would be a
-false claim about a run that never happened.
+false claim about a run that never happened. `lib/cases.ts` reads the `RECORD#v1` row and reports `new`
+only for a case with a record, no ledger rows, and no escalation — a sweep that ran and concluded
+nothing leaves ledger rows behind and is still an `error`.
+
+**`submit_renewal` does not submit anything to a state system, and nothing here claims it does.** It
+writes a ledger row recording that Grace decided to file, and the escalation boundary — which is what
+this project is about — is enforced entirely before that point. Wiring it to a real filing endpoint
+needs the same per-state data-sharing agreement `StateEligibilityDocumentSource` documents, which is a
+legal instrument rather than code.
 
 You can still add households by editing `fixtures/households.yaml` and re-running the sweep; the
 twelve seeded ones arrive that way, and `infra/seed_cases.py` writes them into the table.

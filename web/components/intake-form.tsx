@@ -26,6 +26,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { DOCUMENT_HEADING } from "@/components/case-table";
 import { Button, Card, CardBody, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { DOCUMENT_IDS, LANGUAGES, PROGRAMS, STATES } from "@/lib/intake";
 
@@ -78,10 +79,15 @@ export function IntakeForm() {
           language,
           monthly_income_cents: toCents(income),
           size: size.trim() === "" ? null : Number(size),
-          // Received today, which is the honest default for a document a
-          // caseworker is confirming they hold right now. `expires: null` means
-          // "does not expire" rather than "unknown" — the gate reads the two
-          // differently.
+          // Sent today, which is the honest default for a document a caseworker
+          // is asserting right now — not "received", which would imply Grace or
+          // this organisation took delivery of it. The wire field is still
+          // `received`, because `grace/cases/models.py`'s `Document.received` is
+          // what `grace/authority.py` reads and renaming it would ripple into
+          // the gate; the rename is vocabulary at the surface only.
+          //
+          // `expires: null` means "does not expire" rather than "unknown" — the
+          // gate reads the two differently.
           documents: documents.map(id => ({
             id,
             received: new Date().toISOString().slice(0, 10),
@@ -185,7 +191,18 @@ export function IntakeForm() {
           </div>
 
           <fieldset>
-            <legend className={label}>Documents on file</legend>
+            {/* This legend used to name a filing cabinet, which implies Grace, or the
+                organisation running it, holds the document — neither does,
+                and there is no upload anywhere in the system. The family sends
+                documents to the **state**, whose eligibility system is the system
+                of record. A navigator's real knowledge is "I helped this family
+                send their paystub on the 20th": status, not custody.
+
+                Taken from `DOCUMENT_HEADING` rather than written out, so the form
+                and the case page cannot drift — and a test scans every .tsx here
+                for the old wording, because sabotaging this legend back to a
+                hardcoded string survived every other test in the suite. */}
+            <legend className={label}>{DOCUMENT_HEADING}</legend>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               {DOCUMENT_IDS.map(id => (
                 <label key={id} className="flex items-center gap-2 text-sm text-ink">
@@ -202,10 +219,18 @@ export function IntakeForm() {
             <p className="mt-2 text-xs text-muted">
               <span className="font-medium text-ink">There is no upload, and no file is stored
               anywhere.</span>{" "}
-              A document in Grace is two facts — which kind it is, and the date it arrived. Ticking a
-              box records that a proof exists; Grace then reasons about the clock on it, whether it
-              is still current and whether a required one is missing. It never sees the document and
-              cannot check what it says.
+              A document in Grace is two facts — which kind it is, and the date it was sent. The
+              family sends documents to the state, which decides; Grace reasons about the clock on
+              them, whether one is still current and whether a required one has not been sent. It
+              never sees a document and cannot check what one says.
+            </p>
+            <p className="mt-2 text-xs text-muted">
+              <span className="font-medium text-ink">Ticking a box records your assertion, not a
+              verified fact.</span>{" "}
+              Grace stores that you said this proof was sent, along with your account&rsquo;s opaque
+              id and today&rsquo;s date, and shows all three on the case page — so whoever decides
+              an escalation can see the basis of the claim they are acting on. Grace cannot confirm
+              it with the state.
             </p>
             <p className="mt-2 text-xs text-muted">
               Leave one unticked and Grace will escalate rather than file — which is the behaviour

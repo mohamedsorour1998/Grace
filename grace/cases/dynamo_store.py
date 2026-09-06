@@ -272,8 +272,17 @@ class DynamoDBCaseStore:
             return self._cases[case_id]
         raise KeyError(f"No such case: {case_id}")
 
-    def create_case(self, case: Case) -> None:
+    def create_case(self, case: Case, *, created_by: str = "") -> None:
         """Write a new case record. Refuses to overwrite an existing one.
+
+        `created_by` is the opaque id of whoever asserted this record's contents
+        — a caseworker's Cognito `sub`, or `""` when the case came from
+        `fixtures/households.yaml` and nobody asserted anything. It is a
+        parameter rather than omitted because `record.to_item` writes the field
+        either way: a writer that *could not* express it would guarantee the
+        Python path always wrote `NULL`, which is the two-writers-one-shape drift
+        `record.py` exists to prevent. `record.to_item` refuses a value that is
+        not opaque (hard rule 9).
 
         `attribute_not_exists(sk)` is the whole guard. An intake that silently
         overwrote a household would destroy a case record whose ledger and
@@ -296,7 +305,7 @@ class DynamoDBCaseStore:
         try:
             self._client.put_item(
                 TableName=self._table,
-                Item=record.to_item(case),
+                Item=record.to_item(case, created_by=created_by),
                 ConditionExpression="attribute_not_exists(sk)",
             )
         except ClientError as exc:

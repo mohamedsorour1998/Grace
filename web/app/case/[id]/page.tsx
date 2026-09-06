@@ -1,7 +1,15 @@
 import { notFound } from "next/navigation";
 import { readCase } from "@/lib/cases";
 import { requireSession } from "@/lib/session";
-import { formatCaseRow, noteIsInert, statusLabel, statusTone } from "@/components/case-table";
+import {
+  DOCUMENT_HEADING,
+  documentProvenance,
+  formatCaseRow,
+  noteIsInert,
+  sentLabel,
+  statusLabel,
+  statusTone,
+} from "@/components/case-table";
 import { Badge, Card, CardBody, CardHeader, CardTitle } from "@/components/ui/primitives";
 import { DecisionForm } from "@/components/decision-form";
 import type { LedgerRow } from "@/lib/types";
@@ -44,7 +52,7 @@ export default async function Case({ params }: { params: Promise<{ id: string }>
   const detail = await readCase(id);
   if (detail === null) notFound();
 
-  const { summary, ledger, decisions } = detail;
+  const { summary, ledger, decisions, record } = detail;
   const row = formatCaseRow(summary);
   // The same three conditions `authorize` will re-check server-side when the
   // form posts, so the form is offered only where a decision is actually
@@ -90,6 +98,45 @@ export default async function Case({ params }: { params: Promise<{ id: string }>
       </header>
 
       {decidable && <DecisionForm caseId={summary.caseId} />}
+
+      {/* Above the audit trail and above the decision form's outcome, because a
+          caseworker deciding an escalation is acting on exactly this claim.
+          Rendered only when the table holds a record row: with none, Grace knows
+          nothing about this household's documents, and a card saying so would
+          imply the family has sent nothing. */}
+      {record !== null && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{DOCUMENT_HEADING}</CardTitle>
+            <p className="mt-1 max-w-prose text-sm text-muted">
+              {/* THE sentence. Grace has never seen any of these documents —
+                  the family sends them to the state, which is the system of
+                  record. What is held here is a status a caseworker asserted,
+                  and hard rule 6 is about never letting an assertion read as a
+                  confirmed fact. The id is the opaque Cognito `sub`; both
+                  writers refuse a subject that is not opaque, so a name cannot
+                  reach this line. */}
+              {documentProvenance(record)}
+            </p>
+          </CardHeader>
+          <CardBody>
+            {record.documents.length === 0 ? (
+              <p className="text-sm text-muted">
+                No document has been recorded as sent for this household.
+              </p>
+            ) : (
+              <ul className="space-y-1 font-mono text-xs">
+                {record.documents.map((d, i) => (
+                  <li key={`${d.id}-${i}`} className="flex flex-wrap gap-x-3">
+                    <span className="w-48 shrink-0 text-ink">{d.id}</span>
+                    <span className="tabular-nums text-muted">{sentLabel(d)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardBody>
+        </Card>
+      )}
 
       {decisions.length > 0 && (
         <Card>

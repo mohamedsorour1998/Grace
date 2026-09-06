@@ -44,6 +44,7 @@ a date nobody chose, and nothing downstream could tell.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -76,7 +77,32 @@ RECORD_ATTRIBUTES: tuple[str, ...] = (
     "documents",
     "source_conflicts",
     "created_at",
+    "created_by",
 )
+
+# What a `created_by` value may look like: an opaque identifier and nothing else.
+#
+# **This is the same identity discipline as a decision row, enforced rather than
+# intended.** The value is a Cognito `sub` — a UUID — and it is written so a
+# caseworker reading an escalation can see *who asserted* the document status
+# they are about to act on. That is the whole point of the field, and it is also
+# exactly the field into which someone would one day put a username "because it
+# is more readable". `verifySession` only checks that `sub` is a non-empty
+# string, so nothing upstream refuses an email.
+#
+# The character class admits a UUID, an ARN-ish `:`-separated id, and a
+# provider-prefixed id, and refuses `@`, whitespace, and anything with a space in
+# it — the shapes a human-readable identifier actually takes. Hard rule 9: a
+# record row is a surface a model reads and a service logs, and the table-wide
+# PII scan must keep returning nothing.
+#
+# `\Z`, never `$`. Python's `$` also matches immediately *before* a trailing
+# newline, so `^...$` accepts `"2448a4e8-\n"` — measured. JavaScript's `$` does
+# not, so the mirrored `OPAQUE_SUBJECT` in `web/lib/intake.ts` is strict as
+# written and the two would otherwise disagree about the same value across the
+# language boundary. A trailing newline in a durable id is also exactly the shape
+# that breaks a log line into two.
+_OPAQUE_SUBJECT = re.compile(r"\A[A-Za-z0-9._:-]{1,128}\Z")
 
 
 class InvalidCaseRecord(Exception):
@@ -219,7 +245,28 @@ def _source_conflicts(item: dict[str, Any]) -> tuple[str, ...]:
     return tuple(conflicts)
 
 
-def to_item(case: Case, *, created_at: datetime | None = None) -> dict[str, Any]:
+def created_by_from_item(item: dict[str, Any]) -> str:
+    """Who asserted this record's contents, or `""` if nobody is recorded.
+
+    A separate reader rather than a field on `Case`, because it is **not a case
+    fact**. `Case` is the snapshot the gate reasons over, and nothing in
+    `authority.py` may ever be able to reach an identifier — adding a field there
+    would put one inside the object every model in the graph receives. This is
+    provenance about the record, read only by the surface that renders it.
+
+    Absent or `NULL` both read as `""`, deliberately, and `""` is the honest
+    value: the twelve seeded households were written by `infra/seed_cases.py`
+    from a fixture, so no caseworker asserted anything about them. Inventing a
+    placeholder that looks like an id — "system", "grace" — would be a magic
+    value a renderer could not tell from a real one, the same objection
+    `lib/cases.ts` raises to returning a presentation dash.
+    """
+    return _optional_s(item, "created_by")
+
+
+def to_item(
+    case: Case, *, created_at: datetime | None = None, created_by: str = ""
+) -> dict[str, Any]:
     """One `Case` as a DynamoDB item.
 
     **Household identity is dropped here, not filtered downstream.** The
@@ -231,7 +278,25 @@ def to_item(case: Case, *, created_at: datetime | None = None) -> dict[str, Any]
     `created_at` is a parameter rather than a clock read so
     `fixtures/case-record-shape.json` can pin an exact item and both language
     bindings can be compared against it byte for byte.
+
+    `created_by` is the opaque Cognito `sub` of the caseworker who submitted the
+    case through `/new`, and `""` for a household seeded from the fixture. It is
+    written so the dashboard can say *whose* assertion the document status is —
+    Grace takes a caseworker's word that a document was sent to the state, and
+    hard rule 6 is about never letting an assertion read as a confirmed fact. A
+    value that is not opaque is **refused**, not stripped: silently dropping an
+    email would leave the caseworker's page saying nobody asserted it, which is a
+    different false claim.
     """
+    if not isinstance(created_by, str):
+        raise InvalidCaseRecord(f"created_by must be a string, got {created_by!r}")
+    if created_by and not _OPAQUE_SUBJECT.match(created_by):
+        # Refused rather than redacted. An `@` here is an email address, and a
+        # space is a person's name; either would put household-adjacent identity
+        # into a row that a model reads and Step Functions logs.
+        raise InvalidCaseRecord(
+            f"created_by must be an opaque identifier, got {created_by!r}"
+        )
     stamp = created_at or datetime.now(timezone.utc)
     if stamp.tzinfo is None or stamp.utcoffset() is None:
         # Same refusal as `infra/naming._utc_stamp`, and for the same reason: a
@@ -273,6 +338,11 @@ def to_item(case: Case, *, created_at: datetime | None = None) -> dict[str, Any]
         },
         "source_conflicts": {"L": [{"S": c} for c in case.source_conflicts]},
         "created_at": {"S": stamp.astimezone(timezone.utc).isoformat()},
+        # NULL rather than an empty string when nobody asserted this record, and
+        # the key is always present so the attribute set is identical across both
+        # writers. Same shape as `reported_income_cents`: absence is a real state
+        # with its own meaning, not a value to be guessed at.
+        "created_by": {"S": created_by} if created_by else {"NULL": True},
     }
     return item
 

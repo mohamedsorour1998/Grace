@@ -47,19 +47,19 @@ this project. **Rejected: it would be a claim Grace cannot back.**
 **Files:** `web/components/intake-form.tsx`, `web/app/new/page.tsx`, `web/components/case-table.tsx`,
 `README.md`, `docs/demo-video-handout.md`, `docs/builder-blog-post.md`
 
-- [ ] **Step 1: Rename the concept, everywhere it appears**
+- [x] **Step 1: Rename the concept, everywhere it appears**
 
 `Documents on file` becomes something that names the real fact. Preferred:
 **`Documents sent to the state`**, with each entry reading *"sent 20 Sep"* rather than *"received"*.
 `received` stays the field name in `models.py` — renaming a Plan 1 dataclass field would ripple through
 `authority.py`, which this plan does not touch. The change is vocabulary at the surface, not in the gate.
 
-- [ ] **Step 2: Say who asserted it and when**
+- [x] **Step 2: Say who asserted it and when**
 
 The form's helper text becomes explicit: ticking a box records *a caseworker's assertion* that the
 family sent this document. Grace tracks the clock on it and cannot verify it independently.
 
-- [ ] **Step 3: Carry the same wording into the four documents**
+- [x] **Step 3: Carry the same wording into the four documents**
 
 `README.md` already has a "Grace stores no documents" section from the last change — extend it with the
 navigator/state distinction. The video handout and the article need the same, because "documents on
@@ -74,7 +74,7 @@ implementations is a design.
 
 **Files:** `grace/cases/document_source.py` (new), `tests/test_document_source.py` (new)
 
-- [ ] **Step 1: Define `DocumentSource`**
+- [x] **Step 1: Define `DocumentSource`**
 
 ```python
 class DocumentSource(Protocol):
@@ -87,12 +87,12 @@ class DocumentSource(Protocol):
 `provenance()` is the point of the interface: every source must be able to say **how it knows**, so a
 caseworker reading an escalation can tell an assertion from a verified fact.
 
-- [ ] **Step 2: `AssertedDocumentSource` — what ships**
+- [x] **Step 2: `AssertedDocumentSource` — what ships**
 
 Reads the documents already on the case record. `provenance()` returns something like
 `"asserted by a caseworker at intake"`. This changes no behaviour; it names the behaviour that exists.
 
-- [ ] **Step 3: `StateEligibilityDocumentSource` — the stub, and why it is a stub**
+- [x] **Step 3: `StateEligibilityDocumentSource` — the stub, and why it is a stub**
 
 Raises `NotImplementedError` with a docstring stating exactly what a real implementation needs: a
 per-state data-sharing agreement, credentials, and a query for whether a household has a current
@@ -102,7 +102,7 @@ make every household look like it is missing every document.
 This is what AgentCore **Gateway** was deferred for — an outbound call to a system Grace does not own —
 and the deferral reason (outbound auth differs per target type) is exactly why this stays a stub.
 
-- [ ] **Step 4: Tests, including one that pins the stub's refusal**
+- [x] **Step 4: Tests, including one that pins the stub's refusal**
 
 Assert `AssertedDocumentSource` returns the record's documents and a non-empty provenance string, and
 that the state source **raises** rather than returning empty. Sabotage each and watch it fail.
@@ -114,12 +114,12 @@ that the state source **raises** rather than returning empty. Sabotage each and 
 **Files:** `web/lib/intake.ts`, `web/lib/create-case.ts`, `grace/cases/record.py`,
 `web/app/case/[id]/page.tsx`
 
-- [ ] **Step 1: Persist who asserted, on the record**
+- [x] **Step 1: Persist who asserted, on the record**
 
 The intake permit already carries `createdBy` (the opaque Cognito `sub`). Write it onto the `RECORD#v1`
 row along with the timestamp. **No name, no email** — the same identity discipline as a decision row.
 
-- [ ] **Step 2: Surface it on the case page**
+- [x] **Step 2: Surface it on the case page**
 
 One line near the documents: *"Document status asserted by <opaque id> at intake on <date>. Grace tracks
 the deadline on it and does not verify it independently."*
@@ -127,7 +127,7 @@ the deadline on it and does not verify it independently."*
 That sentence is the whole point of the plan. A caseworker deciding an escalation can see the basis of
 the claim they are acting on.
 
-- [ ] **Step 3: Gates, sabotage, commit**
+- [x] **Step 3: Gates, sabotage, commit**
 
 Five gates. Every new guard sabotaged and watched failing. `grace/authority.py` untouched — assert that
 with a diff, not by memory.

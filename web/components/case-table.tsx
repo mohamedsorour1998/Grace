@@ -19,7 +19,7 @@
 
 import Link from "next/link";
 import { Badge, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@/components/ui/primitives";
-import type { CaseStatus, CaseSummary } from "@/lib/types";
+import type { CaseRecordFacts, CaseStatus, CaseSummary, RecordDocument } from "@/lib/types";
 
 /** The eight codes `grace/authority.py` actually emits, and nothing else.
  *
@@ -203,6 +203,66 @@ export function summarise(cases: readonly CaseSummary[]): SweepSummary {
     else incomplete += 1;
   }
   return { total: cases.length, acted, escalated, incomplete };
+}
+
+/** The heading over a household's documents.
+ *
+ *  **It used to name a filing cabinet, and that was doing damage:** it implies
+ *  that Grace, or the organisation running it, holds the document.
+ *  Neither does, and there is no upload anywhere in the system. The family sends documents to the **state**,
+ *  whose eligibility system is the system of record. Grace's users are
+ *  navigators — clinics, food banks, school family-support offices — and what
+ *  they actually know is *"I helped this family upload their paystub on the
+ *  20th"*. Status, not custody.
+ *
+ *  Exported so `__tests__/render.test.ts` asserts the vocabulary rather than a
+ *  string in JSX that anyone can edit past. */
+export const DOCUMENT_HEADING = "Documents sent to the state";
+
+/** One document line: what it is, and when the family sent it.
+ *
+ *  "sent", never "received". The stored field is `received` and stays that way —
+ *  `grace/cases/models.py`'s `Document.received` is what `grace/authority.py`
+ *  reads, and renaming it would ripple into the gate. The change is vocabulary
+ *  at the surface, and this is the surface.
+ *
+ *  The date stays ISO rather than becoming "20 Sep": every other date on this
+ *  dashboard is ISO and tabular, and the word "sent" is what carries the
+ *  meaning. `expires` is shown when the document has one, because the gate reads
+ *  it and a caseworker deciding an escalation needs the same two facts the gate
+ *  had. */
+export function sentLabel(document: RecordDocument): string {
+  const expiry = document.expires === null ? "" : `, expires ${document.expires}`;
+  return `sent ${document.sent}${expiry}`;
+}
+
+/** The sentence this whole change exists for.
+ *
+ *  Hard rule 6 says never claim an action succeeded without tool confirmation.
+ *  The document status is the mirror image: a claim Grace never confirmed and
+ *  never could, presented for three plans as though it were a fact. A caseworker
+ *  deciding an escalation is acting on it, so they get to see its basis.
+ *
+ *  **Only the opaque `sub` and a date, never a name or an email** — the same
+ *  identity discipline as a decision row, and enforced rather than intended:
+ *  `validateIntake` and `grace/cases/record.py` both refuse a subject that is
+ *  not opaque, so this function cannot be handed one.
+ *
+ *  `""` when there is no record row at all, so the page renders nothing rather
+ *  than a sentence about an absence it cannot explain. An absent `createdBy` is
+ *  different from an absent row and gets its own wording: the twelve seeded
+ *  households come from `fixtures/households.yaml`, where nobody asserted
+ *  anything, and saying "asserted by nobody" would be a claim about a person. */
+export function documentProvenance(record: CaseRecordFacts | null): string {
+  if (record === null) return "";
+  const closing =
+    "Grace tracks the deadline on it and does not verify it independently.";
+  const on = record.createdAt === "" ? "" : ` on ${record.createdAt.slice(0, 10)}`;
+  if (record.createdBy === "") {
+    return `Document status came with this record${on}; no caseworker is recorded ` +
+      `as having asserted it. ${closing}`;
+  }
+  return `Document status asserted by ${record.createdBy} at intake${on}. ${closing}`;
 }
 
 /** A caseworker's note is untrusted free text, and this asserts what protects it

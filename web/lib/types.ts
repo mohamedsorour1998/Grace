@@ -49,10 +49,53 @@ export interface Decision {
   outcome: string | null;
 }
 
+/** One document a caseworker asserted the family sent to the **state**.
+ *
+ *  `sent`, not `received`. The row attribute and `grace/cases/models.py`'s field
+ *  are both still `received` and stay that way — renaming a Plan 1 dataclass
+ *  field would ripple into `grace/authority.py`, which the provenance work
+ *  deliberately does not touch. The rename is vocabulary at the surface, and
+ *  this is the boundary where it happens.
+ *
+ *  Why the word matters: "received" and "on file" both imply that Grace, or the
+ *  navigator using it, holds the document. Neither does. The family sends
+ *  documents to the state's eligibility system, which is the system of record;
+ *  Grace's users are navigators — clinics, food banks, school family-support
+ *  offices — whose real knowledge is *"I helped this family upload their paystub
+ *  on the 20th"*. Status, not custody.
+ *
+ *  There is no field here for the document itself, and there is nowhere for one.
+ *  A proof of income carries a name, an address, an employer, and often an SSN,
+ *  which is the maximum-PII payload in a system whose architecture is "no
+ *  household identity anywhere" — and the gate reads two dates and never opens a
+ *  document. */
+export interface RecordDocument {
+  id: string;
+  sent: string;
+  expires: string | null;
+}
+
+/** The `RECORD#v1` row: what a caseworker asserted about a household, and who.
+ *
+ *  `createdBy` is the opaque Cognito `sub` and `""` when nobody asserted — the
+ *  twelve seeded households come from `fixtures/households.yaml`, so no
+ *  caseworker vouched for them. Never a name or an email: both writers refuse a
+ *  subject that is not opaque rather than stripping it (hard rule 9, and the
+ *  same discipline as a decision row). */
+export interface CaseRecordFacts {
+  createdBy: string;
+  createdAt: string;
+  documents: RecordDocument[];
+}
+
 export interface CaseDetail {
   summary: CaseSummary;
   ledger: LedgerRow[];
   decisions: Decision[];
+  /** `null` when the table holds no record row for this case — which is a real
+   *  state, not an error: a case can exist in the ledger without one. The page
+   *  must then say nothing about document provenance rather than guess. */
+  record: CaseRecordFacts | null;
 }
 
 /** Only the opaque `sub`, the role, and the expiry. Never an email or a name:

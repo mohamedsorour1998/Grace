@@ -53,6 +53,7 @@ export type RefusalCode =
   | "unknown_case"
   | "not_escalated"
   | "case_incomplete"
+  | "case_not_swept"
   | "already_decided"
   | "unknown_decision"
   | "note_too_long";
@@ -122,6 +123,22 @@ export function authorize(
     return refuse(
       "case_incomplete",
       "Grace's last run on this case reached no outcome. Re-run the sweep before deciding.",
+    );
+  }
+  // `new` is a submitted case no sweep has evaluated yet, and it needs its own
+  // sentence for the same reason `case_incomplete` did. This branch was written
+  // when `acted` was the only status that could reach it; `error` arrived first
+  // and was split out, and `new` was declared in `lib/types.ts` and rendered in
+  // `case-table.tsx` while nothing could produce it — so the falsest of the
+  // three claims sat here unreachable. "Grace handled this case itself" told a
+  // caseworker their submission was already dealt with, when in fact no sweep
+  // had ever looked at it. Same lesson twice: when a change widens the set of
+  // inputs a branch can see, re-read that branch's message as well as its logic.
+  if (facts.status === "new") {
+    return refuse(
+      "case_not_swept",
+      "No sweep has evaluated this case yet, so there is nothing to decide. " +
+      "Grace will pick it up on its next run.",
     );
   }
   if (facts.status !== "escalated") {

@@ -32,6 +32,11 @@ const STATUS: Record<RefusalCode, number> = {
   unknown_case: 404,
   not_escalated: 409,
   case_incomplete: 409,
+  // 409 for the same reason as the two above: server-side state, not a client
+  // mistake. The case is real and the request is well-formed; there is simply
+  // nothing to decide until a sweep has run. Caught by the `Record` when
+  // `case_not_swept` was added, exactly as `case_incomplete` was before it.
+  case_not_swept: 409,
   already_decided: 409,
   unknown_decision: 400,
   note_too_long: 400,

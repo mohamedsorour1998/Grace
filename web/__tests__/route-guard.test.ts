@@ -234,16 +234,28 @@ describe("the decide route", () => {
     // type is erased — so if someone widens the map's type this asserts the
     // mapping is still total. An unmapped code would return `undefined` to
     // `NextResponse.json`, which throws rather than refusing.
-    const codes: RefusalCode[] = [
-      "no_session", "session_expired", "wrong_role", "unknown_case",
-      "not_escalated", "case_incomplete", "already_decided",
-      "unknown_decision", "note_too_long",
-    ];
-    const src = await import("node:fs").then(fs =>
-      fs.readFileSync(
-        new URL("../app/api/case/[id]/decide/route.ts", import.meta.url), "utf8"));
-    for (const code of codes) expect(src, code).toContain(`${code}:`);
-    expect(codes).toHaveLength(9);
+    //
+    // **The codes are read off `lib/authorize.ts`, not listed here.** The
+    // previous version listed nine by hand and asserted `codes.length === 9`, so
+    // a code added to the union afterwards was covered by neither half: the list
+    // did not contain it and the length assertion was about the list, not about
+    // the union. It passed vacuously for exactly the change it existed to catch
+    // — and `case_not_swept` was that change. Same discipline as Plan 1 Task 4's
+    // `pkgutil` walk: discover from disk, never from memory.
+    const fs = await import("node:fs");
+    const authorizeSrc = fs.readFileSync(
+      new URL("../lib/authorize.ts", import.meta.url), "utf8");
+    const union = /export type RefusalCode =([\s\S]*?);/.exec(authorizeSrc);
+    const body = union?.[1] ?? "";
+    expect(body, "RefusalCode's union must be readable from lib/authorize.ts").not.toBe("");
+    const codes = [...body.matchAll(/"([a-z_]+)"/g)].map(m => m[1] as RefusalCode);
+    const src = fs.readFileSync(
+      new URL("../app/api/case/[id]/decide/route.ts", import.meta.url), "utf8");
+    for (const code of codes) expect(src, code).toMatch(new RegExp(`^\\s+${code}: \\d+,`, "m"));
+    // The loop is the assertion, so prove it ran against a plausible number of
+    // codes rather than against an empty match.
+    expect(codes.length).toBeGreaterThanOrEqual(9);
+    expect(codes).toContain("case_not_swept");
   });
 
   it("refuses a body that is not a JSON object at all", async () => {

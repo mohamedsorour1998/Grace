@@ -121,8 +121,14 @@ Open **`/case/c-010`**.
 > Here is the whole audit trail for one household — every tool call, every result, in order. Grace
 > escalated this one for a specific reason: `missing_document: proof_of_residency is not on file`.
 > And it has already texted the family, so the caseworker knows not to ask twice.
+>
+> Note the documents panel, and note what it is careful to say. Grace holds no documents — the family
+> sends those to the state, which is the system of record. What Grace has is a **status a caseworker
+> asserted**, and the page says so: *"asserted by"*, an opaque id, a date, and *"Grace does not verify
+> it independently."* An agent that quietly treated that as a verified fact is exactly how a family
+> ends up told their renewal is fine when it is not.
 
-`<replace this text by a screenshot of the /case/c-010 page showing the typed reason and the ledger>`
+`<replace this text by a screenshot of the /case/c-010 page showing the typed reason, the documents-sent-to-the-state panel with its provenance line, and the ledger>`
 
 > This is the part that matters. Grace's defining property is an **escalation boundary** — it acts
 > alone on the routine and *provably* escalates the rest. Three layers.
@@ -192,7 +198,7 @@ Re-measure before recording; do not read a stale number.
 | the twelve seeded households: 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01`. **Say "the twelve seeded households"** — the claim must stay true if anyone submits a case through the intake form. |
 | 9 acted / 3 escalated deployed | the `grace-sweep` Step Functions execution output |
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
-| 715 Python tests, 157 vitest | `pytest` and `vitest run` |
+| 863 Python tests, 210 vitest | `pytest` and `vitest run` — re-measure, these move every plan |
 | 23 trajectory evals | `pytest evals/ --co -q` — they cost real Bedrock to run |
 | approving `c-010` files nothing | its decision + outcome rows, and zero `renewal_submitted` rows |
 | four AgentCore surfaces | Runtime, Memory, Identity, harness — Gateway is deferred |
@@ -201,6 +207,21 @@ Re-measure before recording; do not read a stale number.
 
 ## Things not to claim
 
+- Do **not** say "documents on file", in the script or off the cuff. It implies Grace or the
+  organisation running it holds the paperwork, and neither does — there is no upload and no S3 bucket
+  anywhere in the system. **The family sends documents to the state**, whose eligibility system is the
+  system of record and which decides. Grace's users are *navigators* — clinics, food banks, school
+  family-support offices — and what a navigator knows is *"I helped this family send their paystub on
+  the 20th"*: status, not custody. The interface says **documents sent to the state**, and each entry
+  reads *sent 2026-09-20*. Say the same.
+- Do **not** describe a document as verified. Grace takes a caseworker's word for it and says so on
+  screen: *"Document status asserted by `2448a4e8-…` at intake on 2026-09-06. Grace tracks the deadline
+  on it and does not verify it independently."* If you show a case page, that line is on it — read it
+  out rather than talking over it. It is the difference between this and a demo that overclaims.
+- Do **not** imply `submit_renewal` files with a state agency. It writes a ledger row; there is no
+  state integration behind it, and `grace/cases/document_source.py` names the seam where one would
+  attach — a stub that **raises**, because one returning an empty tuple would report every household as
+  missing every document.
 - Do **not** say traces or Transaction Search work. Zero spans exist in the account.
 - Do **not** imply SMS is delivered. The channel is a transcript; the account has no origination number.
 - Do **not** describe the household data as real. All twelve are synthetic; phone numbers use the

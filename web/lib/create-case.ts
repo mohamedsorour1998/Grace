@@ -66,7 +66,12 @@ export async function createCase(
   try {
     await client.send(new PutItemCommand({
       TableName: env.tableName,
-      Item: toRecordItem(permit.record, new Date()),
+      // `permit.createdBy` is the opaque Cognito `sub`, and it reaches the row
+      // here rather than being carried inside `permit.record`: the record is what
+      // the gate reasons over, this is provenance about who asserted it. The case
+      // page renders it so a caseworker can tell an assertion from a verified
+      // fact — `validateIntake` has already refused a subject that is not opaque.
+      Item: toRecordItem(permit.record, new Date(), permit.createdBy),
       ConditionExpression: "attribute_not_exists(sk)",
     }));
   } catch (error) {

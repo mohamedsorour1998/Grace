@@ -38,14 +38,26 @@ export default async function NewCase() {
         </p>
         <p>
           <span className="font-medium text-ink">No files are stored anywhere.</span> A document
-          here is an id and a date — Grace tracks whether a required proof is present and still
-          current, never what it contains. Storing the file would also put back the identity above:
-          a proof of income carries a name, an address and an employer.
+          here is an id and a date — Grace tracks whether a required proof has been sent and is
+          still current, never what it contains. Storing the file would also put back the identity
+          above: a proof of income carries a name, an address and an employer.
         </p>
         <p>
-          That means Grace takes a caseworker&rsquo;s word that a document exists. In a real
-          deployment that assertion would come from the eligibility system that received the file,
-          not from a checkbox — this form is where that integration would attach.
+          <span className="font-medium text-ink">The family sends documents to the state, not to
+          Grace.</span> The state&rsquo;s eligibility system is the system of record: it decides,
+          and it holds the paperwork. Grace is the layer alongside a navigator — a clinic, a food
+          bank, a school family-support office — and what a navigator actually knows is
+          <em> &ldquo;I helped this family send their paystub on the 20th&rdquo;</em>. That is
+          status, not custody, and it is exactly what this form records.
+        </p>
+        <p>
+          So ticking a box records <span className="font-medium text-ink">your assertion</span>,
+          which Grace cannot verify. It stores your account&rsquo;s opaque id and the date beside
+          it and shows both on the case page, so whoever decides an escalation can tell an assertion
+          from a confirmed fact. In a real deployment that claim would arrive from the state system
+          that received the document; <code className="font-mono text-xs">
+          grace/cases/document_source.py</code> is the seam where that integration attaches, and it
+          raises rather than pretending to answer.
         </p>
         <p>
           All data in this deployment is <span className="font-medium text-ink">synthetic</span>.

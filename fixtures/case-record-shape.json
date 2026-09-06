@@ -18,7 +18,13 @@
     "(hard rule 3).",
     "",
     "`created_at` is pinned so the item is byte-comparable; both writers take it",
-    "as a parameter for exactly that reason."
+    "as a parameter for exactly that reason. `created_by` is pinned for the same",
+    "reason, and it is a synthetic opaque Cognito `sub` — a UUID. It says WHO",
+    "asserted this record's document status, because Grace takes a caseworker's",
+    "word that a document was sent to the state and cannot verify it. It is never",
+    "a name or an email: both writers refuse a value that is not opaque, rather",
+    "than stripping it (hard rule 9). A record seeded from the fixture carries",
+    "`{\"NULL\": true}` here, because nobody asserted anything about it."
   ],
   "item": {
     "pk": { "S": "CASE#c-901" },
@@ -53,7 +59,8 @@
     "source_conflicts": {
       "L": [{ "S": "household size 4 on application, 3 on most recent wage record" }]
     },
-    "created_at": { "S": "2026-09-06T12:00:00+00:00" }
+    "created_at": { "S": "2026-09-06T12:00:00+00:00" },
+    "created_by": { "S": "2448a4e8-c021-70f6-382c-e8acbb6cc956" }
   },
   "directory_item": {
     "pk": { "S": "CASE_DIRECTORY" },
@@ -74,6 +81,7 @@
       { "id": "proof_of_income", "received": "2026-09-18", "expires": null },
       { "id": "proof_of_residency", "received": "2026-02-04", "expires": "2027-02-04" }
     ],
-    "source_conflicts": ["household size 4 on application, 3 on most recent wage record"]
+    "source_conflicts": ["household size 4 on application, 3 on most recent wage record"],
+    "created_by": "2448a4e8-c021-70f6-382c-e8acbb6cc956"
   }
 }

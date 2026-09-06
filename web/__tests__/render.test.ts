@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CASE_COLUMNS,
+  DOCUMENT_HEADING,
+  documentProvenance,
   formatCaseRow,
   noteIsInert,
+  sentLabel,
   splitReason,
   statusLabel,
   statusTone,
   summarise,
 } from "@/components/case-table";
-import type { CaseStatus, CaseSummary } from "@/lib/types";
+import type { CaseRecordFacts, CaseStatus, CaseSummary } from "@/lib/types";
 
 // Every fixture surname, so the guard cannot pass by naming the wrong three.
 // The plan's draft listed Mensah/Rivera/Okonkwo — and the two households most
@@ -92,7 +95,10 @@ describe("the case row", () => {
     // not contain it": a message saying `nothing was filed` is true and still
     // fails, which is the right polarity for a guard that cannot read English.
     // A first draft of `fallbackDetail` said exactly that and this caught it.
-    const statuses: CaseStatus[] = ["acted", "escalated", "error"];
+    //
+    // `new` was missing from this list while nothing could produce it, so the
+    // branch shipped untested. `lib/cases.ts` produces it now.
+    const statuses: CaseStatus[] = ["acted", "escalated", "error", "new"];
     let checked = 0;
     for (const status of statuses) {
       for (const filed of [true, false]) {
@@ -103,7 +109,18 @@ describe("the case row", () => {
         checked += 1;
       }
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(8);
+  });
+
+  it("tells a submitted case that no sweep has run, not that a run failed", () => {
+    // `error` says "this run reached no outcome — re-run the sweep", which is a
+    // false claim about a run that never happened. That is why `new` exists as
+    // its own status rather than reusing `error`.
+    const submitted: CaseSummary = { ...escalated, status: "new", reason: null, filed: false };
+    const detail = formatCaseRow(submitted).detail;
+    expect(detail).toMatch(/no sweep/i);
+    expect(detail).not.toMatch(/re-run/i);
+    expect(detail).not.toMatch(/handled/i);
   });
 
   it("never renders `filed` as a claim on a row from listQueue", () => {
@@ -127,9 +144,14 @@ describe("the case row", () => {
     // silently inherits the third's colour. Every arm is named, so the set is
     // exhaustive by construction — and this asserts they differ, which a
     // three-way `default` would not.
-    const all: CaseStatus[] = ["acted", "escalated", "error"];
-    expect(new Set(all.map(statusTone)).size).toBe(3);
-    expect(new Set(all.map(statusLabel)).size).toBe(3);
+    const all: CaseStatus[] = ["acted", "escalated", "error", "new"];
+    expect(new Set(all.map(statusTone)).size).toBe(4);
+    expect(new Set(all.map(statusLabel)).size).toBe(4);
+    // `new` must be neither reassuring nor urgent: a submitted case has had no
+    // sweep, so it has earned neither `acted`'s green nor `escalated`'s orange,
+    // and colouring it either would state an outcome nobody reached.
+    expect(statusTone("new")).not.toBe(statusTone("acted"));
+    expect(statusTone("new")).not.toBe(statusTone("escalated"));
   });
 
   it("leaves an unknown deadline empty for the renderer to place a dash in", () => {
@@ -235,6 +257,101 @@ describe("the sweep summary", () => {
     const s = summarise([]);
     expect([s.acted, s.escalated, s.incomplete]).toEqual([0, 0, 0]);
     expect(s.total).toBe(0);
+  });
+});
+
+describe("document provenance", () => {
+  const asserted: CaseRecordFacts = {
+    createdBy: "2448a4e8-c021-70f6-382c-e8acbb6cc956",
+    createdAt: "2026-09-06T12:00:00+00:00",
+    documents: [
+      { id: "proof_of_income", sent: "2026-09-18", expires: null },
+      { id: "proof_of_residency", sent: "2026-02-04", expires: "2027-02-04" },
+    ],
+  };
+
+  it("says the family sent documents to the state, never that Grace holds them", () => {
+    // The heading used to read "Documents on file". Every one of those three
+    // words was doing damage: "on file" implies Grace, or the organisation
+    // running it, holds the document. Neither does — there is no upload anywhere
+    // in the system, and the family sends documents to the state's eligibility
+    // system, which is the system of record.
+    expect(DOCUMENT_HEADING).toBe("Documents sent to the state");
+    expect(DOCUMENT_HEADING.toLowerCase()).not.toContain("on file");
+    expect(DOCUMENT_HEADING.toLowerCase()).not.toContain("upload");
+  });
+
+  it("labels an entry by when it was sent, not when it was received", () => {
+    // `Document.received` keeps its name in `grace/cases/models.py` — renaming a
+    // Plan 1 dataclass field would ripple into `grace/authority.py`, which this
+    // change leaves with a zero-line diff. The rename is vocabulary at the
+    // surface, and this helper is the surface.
+    expect(sentLabel(asserted.documents[0]!)).toBe("sent 2026-09-18");
+    expect(sentLabel(asserted.documents[0]!)).not.toMatch(/received/i);
+    // An expiry is shown when there is one: the gate reads it, and a caseworker
+    // deciding an escalation needs the same two facts the gate had.
+    expect(sentLabel(asserted.documents[1]!)).toBe("sent 2026-02-04, expires 2027-02-04");
+  });
+
+  it("names who asserted the status, when, and that Grace did not verify it", () => {
+    // THE sentence this whole change exists for. Hard rule 6 says never claim an
+    // action succeeded without tool confirmation; this is its mirror — a claim
+    // Grace never confirmed and could not, presented for three plans as a fact.
+    const line = documentProvenance(asserted);
+    expect(line).toContain("asserted by 2448a4e8-c021-70f6-382c-e8acbb6cc956");
+    expect(line).toContain("2026-09-06");
+    expect(line).toContain("does not verify it independently");
+    // Not a claim of custody or of a check.
+    expect(line.toLowerCase()).not.toContain("on file");
+    expect(line.toLowerCase()).not.toContain("verified");
+  });
+
+  it("says nobody asserted a seeded record, rather than naming a person", () => {
+    // The twelve seeded households come from `fixtures/households.yaml`. Saying
+    // "asserted by nobody" would be a claim about a person; saying nothing would
+    // leave the reader assuming a caseworker vouched for it.
+    const seeded = documentProvenance({ ...asserted, createdBy: "" });
+    expect(seeded).toContain("no caseworker is recorded");
+    expect(seeded).toContain("does not verify it independently");
+    expect(seeded).not.toContain("asserted by ");
+  });
+
+  it("says nothing at all when there is no record row", () => {
+    // A case with no record row is one Grace knows nothing about documents for.
+    // Rendering a sentence about that absence would imply the family has sent
+    // nothing, which is a different claim entirely.
+    expect(documentProvenance(null)).toBe("");
+  });
+
+  it("omits the date rather than inventing one when the row carries none", () => {
+    // "on it" appears in the closing sentence either way, so the assertion is
+    // about a *date* rather than about the word — a substring test on " on "
+    // passes for the wrong reason.
+    const undated = documentProvenance({ ...asserted, createdAt: "" });
+    expect(undated).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(undated).toContain("at intake.");
+    // And the dated version really does carry one, or "omits it" is true of
+    // every input.
+    expect(documentProvenance(asserted)).toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+
+  it("carries an opaque id and never a name or an email", () => {
+    // Hard rule 9, at the one line on the dashboard that names a person at all.
+    // `validateIntake` and `grace/cases/record.py` both refuse a subject that is
+    // not opaque, so this function cannot be handed one — but the line is
+    // rendered to a caseworker and the assertion belongs where it is read.
+    const line = documentProvenance(asserted);
+    expect(line).not.toMatch(/@/);
+    expect(line).not.toMatch(IDENTITY);
+  });
+
+  it("would catch a name if one ever reached the line", () => {
+    // The companion that makes the guard above mean something: a scanner that
+    // matches nothing reports clean on every input. `createdBy` is the only
+    // carrier, which is why this is the shape the test uses.
+    const leaked = documentProvenance({ ...asserted, createdBy: "yamamoto@example.gov" });
+    expect(leaked).toMatch(IDENTITY);
+    expect(leaked).toMatch(/@/);
   });
 });
 
@@ -428,6 +545,75 @@ describe("the pages", () => {
       vi.doUnmock("next/headers");
       vi.resetModules();
     }
+  });
+
+  it("shows the document provenance on the page where a decision is made", async () => {
+    // A helper nothing renders is a helper nobody reads. The whole point of the
+    // sentence is that a caseworker acting on an escalation can see the basis of
+    // the claim they are acting on, so it has to be on *this* page — asserted
+    // against the source, because the page is an async server component that
+    // reads DynamoDB and `renderToStaticMarkup` cannot drive it.
+    //
+    // The same discipline as the `requireSession` grep below: a docstring
+    // asserting that some other layer does something is not evidence that it
+    // does. When a comment says "X is rendered", grep for X.
+    const fs = await import("node:fs");
+    const src = fs.readFileSync(
+      new URL("../app/case/[id]/page.tsx", import.meta.url), "utf8");
+    for (const symbol of ["DOCUMENT_HEADING", "documentProvenance", "sentLabel"]) {
+      expect(src, `the case page must render ${symbol}`).toContain(symbol);
+    }
+    // And it must be a *rendered* call, not merely an import.
+    expect(src).toMatch(/\{documentProvenance\(record\)\}/);
+    // The old vocabulary must not survive anywhere on it.
+    expect(src.toLowerCase()).not.toContain("documents on file");
+  });
+
+  it("says nowhere in the interface that Grace holds a document", async () => {
+    // The vocabulary invariant, over every surface rather than the one that was
+    // changed. Sabotaging the intake form's legend back to "Documents on file"
+    // survived every other test in this file: `DOCUMENT_HEADING` was asserted
+    // and the form's use of it was not, so a hardcoded string quietly
+    // reintroduced the claim on the page a caseworker types into.
+    //
+    // Discovered from disk, so a page added later is covered by default — the
+    // same reason Plan 1 Task 4's model-id guard walks the package instead of
+    // reading a list.
+    const fs = await import("node:fs");
+    // `\bon\s+file\b` rather than `documents?\s+on\s+file`, because the narrow
+    // version misses "documents *are* on file" — which is exactly how the
+    // sentence reads on the intake page, and sabotaging it back there survived.
+    // Banning the phrase outright is safe: `grace/authority.py` emits
+    // "…is not on file" as a *reason string*, which arrives as runtime data and
+    // never appears in a component's source.
+    const forbidden = [/\bon\s+file\b/i, /uploaded\s+to\s+grace/i];
+    const roots = ["../app", "../components"];
+    const files: URL[] = [];
+    const walk = (dir: URL) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const child = new URL(`${dir.href}/${entry.name}`);
+        if (entry.isDirectory()) walk(child);
+        else if (entry.name.endsWith(".tsx")) files.push(child);
+      }
+    };
+    for (const root of roots) walk(new URL(root, import.meta.url));
+    // The walk is the assertion, so prove it found the surfaces that matter.
+    expect(files.length).toBeGreaterThanOrEqual(6);
+    for (const file of files) {
+      const src = fs.readFileSync(file, "utf8");
+      for (const pattern of forbidden) {
+        expect(pattern.test(src), `${file.pathname} must not say ${pattern}`).toBe(false);
+      }
+    }
+    // And the scanner can fail: a pattern that matches nothing reports clean on
+    // every input, which is exactly as true of a working guard as of a broken
+    // one.
+    expect(forbidden.some(p => p.test("<legend>Documents on file</legend>"))).toBe(true);
+    expect(forbidden.some(p => p.test("Documents  On  File"))).toBe(true);
+    expect(forbidden.some(p => p.test("which documents are on file"))).toBe(true);
+    // And it does not fire on the vocabulary that replaced it, or the guard
+    // would make the correct wording unshippable.
+    expect(forbidden.some(p => p.test("Documents sent to the state"))).toBe(false);
   });
 
   it("carries no resume vocabulary anywhere in the page layer", async () => {

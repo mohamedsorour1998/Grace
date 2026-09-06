@@ -43,11 +43,20 @@ import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
 import type { AttributeValue, QueryCommandInput } from "@aws-sdk/client-dynamodb";
 import { readEnv } from "./env";
 import type { CaseFacts } from "./authorize";
-import type { CaseDetail, CaseStatus, CaseSummary, Decision, LedgerRow } from "./types";
+import type {
+  CaseDetail,
+  CaseRecordFacts,
+  CaseStatus,
+  CaseSummary,
+  Decision,
+  LedgerRow,
+  RecordDocument,
+} from "./types";
 
 const LEDGER = "LEDGER#";
 const ESCALATION = "ESCALATION#";
 const DECISION = "DECISION#";
+const RECORD = "RECORD#";
 const PENDING = "PENDING_CASEWORKER";
 const FILED = "renewal_submitted";
 
@@ -123,6 +132,41 @@ function str(v: AttributeValue | undefined, fallback = ""): string {
 function instant(v: AttributeValue | undefined): number {
   const t = Date.parse(str(v));
   return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY;
+}
+
+/** The `RECORD#v1` row, as the provenance the case page renders.
+ *
+ *  **A malformed document entry is skipped, and that is the opposite of the
+ *  Python reader's posture on purpose.** `grace/cases/record.py` raises, because
+ *  a document the *gate* cannot parse must never be silently dropped — a
+ *  dropped entry moves a household from `escalate` to `act`. Nothing here
+ *  reaches the gate: this is a read-only render of what a caseworker asserted,
+ *  and the sweep decides from its own read of the same row. So a garbled entry
+ *  costs one missing line on a page, while throwing would cost the whole case
+ *  page (`readCase` catches and returns `null`, so `/case/c-010` would 404 for a
+ *  household that is perfectly readable to Grace). The dangerous direction here
+ *  is losing the page, not losing a line.
+ *
+ *  `received` becomes `sent`, which is the whole vocabulary change: the family
+ *  sends documents to the state, and Grace holds none of them. */
+function recordFacts(row: Record<string, AttributeValue>): CaseRecordFacts {
+  const documents: RecordDocument[] = [];
+  for (const entry of row.documents?.L ?? []) {
+    const fields = entry.M;
+    if (fields === undefined) continue;
+    const id = str(fields.id);
+    const sent = str(fields.received);
+    if (id === "" || sent === "") continue;
+    documents.push({ id, sent, expires: str(fields.expires) || null });
+  }
+  return {
+    // `""` when nobody asserted, which is the seeded twelve. Never a
+    // placeholder that looks like an id — the renderer decides what to say about
+    // an absence, the same division of labour as the deadline dash.
+    createdBy: str(row.created_by),
+    createdAt: str(row.created_at),
+    documents,
+  };
 }
 
 async function queryAll(
@@ -272,9 +316,12 @@ export async function readCase(
   const decisions: Decision[] = [];
   const outcomes = new Map<string, string>();
   let escalation: Record<string, AttributeValue> | undefined;
+  let record: CaseRecordFacts | null = null;
   let filed = false;
   let program = "";
   let certEnd = "";
+  let recordProgram = "";
+  let recordCertEnd = "";
 
   for (const row of rows) {
     const sk = str(row.sk);
@@ -327,6 +374,19 @@ export async function readCase(
       if (!escalation || instant(row.escalated_at) > instant(escalation.escalated_at)) {
         escalation = row;
       }
+    } else if (sk.startsWith(RECORD)) {
+      // One row per case, versioned in the sort key (`RECORD#v1`) so a future v2
+      // shape is a new row an old reader does not match rather than a changed row
+      // it misparses. `startsWith` rather than an equality test for that reason,
+      // and the last one wins — v2 sorts after v1.
+      record = recordFacts(row);
+      // The record row is a second, independent source for both of these, and
+      // Plan 4 put it in the table after the comments below were written. It is
+      // a *fallback*, never an override: a `renewal_submitted` ledger row is
+      // evidence of what Grace actually filed under, while a record row is what
+      // was submitted, and where they disagree the evidence wins.
+      recordProgram = str(row.program);
+      recordCertEnd = str(row.cert_end);
     }
   }
 
@@ -336,20 +396,46 @@ export async function readCase(
   }
 
   const pending = escalation !== undefined && str(escalation.status) === PENDING;
+  // A submitted case that no sweep has looked at: a record row and nothing else.
+  // `new` was declared in `lib/types.ts`, rendered in `case-table.tsx`, and
+  // documented in the README as what such a case shows — and nothing produced
+  // it, because `readCase` never read the record row. The consequence was not
+  // cosmetic: a case created through `/new` fell into `error`, whose message is
+  // "Grace's last run on this case reached no outcome — re-run the sweep", a
+  // false claim about a run that never happened. Requiring an *absent* ledger as
+  // well as an absent escalation keeps the two apart: a sweep that ran and
+  // reached no outcome leaves ledger rows behind and is still an `error`.
+  const unswept = record !== null && ledger.length === 0 && escalation === undefined;
   // `acted` is a claim that Grace filed, so it needs the ledger row that proves
-  // it. Neither pending nor filed is an `error`: something ran and reached no
-  // outcome, and `authorize` refuses that as undecidable.
-  const status: CaseStatus = pending ? "escalated" : filed ? "acted" : "error";
+  // it. Neither pending nor filed nor unswept is an `error`: something ran and
+  // reached no outcome, and `authorize` refuses that as undecidable.
+  const status: CaseStatus = pending
+    ? "escalated"
+    : filed
+      ? "acted"
+      : unswept
+        ? "new"
+        : "error";
   return {
+    record,
     summary: {
       caseId,
       status,
-      program,
-      // The escalation row's `deadline` and a renewal row's `d_cert_end` are the
-      // same fact — the certification end date — recorded by whichever path the
-      // case took. Verified equal to the fixture `cert_end` for every case.
-      // Without the fallback, all nine acted cases render a dash on `/`.
-      deadline: escalation ? str(escalation.deadline) : certEnd,
+      // Evidence first, then the record. `d_program` exists only on a
+      // `renewal_submitted` ledger row, so before the record row was read here
+      // an escalated case had no program at all and `/case/c-010` rendered a
+      // dash — which the comment beside `listQueue` still describes as "genuinely
+      // not in the table". That was true until Plan 4 put a `RECORD#v1` row
+      // there. `listQueue` reads the GSI and still cannot see it; this reads the
+      // whole partition and can.
+      program: program || recordProgram,
+      // The escalation row's `deadline`, a renewal row's `d_cert_end`, and the
+      // record row's `cert_end` are the same fact — the certification end date —
+      // recorded by whichever path the case took. Verified equal to the fixture
+      // `cert_end` for every case. Without the fallbacks, all nine acted cases
+      // rendered a dash on `/`, and a newly submitted case renders one for the
+      // deadline that is the entire reason Grace exists.
+      deadline: escalation ? str(escalation.deadline) : certEnd || recordCertEnd,
       reason: escalation ? str(escalation.reason) || null : null,
       filed,
     },

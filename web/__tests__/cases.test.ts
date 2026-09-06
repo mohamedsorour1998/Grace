@@ -34,7 +34,13 @@ interface Page {
   Items?: Record<string, AttrValue>[];
   LastEvaluatedKey?: Record<string, AttrValue>;
 }
-type AttrValue = { S: string } | { N: string } | { BOOL: boolean } | { NULL: true };
+type AttrValue =
+  | { S: string }
+  | { N: string }
+  | { BOOL: boolean }
+  | { NULL: true }
+  | { L: AttrValue[] }
+  | { M: Record<string, AttrValue> };
 
 const INDEXES = new Set(["escalation-queue"]);
 
@@ -95,6 +101,41 @@ const decisionRow = (decidedAt: string, decision: string, note: string) => ({
   pk: S("CASE#c-011"), sk: S(`DECISION#${decidedAt}`), case_id: S("c-011"),
   decided_by: S("7f3a91c2-4d5e-4a1b-9c8d-0e1f2a3b4c5d"), decided_at: S(decidedAt),
   decision: S(decision), note: S(note),
+});
+
+/** A `RECORD#v1` row, in the shape `fixtures/case-record-shape.json` pins.
+ *
+ *  `created_by` is the opaque Cognito `sub` of whoever asserted the document
+ *  status, or `{NULL: true}` for a household seeded from
+ *  `fixtures/households.yaml` where nobody asserted anything. Documents carry
+ *  `received` on the wire; the reader renames it to `sent` at this boundary,
+ *  which is the whole vocabulary change — the family sends documents to the
+ *  state, and nothing in this system holds one. */
+const recordRow = (
+  caseId: string,
+  over: {
+    createdBy?: AttrValue;
+    documents?: AttrValue[];
+    createdAt?: string;
+    program?: string;
+    certEnd?: string;
+  } = {},
+) => ({
+  pk: S(`CASE#${caseId}`), sk: S("RECORD#v1"), case_id: S(caseId),
+  program: S(over.program ?? "medicaid"), state: S("NY"),
+  cert_end: S(over.certEnd ?? "2026-10-22"), language: S("en"),
+  monthly_income_cents: { N: "240000" } as AttrValue, size: { N: "3" } as AttrValue,
+  reported_income_cents: { NULL: true } as AttrValue,
+  reported_size: { NULL: true } as AttrValue,
+  documents: {
+    L: over.documents ?? [
+      { M: { id: S("proof_of_income"), received: S("2026-09-18"), expires: { NULL: true } } },
+      { M: { id: S("proof_of_residency"), received: S("2026-02-04"), expires: S("2027-02-04") } },
+    ],
+  } as AttrValue,
+  source_conflicts: { L: [] } as AttrValue,
+  created_at: S(over.createdAt ?? "2026-09-06T12:00:00+00:00"),
+  created_by: over.createdBy ?? S("2448a4e8-c021-70f6-382c-e8acbb6cc956"),
 });
 
 /** Task 5's own outcome write. Same `DECISION#` prefix, no `decision`. */
@@ -395,6 +436,135 @@ describe("readCase", () => {
     const { summary } = detailOf(await readCase("c-004", fake as never));
     expect(summary.status).toBe("error");
     expect(summary.filed).toBe(false);
+  });
+
+  it("reads the record row as document provenance, renaming received to sent", async () => {
+    // The claim the case page renders. `received` is the stored field name and
+    // stays that way — `grace/authority.py` reads `Document.received` and this
+    // plan does not touch the gate — so the rename happens here, at the surface.
+    const fake = new FakeDynamo([{ Items: [
+      recordRow("c-013"),
+    ] }]);
+    const { record } = detailOf(await readCase("c-013", fake as never));
+    if (record === null) throw new Error("expected a record row to be read");
+    expect(record.createdBy).toBe("2448a4e8-c021-70f6-382c-e8acbb6cc956");
+    expect(record.createdAt).toBe("2026-09-06T12:00:00+00:00");
+    expect(record.documents).toEqual([
+      { id: "proof_of_income", sent: "2026-09-18", expires: null },
+      { id: "proof_of_residency", sent: "2026-02-04", expires: "2027-02-04" },
+    ]);
+  });
+
+  it("reports a seeded record as asserted by nobody rather than inventing an id", async () => {
+    // The twelve seeded households come from `fixtures/households.yaml`, written
+    // by `infra/seed_cases.py`, so no caseworker asserted anything about them.
+    // `""` says so; a placeholder like "system" would be a magic value the
+    // renderer could not tell from a real id.
+    const fake = new FakeDynamo([{ Items: [recordRow("c-010", { createdBy: { NULL: true } })] }]);
+    const { record } = detailOf(await readCase("c-010", fake as never));
+    expect(record?.createdBy).toBe("");
+  });
+
+  it("returns a null record for a case the table holds no record row for", async () => {
+    // A real state, not an error — the live table's ledger predates Plan 4's
+    // record rows. The page must then say nothing about document provenance
+    // rather than render a card implying the family has sent nothing.
+    const fake = new FakeDynamo([{ Items: [ledgerRow(AT, "tool_call", { d_tool: S("read_case") })] }]);
+    expect(detailOf(await readCase("c-011", fake as never)).record).toBeNull();
+  });
+
+  it("skips a garbled document entry rather than losing the whole page", async () => {
+    // The opposite posture to `grace/cases/record.py`, deliberately. There a
+    // malformed entry RAISES, because a document the gate cannot parse must
+    // never be silently dropped — dropping one moves a household from
+    // `escalate` to `act`. Nothing here reaches the gate: `readCase` catches, so
+    // throwing would turn one bad entry into a 404 for a household Grace reads
+    // perfectly. Losing a line beats losing the case page.
+    const fake = new FakeDynamo([{ Items: [recordRow("c-013", { documents: [
+      { M: { id: S("proof_of_income"), received: S("2026-09-18"), expires: { NULL: true } } },
+      { M: { id: S(""), received: S("2026-09-18"), expires: { NULL: true } } },
+      { M: { id: S("proof_of_identity"), received: { NULL: true }, expires: { NULL: true } } },
+      { S: "not a map at all" },
+    ] })] }]);
+    const { record } = detailOf(await readCase("c-013", fake as never));
+    expect(record?.documents).toEqual([
+      { id: "proof_of_income", sent: "2026-09-18", expires: null },
+    ]);
+  });
+
+  it("reports a submitted case as new, not as a run that reached no outcome", async () => {
+    // `new` was declared in `lib/types.ts`, rendered in `case-table.tsx`, and
+    // documented in the README as what a submitted case shows — and nothing
+    // produced it, because `readCase` never read the record row. A case created
+    // through `/new` fell into `error`, whose sentence is "Grace's last run on
+    // this case reached no outcome — re-run the sweep": a false claim about a
+    // run that never happened, shown to the person who submitted it.
+    const fake = new FakeDynamo([{ Items: [recordRow("c-013", { certEnd: "2026-12-31" })] }]);
+    const { summary } = detailOf(await readCase("c-013", fake as never));
+    expect(summary.status).toBe("new");
+    expect(summary.filed).toBe(false);
+    // And the deadline — the entire reason Grace exists — comes off the record
+    // row, so a case nothing has swept still shows when it is due.
+    expect(summary.deadline).toBe("2026-12-31");
+    expect(summary.program).toBe("medicaid");
+  });
+
+  it("still reports error for a sweep that ran and reached no outcome", async () => {
+    // The distinction `new` must not swallow. A record row plus ledger rows and
+    // no filing is a sweep that ran and concluded nothing, which is what
+    // `error`'s "re-run the sweep" sentence is actually about.
+    const fake = new FakeDynamo([{ Items: [
+      ledgerRow(AT, "tool_call", { d_tool: S("read_case") }),
+      recordRow("c-004"),
+    ] }]);
+    expect(detailOf(await readCase("c-004", fake as never)).summary.status).toBe("error");
+  });
+
+  it("prefers a renewal row's own program and deadline over the record's", async () => {
+    // Evidence beats submission where they disagree: `d_program` is what Grace
+    // actually filed under, the record row is what was submitted. The record is
+    // a fallback, never an override.
+    const fake = new FakeDynamo([{ Items: [
+      ledgerRow("2026-09-03T03:35:21.073130+00:00", "renewal_submitted",
+        { d_program: S("snap"), d_cert_end: S("2026-10-15") }, "000008"),
+      recordRow("c-001", { program: "medicaid", certEnd: "2026-11-30" }),
+    ] }]);
+    const { summary } = detailOf(await readCase("c-001", fake as never));
+    expect(summary.program).toBe("snap");
+    expect(summary.deadline).toBe("2026-10-15");
+  });
+
+  it("fills an escalated case's program from the record row", async () => {
+    // Before the record row was read here, an escalated case had no program at
+    // all — `d_program` exists only on a `renewal_submitted` row, which an
+    // escalated case by definition lacks, so `/case/c-010` rendered a dash for a
+    // value Plan 4 had put in the table. `listQueue` reads the GSI and still
+    // cannot see it; this reads the whole partition and can.
+    const fake = new FakeDynamo([{ Items: [
+      escalationRow("c-010", "2026-09-03T14:16:49.361051+00:00", "2026-10-18", "missing_document: x"),
+      recordRow("c-010", { program: "medicaid" }),
+    ] }]);
+    const { summary } = detailOf(await readCase("c-010", fake as never));
+    expect(summary.status).toBe("escalated");
+    expect(summary.program).toBe("medicaid");
+    // The escalation row's own deadline still wins — it is the fact recorded by
+    // the path the case actually took.
+    expect(summary.deadline).toBe("2026-10-18");
+  });
+
+  it("keeps household identity out of the record it reads", async () => {
+    // Hard rule 9 at a new reader. A record row carries no name, phone, or
+    // address by construction (`grace/cases/record.py` never writes one), and
+    // `CaseRecordFacts` has nowhere to put one — but `created_by` is a new
+    // identifier field, and this asserts what it actually carries.
+    const fake = new FakeDynamo([{ Items: [recordRow("c-013")] }]);
+    const { record } = detailOf(await readCase("c-013", fake as never));
+    const blob = JSON.stringify(record);
+    expect(blob).not.toMatch(/@/);
+    for (const name of ["Yamamoto", "Fitzgerald", "Mensah"]) {
+      expect(blob).not.toContain(name);
+    }
+    expect(blob).toContain("2448a4e8-c021-70f6-382c-e8acbb6cc956");
   });
 
   it("prefers the newest escalation row for the reason it shows", async () => {

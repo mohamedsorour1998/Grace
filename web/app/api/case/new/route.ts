@@ -19,13 +19,25 @@ import { CaseAlreadyExists, createCase } from "@/lib/create-case";
  *  a code in `lib/intake.ts` is a **compile error** here instead of silently
  *  falling through to 400. Plan 3 measured what the ternary cost: a code added
  *  after the draft was written fell through to 400 and reported a server-side
- *  "re-run the sweep" as a client mistake. `__tests__/intake-route.test.ts`
- *  asserts the map is total at runtime too, because a `Record`'s keys are erased
- *  at compile time. */
+ *  "re-run the sweep" as a client mistake. `__tests__/intake.test.ts` asserts the
+ *  map is total at runtime too, because a `Record`'s keys are erased at compile
+ *  time — and it reads the codes off `IntakeRefusalCode`'s union on disk rather
+ *  than from a list, since a list someone maintains by hand cannot fail for the
+ *  code they forgot to add.
+ *
+ *  **This comment named `__tests__/intake-route.test.ts`, which does not exist
+ *  and never did.** A docstring asserting that a check happens is not the check. */
 const STATUS: Record<IntakeRefusalCode, number> = {
   no_session: 401,
   session_expired: 401,
   wrong_role: 403,
+  // 403, not 400. The body is fine; the *account* cannot be recorded as the
+  // source of a document assertion because its subject is not an opaque id.
+  // Nothing the caseworker can retype fixes it, so it is not a client mistake —
+  // the same reasoning that puts `wrong_role` at 403. This code was added after
+  // this map was written, and the `Record<IntakeRefusalCode, number>` made
+  // forgetting it a compile error rather than a silent fall-through to 400.
+  identity_subject: 403,
   identity_field: 400,
   unknown_field: 400,
   bad_case_id: 400,
