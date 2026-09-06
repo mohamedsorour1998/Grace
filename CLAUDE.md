@@ -1525,11 +1525,18 @@ deployed-markup scan (~151 KB across five responses) both returned `NONE` for al
 `+1555`, and `@`. That is only meaningful because `web/__tests__` feeds a name in through `reason` —
 the exact path that reached CloudWatch in Plan 2 — and asserts the scanner catches it.
 
-**Cite the EventBridge-scheduled execution precisely.** One of the last three `grace-sweep` executions
-was schedule-triggered rather than manual, identified by its **composite execution name**
-(`<uuid>_<uuid>`, the shape EventBridge generates) where manual invocations get a plain UUID. That is a
-stronger claim than Plan 2's doc records — the automation genuinely fires unattended — but say "one of
-the three", not "all three".
+**Cite the EventBridge-scheduled execution precisely, and the claim has grown.** A schedule-triggered
+execution is identified by its **composite execution name** (`<uuid>_<uuid>`, the shape EventBridge
+generates) where manual invocations get a plain UUID.
+
+**Re-measured 2026-09-07: the schedule has fired at 12:00 on four consecutive days** — 03, 04, 05 and
+06 September — every one `SUCCEEDED`, with no human involved after the deploy. The table grew
+643 → 1033 rows across those runs (~120–140 ledger rows per sweep), and **both invariants held through
+every one**: `renewal_submitted` for exactly `c-001`–`c-009`, and no escalating household ever filed.
+
+That is the strongest available version of the deployment claim, and it is worth stating as "it has run
+unattended every day since deploy" rather than the older, weaker "one of the last three executions was
+scheduled". Re-measure before quoting it — the count moves daily, the two booleans do not.
 
 **The demo video is the one hard submission requirement nothing in three plans produces.** Neither
 `README.md` nor `docs/dashboard-verification.md` may imply the submission is complete. The **AWS Builder
