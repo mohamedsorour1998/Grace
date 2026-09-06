@@ -37,6 +37,95 @@ ROLE_VALUE = "caseworker"
 SEED_USERNAME = "caseworker-01"
 
 
+# The hosted UI's palette, so sign-in does not look like a different product than
+# the dashboard it guards. Values are Grace's own, from `web/app/globals.css` —
+# keep the two in step, or the login page drifts away from the app again.
+#
+# This is the **classic hosted UI** (`ManagedLoginVersion: 1`), which exposes a
+# fixed set of `*-customizable` classes and nothing more: colours, the logo, and
+# button styling. Managed login v2 offers real layout control, but it changes the
+# sign-in URL shape, so `hostedUiUrl`'s `/login` path and the whole OAuth round
+# trip would need re-testing. Not worth it for a cosmetic gain.
+#
+# Verified served rather than merely stored: the page links
+# `.../<pool>/<client>/<cssVersion>/assets/CSS/custom-css.css` from CloudFront,
+# and that file comes back with these exact values. Checking the HTML for the hex
+# codes finds nothing — they are only ever in the linked stylesheet.
+HOSTED_UI_CSS = """
+.background-customizable {
+  background: #FAF9F7;
+}
+.banner-customizable {
+  background: #FAF9F7;
+  border-bottom: 1px solid #E5E3DF;
+  padding: 32px 0 16px 0;
+}
+.label-customizable {
+  color: #1C1F23;
+  font-weight: 500;
+  font-size: 13px;
+}
+.textDescription-customizable {
+  color: #6B7280;
+  font-size: 13px;
+  padding-top: 10px;
+  padding-bottom: 14px;
+}
+.legalText-customizable {
+  color: #6B7280;
+  font-size: 11px;
+}
+.inputField-customizable {
+  background: #FFFFFF;
+  border: 1px solid #E5E3DF;
+  border-radius: 6px;
+  color: #1C1F23;
+  font-size: 14px;
+  padding: 10px 12px;
+  width: 100%;
+}
+.inputField-customizable:focus {
+  border-color: #B4530A;
+  outline: 2px solid rgba(180, 83, 10, 0.18);
+  outline-offset: 1px;
+}
+.submitButton-customizable {
+  background: #1C1F23;
+  border: none;
+  border-radius: 6px;
+  color: #FAF9F7;
+  font-size: 14px;
+  font-weight: 500;
+  height: 42px;
+  margin-top: 18px;
+  width: 100%;
+}
+.submitButton-customizable:hover {
+  background: #B4530A;
+  color: #FFFFFF;
+}
+.errorMessage-customizable {
+  background: #FFFFFF;
+  border: 1px solid #9B2C2C;
+  border-left: 3px solid #9B2C2C;
+  border-radius: 6px;
+  color: #9B2C2C;
+  font-size: 13px;
+  padding: 10px 12px;
+}
+.idpDescription-customizable {
+  color: #6B7280;
+  font-size: 13px;
+}
+.socialButton-customizable {
+  border-radius: 6px;
+}
+.redirect-customizable {
+  padding-top: 12px;
+}
+"""
+
+
 CLIENT_SPEC: dict = {
     "ClientName": CLIENT_NAME,
     # Public client. The code exchange happens server-side in a route handler,
@@ -234,6 +323,21 @@ def provision(client=None, callback_urls: list[str] | None = None) -> dict:
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "UsernameExistsException":
             raise
+
+    # The hosted UI's palette. Applied on every run, because it is idempotent by
+    # nature — `set_ui_customization` replaces whatever CSS is there, and a
+    # re-run should converge the sign-in page's appearance the same way it
+    # converges the client's callback URLs.
+    #
+    # Deliberately NOT wrapped in a `try`. If styling fails, the sign-in page
+    # still works, so this is not a fail-closed concern — but a provisioning
+    # script that silently skips a step reports success while the thing is
+    # absent, which is the Plan 2 lesson about swallowing a "not ready yet"
+    # error. A loud failure here means someone re-runs, which is what
+    # idempotence is for.
+    client.set_ui_customization(
+        UserPoolId=pool_id, ClientId=client_id, CSS=HOSTED_UI_CSS
+    )
 
     return {
         "pool_id": pool_id,

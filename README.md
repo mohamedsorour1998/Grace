@@ -285,6 +285,58 @@ renders 12 households and the headline **"9 handled alone, 3 waiting on you"**, 
 `c-010 c-011 c-012`, and `/case/c-010` shows the gate's own reason,
 `missing_document: proof_of_residency`.
 
+The sign-in page is Cognito's classic hosted UI, styled with the dashboard's own palette
+(`infra/provision_cognito.py`'s `HOSTED_UI_CSS`, values taken from `web/app/globals.css`) so that
+signing in does not look like a different product than the app it guards. A test pins the two together,
+because a colour changed in one place and not the other is invisible until someone views both pages.
+
+### How a household gets into Grace — and the honest limitation
+
+**There is no intake form.** The twelve households come from `fixtures/households.yaml`, and the
+dashboard is deliberately **read-plus-decide only** — its single write path records a caseworker's
+decision. Nothing in `grace/cases/` exposes a create or update method at all; that is capability
+absence applied to the data layer, not an oversight.
+
+To add a household today you edit the fixture and re-run the sweep:
+
+```bash
+# 1. Add a household to fixtures/households.yaml. Quote every scalar — an unquoted
+#    `no`/`yes` parses as a boolean and an unquoted phone number as an integer.
+#    Phone numbers must use the reserved +1555 range (hard rule 3, and a test asserts it).
+
+# 2. Check the gate's verdict locally before spending anything on Bedrock.
+.venv/bin/python -c "
+from datetime import date
+from grace.cases.store import load_fixture_cases
+from grace.authority import evaluate
+from grace.rules.pack import load_pack
+today = date(2026, 10, 1)
+for c in load_fixture_cases():
+    r = evaluate(c, today, load_pack(c.program, c.state))
+    print(c.case_id, 'ESCALATE' if r.escalated else 'act',
+          sorted({x.code for x in r.reasons}))
+"
+
+# 3. Run the sweep end to end locally.
+.venv/bin/python -m grace.run sweep --auto escalate
+
+# 4. Deployed: the caseload is also enumerated in web/lib/cases.ts as CASE_IDS,
+#    which is generated as c-001..c-0NN from a length. Bump that length to match.
+#    It is a constant rather than a discovered set because there is no index over
+#    "every case", and the SSR role deliberately holds no dynamodb:Scan — a bug
+#    with Scan could read all ~660 ledger rows, and the audit trail is the one
+#    thing this project rests on.
+```
+
+**Why it is built this way.** A real deployment would receive households from the source of truth that
+already holds them — a state eligibility system, a clinic's case-management database — rather than from
+a form a caseworker retypes. Grace is the process that watches the clock; it is not the system of
+record, and inventing an intake UI would have implied it was. The fixture is the seam where that
+integration goes.
+
+If you are evaluating this project, the practical consequence is that **the twelve households are the
+demo surface**, and their 9/3 split is the claim being made.
+
 ### The claim that matters: a human's approval is an input to the gate, never a bypass
 
 A caseworker approved `c-010` — the household missing `proof_of_residency` — on the deployed system.

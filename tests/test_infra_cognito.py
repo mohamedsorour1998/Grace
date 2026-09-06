@@ -104,3 +104,39 @@ def test_the_client_cannot_write_the_claim_that_authorises_it():
     # And the schema's immutability is the second guard, not the only one.
     role = next(a for a in provision_cognito.pool_spec()["Schema"] if a["Name"] == "role")
     assert role["Mutable"] is False
+
+
+def test_the_hosted_ui_uses_the_dashboards_own_palette():
+    """The sign-in page must not look like a different product than the app.
+
+    Cognito's hosted UI is the first thing a caseworker sees, and by default it
+    looks nothing like the dashboard it guards. These five values are Grace's
+    own, read from `web/app/globals.css`; asserting them here is what keeps the
+    two from drifting apart silently — a colour changed in one place and not the
+    other is invisible until someone looks at both pages side by side.
+
+    Only the classic hosted UI's `*-customizable` classes are available
+    (`ManagedLoginVersion: 1`). Managed login v2 would allow real layout control
+    but changes the sign-in URL shape, so `hostedUiUrl` and the whole OAuth round
+    trip would need re-testing for a cosmetic gain.
+    """
+    css = provision_cognito.HOSTED_UI_CSS
+    palette = {
+        "#FAF9F7": "paper",
+        "#1C1F23": "ink",
+        "#6B7280": "muted",
+        "#E5E3DF": "rule",
+        "#B4530A": "escalate",
+        "#9B2C2C": "error",
+    }
+    for value, name in palette.items():
+        assert value in css, f"the {name} colour ({value}) is missing from the hosted UI CSS"
+    # And the classes it targets must be the ones Cognito actually honours — a
+    # typo here is silently ignored rather than rejected.
+    for cls in (
+        ".background-customizable",
+        ".inputField-customizable",
+        ".submitButton-customizable",
+        ".errorMessage-customizable",
+    ):
+        assert cls in css, f"{cls} is not styled, so that element keeps Cognito's default"

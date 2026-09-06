@@ -31,7 +31,7 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**All three plans are complete.** Plan 1's 9 tasks, Plan 2's 11, and Plan 3's 9 are done. **715 unit
+**All three plans are complete.** Plan 1's 9 tasks, Plan 2's 11, and Plan 3's 9 are done. **716 unit
 tests pass** (`.venv/bin/python -m pytest`) plus **157 vitest tests across 7 files** in `web/`, and 23
 trajectory evals pass against real Bedrock (`.venv/bin/python -m pytest evals/` — `testpaths =
 ["tests"]` excludes `evals/` from the fast suite). `grace sweep` runs end to end locally and reports
@@ -1850,6 +1850,31 @@ section for exactly this reason.
 `409 already_decided` rather than re-running Grace. Demo the approval on `c-011` or `c-012`, or show
 `c-010`'s existing outcome row — do not stage a fake approval to make the recording cleaner.
 
+
+**The Cognito hosted UI is styled, and the check that it *is* styled is not the obvious one.**
+`infra/provision_cognito.py`'s `HOSTED_UI_CSS` carries the dashboard's palette from
+`web/app/globals.css`, applied by `set_ui_customization` on every `provision` run (idempotent by
+nature — it replaces whatever CSS is there). A test asserts all six colours and the four
+`*-customizable` classes, and it was watched failing on a changed hex value; without it, a colour
+changed in one place and not the other is invisible until someone opens both pages.
+
+**Verifying it needs the linked stylesheet, not the HTML.** Grepping the sign-in page for the hex codes
+finds **zero** matches and looks like a failure — the values only ever appear in
+`https://d3oia8etllorh5.cloudfront.net/<pool>/<client>/<cssVersion>/assets/CSS/custom-css.css`, which
+the page links third after bootstrap and Cognito's own stylesheet. Fetch that file. This is the classic
+hosted UI (`ManagedLoginVersion: 1`); managed login v2 would allow real layout control but changes the
+sign-in URL shape, so `hostedUiUrl`'s `/login` path and the whole OAuth round trip would need
+re-testing for a cosmetic gain.
+
+**There is no way to submit a new case, and that is deliberate — say so rather than treating it as a
+gap.** `grace/cases/` exposes no create or update method at all; the twelve households come from
+`fixtures/households.yaml`, and the dashboard is read-plus-decide only (its one write records a
+caseworker's decision). A real deployment would receive households from the system that already holds
+them — a state eligibility system, a clinic's case-management database — so the fixture is the seam
+where that integration goes. Adding one means editing the fixture, re-running the sweep, and bumping
+the generated length behind `CASE_IDS` in `web/lib/cases.ts`. The README documents this under
+"How a household gets into Grace". **Do not build an intake form to close the apparent gap**: it would
+imply Grace is the system of record, which it is not.
 
 ### Known infrastructure limits
 
