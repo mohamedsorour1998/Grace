@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readEnv } from "@/lib/env";
 import type { EnvSource } from "@/lib/env";
-import { CASE_IDS, listCases, listQueue, readCase, readFacts } from "@/lib/cases";
+import { SEEDED_CASE_IDS, listCases, listQueue, readCase, readFacts } from "@/lib/cases";
 import type { CaseDetail } from "@/lib/types";
 
 const ENV = {
@@ -567,14 +567,14 @@ describe("listCases", () => {
     // The `/` page's 9-acted/3-escalated claim. Derived per case from the
     // ledger, never from `listQueue` plus an assumption, because `filed` is the
     // hard-rule-6 fact and only the ledger carries it.
-    const pages: Page[] = CASE_IDS.map((id, n) => (n < 9
+    const pages: Page[] = SEEDED_CASE_IDS.map((id: string, n: number) => (n < 9
       ? { Items: [{ pk: S(`CASE#${id}`), sk: S(`LEDGER#${AT}#000008`), case_id: S(id),
           at: S(AT), kind: S("renewal_submitted"), d_program: S("medicaid"),
           d_cert_end: S("2026-10-15"), d_trace_id: { NULL: true } as AttrValue }] }
       : { Items: [escalationRow(id, "2026-09-03T00:00:00+00:00", "2026-10-18", "needs a human")] }));
     // Keyed by the pk each call asks for, since listCases reads concurrently and
     // a positional fake would hand the wrong page to the wrong case.
-    const byCase = new Map(CASE_IDS.map((id, n) => [`CASE#${id}`, pages[n]!]));
+    const byCase = new Map(SEEDED_CASE_IDS.map((id: string, n: number) => [`CASE#${id}`, pages[n]!]));
     const fake = {
       sent: [] as Record<string, unknown>[],
       async send(command: { input: Record<string, unknown> }) {
@@ -585,7 +585,7 @@ describe("listCases", () => {
     };
     const cases = await listCases(fake as never);
     expect(cases).toHaveLength(12);
-    expect(cases.map(c => c.caseId)).toEqual([...CASE_IDS]);
+    expect(cases.map(c => c.caseId)).toEqual([...SEEDED_CASE_IDS]);
     expect(cases.filter(c => c.status === "acted")).toHaveLength(9);
     expect(cases.filter(c => c.status === "escalated")).toHaveLength(3);
     expect(cases.filter(c => c.filed)).toHaveLength(9);

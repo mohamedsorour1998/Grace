@@ -1,0 +1,79 @@
+{
+  "_comment": [
+    "THE CONTRACT BETWEEN TWO WRITERS IN TWO LANGUAGES.",
+    "",
+    "`infra/seed_cases.py` writes case records from Python and",
+    "`web/app/api/case/new/route.ts` writes them from TypeScript. Two writers",
+    "agreeing by memory is how a submitted case ends up unparseable to the agent",
+    "that has to read it — the case renders on the dashboard and Grace never sees",
+    "it, which is the exact 'looks like it works' failure Plan 4 exists to close.",
+    "So both sides assert against this one item instead of against each other:",
+    "`tests/test_case_record.py` on the Python side and",
+    "`web/__tests__/intake.test.ts` on the TypeScript side. Either writer drifting",
+    "fails its own test.",
+    "",
+    "The case id is c-901 rather than one of the twelve, and there is no name,",
+    "phone, address, or email anywhere in it — a record row carries none, by",
+    "construction rather than by filtering (hard rule 9). All data is synthetic",
+    "(hard rule 3).",
+    "",
+    "`created_at` is pinned so the item is byte-comparable; both writers take it",
+    "as a parameter for exactly that reason."
+  ],
+  "item": {
+    "pk": { "S": "CASE#c-901" },
+    "sk": { "S": "RECORD#v1" },
+    "case_id": { "S": "c-901" },
+    "program": { "S": "medicaid" },
+    "state": { "S": "NY" },
+    "cert_end": { "S": "2026-11-30" },
+    "language": { "S": "es" },
+    "monthly_income_cents": { "N": "184500" },
+    "size": { "N": "4" },
+    "reported_income_cents": { "N": "191000" },
+    "reported_size": { "NULL": true },
+    "documents": {
+      "L": [
+        {
+          "M": {
+            "id": { "S": "proof_of_income" },
+            "received": { "S": "2026-09-18" },
+            "expires": { "NULL": true }
+          }
+        },
+        {
+          "M": {
+            "id": { "S": "proof_of_residency" },
+            "received": { "S": "2026-02-04" },
+            "expires": { "S": "2027-02-04" }
+          }
+        }
+      ]
+    },
+    "source_conflicts": {
+      "L": [{ "S": "household size 4 on application, 3 on most recent wage record" }]
+    },
+    "created_at": { "S": "2026-09-06T12:00:00+00:00" }
+  },
+  "directory_item": {
+    "pk": { "S": "CASE_DIRECTORY" },
+    "sk": { "S": "CASE#c-901" },
+    "case_id": { "S": "c-901" }
+  },
+  "decoded": {
+    "case_id": "c-901",
+    "program": "medicaid",
+    "state": "NY",
+    "cert_end": "2026-11-30",
+    "language": "es",
+    "monthly_income_cents": 184500,
+    "size": 4,
+    "reported_income_cents": 191000,
+    "reported_size": null,
+    "documents": [
+      { "id": "proof_of_income", "received": "2026-09-18", "expires": null },
+      { "id": "proof_of_residency", "received": "2026-02-04", "expires": "2027-02-04" }
+    ],
+    "source_conflicts": ["household size 4 on application, 3 on most recent wage record"]
+  }
+}

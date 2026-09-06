@@ -7,12 +7,27 @@ reads precede actions, and `sweep` classifies a case by scanning for a
 that reads as a gate regression. `tests/test_dynamo_store.py` parametrizes one
 test body over both stores for exactly that reason.
 
-**Household records are not stored here.** Cases come from
-`fixtures/households.yaml`, the same source the local store reads. This table
-holds the ledger and the escalation queue, so there is no second copy of case
-data to drift and hard rule 3 (synthetic data only) needs no new enforcement
-surface. It also keeps household identity out of DynamoDB, which sits outside
-the Bedrock guardrail's redaction — the same reasoning as hard rule 9.
+**Household records now live here too, and that is a Plan 4 change.** Until
+Plan 4 this store read cases from the list handed to its constructor, which
+`build_store()` filled from `fixtures/households.yaml` — so the deployed agent's
+view of *which households exist* was fixed at container image build time and a
+case submitted through the dashboard would have been invisible to it. Records
+are read from the table now (`grace/cases/record.py` is the row shape), and the
+constructor list survives as a **fallback seed** so the local run and every
+existing test keep working unchanged.
+
+The precedence is one-directional and deliberate: a record in the table wins,
+and the seed answers only where the table holds nothing. A *read failure* is
+never a fallback — it propagates, because "the table could not be read" and
+"this case is not in the table" are different claims and only the second one has
+a safe answer. `open_cases()` returns the union of both, so neither source can
+silently shrink the caseload.
+
+**A record carries no household identity** — no name, phone, address, or email.
+That is enforced in `record.py` by never writing them rather than by filtering
+them out later, so the table-wide PII scan this project runs keeps returning
+nothing, and DynamoDB (which sits outside the Bedrock guardrail's redaction)
+never becomes a second place a name can leak from. Hard rule 9.
 
 **Error posture, and it differs deliberately from Task 9's.** Read failures and
 ledger-write failures both propagate. An unreadable case must escalate rather
@@ -32,7 +47,9 @@ from decimal import Decimal
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
+from grace.cases import record
 from grace.cases.models import Case, LedgerDetailValue, LedgerEntry
 from infra import naming
 
@@ -40,6 +57,17 @@ from infra import naming
 # key, so `ledger()` must filter on this or an escalation row — which has no
 # `kind` attribute — would surface as a ledger entry and break the read.
 _LEDGER_PREFIX = "LEDGER#"
+
+# How many pages any Query here may take before it gives up.
+#
+# Refuse to spin, and **throw rather than truncate**. A DynamoDB Query caps at
+# 1MB and signals more with `LastEvaluatedKey`; a service that repeats the same
+# key forever would otherwise loop without bound, and Plan 1 Task 6 measured
+# exactly that shape (a resume loop reaching 500 rounds before being killed).
+# Truncating is the worse failure of the two: a directory read that silently
+# stopped early would drop households from the sweep with no error anywhere,
+# which is the one thing this system exists to prevent.
+_MAX_PAGES = 100
 
 # Prefix on each `detail` key as stored. Namespaced so a detail key can never
 # collide with a structural attribute: `detail={"kind": ...}` is legal at the
@@ -124,8 +152,20 @@ def _from_attr(attr: dict[str, Any]) -> LedgerDetailValue:
     raise TypeError(f"unreadable ledger attribute: {attr!r}")
 
 
+class CaseAlreadyExists(Exception):
+    """`create_case` refused to overwrite an existing case record.
+
+    A separate type rather than a `ClientError` the caller has to decode,
+    because the two outcomes need different answers: a conflict is the caseworker
+    picking an id that is taken (a 409, and nothing was written), while any other
+    write failure is an infrastructure problem (a 503, and something may have
+    been). Collapsing them would report a taken id as an outage.
+    """
+
+
 class DynamoDBCaseStore:
-    """One table, two row kinds: ledger entries and escalation rows."""
+    """One table, four row kinds: case records, ledger entries, escalation rows,
+    and the directory that enumerates the first."""
 
     def __init__(self, cases: list[Case], table_name: str | None = None, client=None) -> None:
         ids = [c.case_id for c in cases]
@@ -135,6 +175,9 @@ class DynamoDBCaseStore:
             # drop a duplicate, shrinking the caseload with no error while the
             # sweep still reported success.
             raise ValueError(f"duplicate case ids: {duplicates}")
+        # The fallback seed, not the caseload. Read only where the table holds
+        # no record for a case — see the module docstring for why the precedence
+        # runs this way and why a read *failure* is never a fallback.
         self._cases = {c.case_id: c for c in cases}
         self._table = table_name or naming.TABLE
         self._client = client or boto3.client("dynamodb", region_name=naming.REGION)
@@ -143,17 +186,147 @@ class DynamoDBCaseStore:
         # one tool call writes `tool_call` then `tool_result` — and without the
         # sequence the second would overwrite the first.
         self._seq: dict[str, itertools.count] = {}
+        # Case ids this process has already proved exist. **Positive results
+        # only.** Caching an absence would make a case created later in the same
+        # process permanently invisible to `append_ledger`, which is the
+        # direction that loses an audit row; caching a presence can only ever
+        # save a GetItem, because `create_case` refuses to overwrite and nothing
+        # in this codebase deletes a record.
+        self._known: set[str] = set(self._cases)
+
+    # -- case records ------------------------------------------------------
+
+    def _record_item(self, case_id: str) -> dict[str, Any] | None:
+        """This case's record row, or `None` if the table holds none.
+
+        A failed read propagates rather than returning `None`. "The table could
+        not be read" and "this case is not in the table" are different claims,
+        and only the second one has a safe answer — an unreadable case must
+        escalate, never be assumed absent and quietly answered from a stale
+        in-memory seed.
+        """
+        response = self._client.get_item(
+            TableName=self._table,
+            Key={"pk": {"S": naming.case_pk(case_id)}, "sk": {"S": naming.RECORD_SK}},
+        )
+        return response.get("Item")
+
+    def _directory_ids(self) -> list[str]:
+        """Every case id the directory partition names, paginated and capped."""
+        ids: list[str] = []
+        start_key: dict[str, Any] | None = None
+        for _ in range(_MAX_PAGES):
+            request: dict[str, Any] = {
+                "TableName": self._table,
+                "KeyConditionExpression": "pk = :pk",
+                "ExpressionAttributeValues": {":pk": {"S": naming.CASE_DIRECTORY_PK}},
+                "ScanIndexForward": True,
+            }
+            if start_key is not None:
+                request["ExclusiveStartKey"] = start_key
+            response = self._client.query(**request)
+            for item in response.get("Items", []):
+                ids.append(record.case_id_from_directory_item(item))
+            start_key = response.get("LastEvaluatedKey")
+            if not start_key:
+                return ids
+        raise RuntimeError(
+            f"the case directory did not finish within {_MAX_PAGES} pages; "
+            "refusing to truncate the caseload"
+        )
 
     def open_cases(self) -> list[Case]:
-        return list(self._cases.values())
+        """Every case, from the table and the fallback seed, table first.
+
+        A **union**, so neither source can shrink the caseload: a household in
+        the seed but not yet seeded into the table is still swept, and a case
+        submitted through the dashboard is swept even though no image was
+        rebuilt. Sorted by case id so the order is a property of the data rather
+        than of whichever page DynamoDB returned first — `InMemoryCaseStore`
+        returns fixture order, which for the fixtures is the same order.
+
+        A directory entry whose record row is missing **raises**. That is the
+        loud direction on purpose: skipping it would quietly drop a household
+        from the sweep while every count still looked plausible, which is
+        exactly the failure the duplicate-id guard above already refuses.
+        """
+        by_id: dict[str, Case] = dict(self._cases)
+        for case_id in self._directory_ids():
+            item = self._record_item(case_id)
+            if item is None:
+                raise record.InvalidCaseRecord(
+                    f"the case directory names {case_id!r} but the table holds no "
+                    f"{naming.RECORD_SK} row for it"
+                )
+            by_id[case_id] = record.from_item(item)
+        self._known.update(by_id)
+        return [by_id[case_id] for case_id in sorted(by_id)]
 
     def get(self, case_id: str) -> Case:
-        if case_id not in self._cases:
-            raise KeyError(f"No such case: {case_id}")
-        return self._cases[case_id]
+        item = self._record_item(case_id)
+        if item is not None:
+            case = record.from_item(item)
+            self._known.add(case_id)
+            return case
+        if case_id in self._cases:
+            return self._cases[case_id]
+        raise KeyError(f"No such case: {case_id}")
+
+    def create_case(self, case: Case) -> None:
+        """Write a new case record. Refuses to overwrite an existing one.
+
+        `attribute_not_exists(sk)` is the whole guard. An intake that silently
+        overwrote a household would destroy a case record whose ledger and
+        escalation history stay in the same partition — that history would then
+        belong to two different families, and nothing in the audit trail would
+        say so.
+
+        **The directory row is written first, and the order is the point.** Two
+        puts cannot be made atomic without `TransactWriteItems`, which needs
+        permissions neither the runtime role nor the dashboard's compute role
+        holds today, so one of the two partial failures has to be chosen. Record
+        first would leave a case the table can answer `get()` for but that
+        `open_cases()` never lists — a household silently absent from the sweep.
+        Directory first leaves the opposite: an id `open_cases()` names and
+        cannot load, which raises with the case id in the message. A visible
+        failure beats a silent omission, and the retry is safe because the
+        directory write is idempotent.
+        """
+        self._client.put_item(TableName=self._table, Item=record.directory_item(case.case_id))
+        try:
+            self._client.put_item(
+                TableName=self._table,
+                Item=record.to_item(case),
+                ConditionExpression="attribute_not_exists(sk)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise CaseAlreadyExists(
+                    f"a case record already exists for {case.case_id!r}"
+                ) from exc
+            raise
+        self._known.add(case.case_id)
+
+    # -- ledger ------------------------------------------------------------
+
+    def _exists(self, case_id: str) -> bool:
+        """Whether this case is one this store knows about.
+
+        Checked against the table rather than against the constructor seed
+        alone, or a case created after this process started could never have a
+        ledger row written for it — the audit trail would be empty for exactly
+        the household that most needs one. Positive answers are cached; see
+        `_known`.
+        """
+        if case_id in self._known:
+            return True
+        if self._record_item(case_id) is None:
+            return False
+        self._known.add(case_id)
+        return True
 
     def append_ledger(self, entry: LedgerEntry) -> None:
-        if entry.case_id not in self._cases:
+        if not self._exists(entry.case_id):
             # A ledger row for an unknown case is a typo at the call site, not a
             # new case. Failing loudly beats opening a phantom bucket that
             # `ledger()` would later report as an innocent empty list.

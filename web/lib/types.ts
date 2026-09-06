@@ -13,7 +13,18 @@
  * dashboard type would imply the ledger can carry one.
  */
 
-export type CaseStatus = "acted" | "escalated" | "error";
+/** What a sweep concluded about one household — or, for `new`, that no sweep has
+ *  concluded anything yet.
+ *
+ *  `new` is Plan 4's addition and it is not a cosmetic one. A case submitted
+ *  through `/new` has a record row and no ledger, which under the previous three
+ *  variants read as `error` — and `error`'s message says "Grace's last run on
+ *  this case reached no outcome. Re-run the sweep", a false claim about a run
+ *  that never happened. The same objection Plan 3 raised when requiring evidence
+ *  for `acted` made `error` reachable and left it wearing a sentence written for
+ *  a different variant: when a change widens the set of inputs a branch can see,
+ *  re-read that branch's message as well as its logic. */
+export type CaseStatus = "acted" | "escalated" | "error" | "new";
 
 export interface CaseSummary {
   caseId: string;

@@ -23,10 +23,13 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from botocore.exceptions import ClientError
 
-from grace.cases.dynamo_store import DynamoDBCaseStore, _attr, to_dynamo
-from grace.cases.models import LedgerEntry
+from grace.cases import record
+from grace.cases.dynamo_store import CaseAlreadyExists, DynamoDBCaseStore, _attr, to_dynamo
+from grace.cases.models import Case, Document, Household, LedgerEntry
 from grace.cases.store import CaseStore, InMemoryCaseStore, load_fixture_cases
+from infra import naming
 
 TODAY = date(2026, 10, 1)
 AT = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -72,8 +75,36 @@ class FakeTable:
         self.items: dict[tuple[str, str], dict] = {}
         self.page_size = page_size
         self.query_calls = 0
+        self.get_calls = 0
 
-    def put_item(self, TableName: str, Item: dict) -> dict:
+    def get_item(self, TableName: str, Key: dict) -> dict:
+        self.get_calls += 1
+        item = self.items.get((Key["pk"]["S"], Key["sk"]["S"]))
+        # A real GetItem omits `Item` entirely on a miss rather than returning
+        # `None` for it, and `.get("Item")` is what the store reads — a fake
+        # that returned `{"Item": None}` would let a store distinguishing the
+        # two look correct.
+        return {} if item is None else {"Item": item}
+
+    def put_item(self, TableName: str, Item: dict, ConditionExpression: str | None = None) -> dict:
+        # The only condition this codebase writes, enforced the way the service
+        # enforces it: a `ConditionalCheckFailedException` raised as a real
+        # `ClientError`, so `create_case`'s decode of `Error.Code` is exercised
+        # rather than assumed. A fake that raised a bare `Exception` here would
+        # let a store that never looked at the code pass.
+        if ConditionExpression is not None:
+            if ConditionExpression != "attribute_not_exists(sk)":
+                raise TypeError(f"unsupported condition: {ConditionExpression!r}")
+            if (Item["pk"]["S"], Item["sk"]["S"]) in self.items:
+                raise ClientError(
+                    {
+                        "Error": {
+                            "Code": "ConditionalCheckFailedException",
+                            "Message": "The conditional request failed",
+                        }
+                    },
+                    "PutItem",
+                )
         for key, value in Item.items():
             if not isinstance(value, dict) or len(value) != 1:
                 raise TypeError(f"not an attribute value for {key!r}: {value!r}")
@@ -557,3 +588,300 @@ def test_duplicate_case_ids_are_rejected():
     cases = load_fixture_cases()
     with pytest.raises(ValueError, match="duplicate"):
         _dynamo_store([*cases, cases[0]])
+
+
+# ---------------------------------------------------------------------------
+# Plan 4: case records live in the table, and the constructor list is a fallback
+# ---------------------------------------------------------------------------
+
+
+def _new_case(case_id: str, **overrides) -> Case:
+    """A case that exists only in the table — an intake submission's shape.
+
+    Identity fields are empty because a record row carries none; see
+    `grace/cases/record.py`.
+    """
+    base = dict(
+        case_id=case_id,
+        household=Household(
+            household_id="",
+            display_name="",
+            language="en",
+            phone="",
+            monthly_income_cents=150000,
+            size=3,
+        ),
+        program="medicaid",
+        state="NY",
+        cert_end=date(2026, 10, 20),
+        documents=(Document(doc_id="proof_of_income", received=date(2026, 9, 20)),),
+        reported_income_cents=None,
+        reported_size=None,
+        source_conflicts=(),
+    )
+    base.update(overrides)
+    return Case(**base)  # type: ignore[arg-type]
+
+
+def test_a_case_that_exists_only_in_the_table_is_readable():
+    """The whole point of Plan 4 Task 2.
+
+    Before this, `get()` read the constructor dict, so the deployed agent's view
+    of which households exist was fixed at container image build time and a case
+    submitted through the dashboard was invisible to it — rendered on screen,
+    never processed.
+    """
+    store = _dynamo_store(load_fixture_cases())
+    store.create_case(_new_case("c-013"))
+    assert store.get("c-013").case_id == "c-013"
+    assert store.get("c-013").cert_end == date(2026, 10, 20)
+    assert "c-013" in {c.case_id for c in store.open_cases()}
+
+
+def test_the_table_record_wins_over_the_constructor_seed():
+    """Precedence, in the one direction that is safe.
+
+    The seed exists so the local run and every existing test keep working; it is
+    not a second source of truth. A record in the table is what the deployed
+    agent must reason over, so it wins — otherwise an operator correcting a
+    record would see the correction ignored by a container built before it.
+    """
+    cases = load_fixture_cases()
+    store = _dynamo_store(cases)
+    seeded = next(c for c in cases if c.case_id == "c-001")
+    assert seeded.cert_end == date(2026, 10, 15)
+    store.create_case(_new_case("c-001", cert_end=date(2027, 1, 1)))
+    assert store.get("c-001").cert_end == date(2027, 1, 1)
+    assert {c.cert_end for c in store.open_cases() if c.case_id == "c-001"} == {
+        date(2027, 1, 1)
+    }
+
+
+def test_the_seed_answers_only_where_the_table_holds_nothing():
+    """The fallback path, which is what keeps 700+ existing tests honest: the
+    fake table starts empty, so every conformance test above reads the seed."""
+    store = _dynamo_store(load_fixture_cases())
+    assert store.get("c-001").household.display_name == "The Rivera Household"
+    assert len(store.open_cases()) == 12
+
+
+def test_a_read_failure_is_never_a_fallback_to_the_seed():
+    """"The table could not be read" and "this case is not in the table" are
+    different claims, and only the second has a safe answer.
+
+    A store that caught the read error and answered from the seed would report a
+    stale case as current during exactly the incident where nobody is watching —
+    and the gate would then reason over facts that are not in the record.
+    """
+
+    class Throwing(FakeTable):
+        def get_item(self, TableName, Key):
+            raise ClientError(
+                {"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "x"}},
+                "GetItem",
+            )
+
+    store = DynamoDBCaseStore(
+        load_fixture_cases(), table_name="grace-cases-test", client=Throwing()
+    )
+    with pytest.raises(ClientError):
+        store.get("c-001")
+
+
+def test_open_cases_is_the_union_so_neither_source_can_shrink_the_caseload():
+    """Twelve from the seed plus one from the table is thirteen.
+
+    The failure this refuses is the quiet one: a store that returned only the
+    table would report an empty caseload the moment seeding had not run yet, and
+    the sweep would succeed having processed nobody.
+    """
+    store = _dynamo_store(load_fixture_cases())
+    store.create_case(_new_case("c-013"))
+    ids = [c.case_id for c in store.open_cases()]
+    assert len(ids) == 13
+    assert ids == sorted(ids), "order must be a property of the data, not of the pages"
+    assert ids[-1] == "c-013"
+
+
+def test_the_directory_read_paginates():
+    """The `LastEvaluatedKey` loop is exercised, not merely present — the fake
+    pages at three, so thirteen directory rows must take more than one query."""
+    store = _dynamo_store([])
+    for n in range(13):
+        store.create_case(_new_case(f"c-{n + 100:03d}"))
+    store._client.query_calls = 0
+    assert len(store.open_cases()) == 13
+    assert store._client.query_calls > 1, "the directory pagination loop never iterated"
+
+
+def test_the_directory_read_throws_rather_than_truncating():
+    """A service repeating the same key forever must terminate, and it must
+    terminate by *failing*.
+
+    Truncating would silently drop households from the sweep, which is the
+    failure this whole system exists to prevent. Plan 1 Task 6 measured the
+    unbounded version of this shape running to 500 rounds before being killed.
+    """
+
+    class NeverEnds(FakeTable):
+        def query(self, **kwargs):
+            self.query_calls += 1
+            return {
+                "Items": [record.directory_item("c-013")],
+                "LastEvaluatedKey": {"pk": {"S": naming.CASE_DIRECTORY_PK}},
+            }
+
+    client = NeverEnds()
+    store = DynamoDBCaseStore([], table_name="grace-cases-test", client=client)
+    with pytest.raises(RuntimeError, match="did not finish"):
+        store.open_cases()
+    assert client.query_calls <= 100
+
+
+def test_a_directory_entry_with_no_record_row_raises_rather_than_vanishing():
+    """The partial-write failure `create_case`'s ordering deliberately produces.
+
+    Directory first means a half-written case is *loud*: `open_cases()` names
+    the id and refuses. Record first would have produced the opposite — a
+    household the table can answer `get()` for and that the sweep never lists.
+    """
+    store = _dynamo_store([])
+    store._client.put_item(
+        TableName="grace-cases-test", Item=record.directory_item("c-013")
+    )
+    with pytest.raises(record.InvalidCaseRecord, match="c-013"):
+        store.open_cases()
+
+
+def test_create_case_refuses_to_overwrite_an_existing_record():
+    """`attribute_not_exists(sk)`, and the row is genuinely untouched.
+
+    Checking only that the second call raised would pass against a store that
+    wrote the row and then raised. The ledger, escalation, and decision history
+    for a case live in the same partition, so an overwritten record would leave
+    one family's history attached to another's facts.
+    """
+    store = _dynamo_store([])
+    store.create_case(_new_case("c-013", cert_end=date(2026, 10, 20)))
+    before = dict(store._client.items[("CASE#c-013", naming.RECORD_SK)])
+    with pytest.raises(CaseAlreadyExists, match="c-013"):
+        store.create_case(_new_case("c-013", cert_end=date(2030, 1, 1)))
+    assert store._client.items[("CASE#c-013", naming.RECORD_SK)] == before
+    assert store.get("c-013").cert_end == date(2026, 10, 20)
+
+
+def test_a_write_failure_that_is_not_a_conflict_is_not_reported_as_one():
+    """A taken case id is a 409 the caseworker can fix; an outage is a 503 they
+    cannot. Collapsing the two would tell a caseworker their id was taken during
+    a throttling incident, and they would keep inventing new ones."""
+
+    class Throttled(FakeTable):
+        def put_item(self, TableName, Item, ConditionExpression=None):
+            if ConditionExpression is None:
+                return super().put_item(TableName=TableName, Item=Item)
+            raise ClientError(
+                {"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "x"}},
+                "PutItem",
+            )
+
+    store = DynamoDBCaseStore([], table_name="grace-cases-test", client=Throttled())
+    with pytest.raises(ClientError):
+        store.create_case(_new_case("c-013"))
+
+
+def test_create_case_writes_the_directory_row_before_the_record():
+    """The ordering is a safety property, so it is asserted rather than trusted.
+
+    Two puts cannot be made atomic without `TransactWriteItems`, whose
+    permissions neither the runtime role nor the dashboard's compute role holds,
+    so one partial failure has to be chosen. This one is visible.
+    """
+    order: list[str] = []
+
+    class Recording(FakeTable):
+        def put_item(self, TableName, Item, ConditionExpression=None):
+            order.append(Item["sk"]["S"])
+            return super().put_item(
+                TableName=TableName, Item=Item, ConditionExpression=ConditionExpression
+            )
+
+    store = DynamoDBCaseStore([], table_name="grace-cases-test", client=Recording())
+    store.create_case(_new_case("c-013"))
+    assert order == ["CASE#c-013", naming.RECORD_SK]
+
+
+def test_a_ledger_row_can_be_written_for_a_case_that_exists_only_in_the_table():
+    """Otherwise the audit trail would be empty for exactly the household that
+    most needs one: the newly submitted case Grace has just run on."""
+    store = _dynamo_store([])
+    store.create_case(_new_case("c-013"))
+    store.append_ledger(
+        LedgerEntry(case_id="c-013", at=AT, kind="tool_call", detail={"tool": "read_case"})
+    )
+    assert [e.kind for e in store.ledger("c-013")] == ["tool_call"]
+
+
+def test_a_case_created_after_the_store_was_built_is_still_rejected_if_absent():
+    """Positive results are cached, absences are not.
+
+    Caching an absence would make a case created later in the same process
+    permanently unable to write a ledger row; caching a presence can only save a
+    GetItem, because nothing here deletes a record and `create_case` refuses to
+    overwrite one.
+    """
+    store = _dynamo_store([])
+    with pytest.raises(KeyError):
+        store.append_ledger(
+            LedgerEntry(case_id="c-013", at=AT, kind="tool_call", detail={"tool": "read_case"})
+        )
+    store.create_case(_new_case("c-013"))
+    store.append_ledger(
+        LedgerEntry(case_id="c-013", at=AT, kind="tool_call", detail={"tool": "read_case"})
+    )
+    assert len(store.ledger("c-013")) == 1
+
+
+def test_a_record_row_is_not_returned_as_a_ledger_entry():
+    """`ledger()` filters on the `LEDGER#` prefix, so the new row kind cannot
+    surface as an audit entry. Verified rather than assumed, as the plan asks —
+    a record row has no `kind` attribute and would break the read."""
+    store = _dynamo_store([])
+    store.create_case(_new_case("c-013"))
+    store.append_ledger(
+        LedgerEntry(case_id="c-013", at=AT, kind="tool_call", detail={"tool": "read_case"})
+    )
+    assert [e.kind for e in store.ledger("c-013")] == ["tool_call"]
+    assert ("CASE#c-013", naming.RECORD_SK) in store._client.items
+
+
+def test_no_new_row_kind_carries_the_escalation_queue_keys():
+    """The GSI is sparse on `status`/`escalated_at`. A record or directory row
+    carrying either would put a phantom household in the caseworker's queue —
+    the one page the product exists for."""
+    store = _dynamo_store([])
+    store.create_case(_new_case("c-013"))
+    for key, item in store._client.items.items():
+        assert "status" not in item, key
+        assert "escalated_at" not in item, key
+
+
+def test_a_stored_record_carries_no_household_identity():
+    """The seeding path, end to end: every fixture household written through
+    `create_case` and the whole table searched for what a record must never
+    hold."""
+    cases = load_fixture_cases()
+    store = _dynamo_store([])
+    for case in cases:
+        store.create_case(case)
+    written = repr(store._client.items)
+    checked = 0
+    for case in cases:
+        for secret in (
+            case.household.display_name,
+            case.household.phone,
+            case.household.household_id,
+        ):
+            assert secret not in written, f"{case.case_id}: {secret}"
+        checked += 1
+    assert checked == 12
+    assert "+1555" not in written

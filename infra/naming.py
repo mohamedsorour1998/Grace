@@ -102,3 +102,32 @@ def escalation_sk(at: datetime) -> str:
     """Sort key for a pending-caseworker row. One escalation per case per
     moment, so no sequence is needed."""
     return f"ESCALATION#{_utc_stamp(at, 'escalation_sk')}"
+
+
+# The case record's sort key, under the same `CASE#<id>` partition as that
+# case's ledger. One row per case, and the version is in the key rather than in
+# an attribute so a future v2 shape is a *new row* that an old reader simply
+# does not match — rather than a changed row an old reader misparses.
+#
+# `ledger()` filters on the `LEDGER#` prefix and the escalation GSI is sparse on
+# `status`/`escalated_at`, which this row does not carry, so a record row
+# reaches neither. Both are asserted in `tests/test_dynamo_store.py` rather than
+# assumed.
+RECORD_SK = "RECORD#v1"
+
+# The one partition that enumerates every case. There is no index over "which
+# cases exist" and neither the runtime role nor the dashboard's compute role
+# holds `dynamodb:Scan` — deliberately, because a Scan bug could read the whole
+# audit trail. So enumeration needs a partition of its own: one tiny row per
+# case, Queryable in a single key condition.
+#
+# Not `CASE#...`: a value that started with the same prefix would put the
+# directory inside a household's own partition. `readCase` in the dashboard
+# queries `pk = CASE#<id>`, so the two must not be able to collide.
+CASE_DIRECTORY_PK = "CASE_DIRECTORY"
+
+
+def directory_sk(case_id: str) -> str:
+    """Sort key for one case's directory entry. Sorts by case id, which is the
+    order `open_cases()` returns and the order the fixtures are written in."""
+    return f"CASE#{case_id}"

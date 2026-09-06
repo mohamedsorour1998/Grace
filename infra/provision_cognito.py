@@ -15,6 +15,7 @@ with its written reason.
 from __future__ import annotations
 
 import secrets
+import time
 
 import boto3
 from botocore.exceptions import ClientError
@@ -24,6 +25,73 @@ from infra import naming
 POOL_NAME = "grace-caseworkers"
 CLIENT_NAME = "grace-dashboard"
 DOMAIN_PREFIX = "grace-caseworkers"
+
+# Grace's own sign-in host. The alternative considered and rejected was a
+# hand-built Next.js login page: that would post the caseworker's password to a
+# Grace route handler and call `InitiateAuth` server-side, which moves the
+# credential through Grace's servers and turns a page into a password-guessing
+# surface. A custom *domain* buys the same thing — a sign-in page that looks like
+# Grace — while leaving the credential exchange entirely inside Cognito. Prefer
+# the option that does not enlarge the credential surface.
+CUSTOM_DOMAIN = "auth.rosettacloud.app"
+
+# **The prefix domain is kept, deliberately.** A pool may hold one prefix domain
+# and one custom domain at the same time, and keeping `grace-caseworkers` means a
+# problem with the custom domain — a certificate, a CloudFront propagation delay,
+# a DNS mistake — does not leave the demo with no working sign-in. It still
+# serves `ManagedLoginVersion: 1`, which is what `HOSTED_UI_CSS` styles, so that
+# constant is load-bearing rather than dead code.
+#
+# One documented consequence, so nobody reads it as a fault: with both domains
+# present Cognito serves `/.well-known/openid-configuration` only on the custom
+# one. That does not touch `verifySession`, whose JWKS lives on the API host
+# (`cognito-idp.<region>.amazonaws.com/<pool>/.well-known/jwks.json`) rather than
+# on either sign-in domain — measured, not assumed; see the docstring on
+# `custom_domain_config`.
+
+# `1` is the classic hosted UI (fixed `*-customizable` CSS classes and nothing
+# else). `2` is managed login: a real settings document, so the sign-in page can
+# carry Grace's palette rather than approximate it.
+MANAGED_LOGIN_VERSION = 2
+CLASSIC_LOGIN_VERSION = 1
+
+# The certificate must live in **`us-east-1`** regardless of where the pool is.
+# Cognito attaches it to a CloudFront distribution, which is global, and CloudFront
+# reads certificates only from `us-east-1`. The pool happens to be there too, which
+# is exactly what would make a region bug invisible in this account and fatal in
+# another — so the constant is explicit rather than `naming.REGION`.
+CERTIFICATE_REGION = "us-east-1"
+
+# `rosettacloud.app`, which already resolves. A Cognito custom domain requires the
+# *parent* domain to have an A record; without one `CreateUserPoolDomain` fails
+# with a message about the domain rather than about DNS.
+HOSTED_ZONE_ID = "Z08385903PVEGWMREU7F7"
+
+# The fixed hosted-zone id every CloudFront alias target uses, in every account and
+# every region. It is not the distribution's zone and it is not lookup-able — this
+# literal is the documented value.
+CLOUDFRONT_ALIAS_ZONE_ID = "Z2FDTNDATAQYW2"
+
+# Grace's palette, named once. `HOSTED_UI_CSS` (v1) and `branding_settings()` (v2)
+# both render from these, so the two sign-in pages cannot drift apart — and a test
+# reads the same six values out of `web/app/globals.css`, which is the only check
+# that catches the app itself moving.
+PALETTE = {
+    "paper": "#FAF9F7",
+    "ink": "#1C1F23",
+    "muted": "#6B7280",
+    "rule": "#E5E3DF",
+    "escalate": "#B4530A",
+    "error": "#9B2C2C",
+}
+
+# The form's own surface: a plain white card on the paper ground. Kept *out* of
+# `PALETTE` because it is not one of the dashboard's brand tokens —
+# `web/app/globals.css` declares no `--color-white`, and the test that reads the
+# six brand colours out of that stylesheet would fail on a value it never had.
+FORM_WHITE = "#FFFFFF"
+
+COLOURS = {**PALETTE, "white": FORM_WHITE}
 
 # The claim `verifySession` requires. Declared in the pool schema, set on the
 # user at creation, and asserted in the ID token — a user who signs in without
@@ -37,15 +105,18 @@ ROLE_VALUE = "caseworker"
 SEED_USERNAME = "caseworker-01"
 
 
-# The hosted UI's palette, so sign-in does not look like a different product than
-# the dashboard it guards. Values are Grace's own, from `web/app/globals.css` —
-# keep the two in step, or the login page drifts away from the app again.
+# The **fallback** sign-in page's palette, so neither sign-in page looks like a
+# different product than the dashboard it guards. Values are Grace's own, from
+# `web/app/globals.css` — keep the two in step, or the login page drifts away
+# from the app again.
 #
 # This is the **classic hosted UI** (`ManagedLoginVersion: 1`), which exposes a
 # fixed set of `*-customizable` classes and nothing more: colours, the logo, and
-# button styling. Managed login v2 offers real layout control, but it changes the
-# sign-in URL shape, so `hostedUiUrl`'s `/login` path and the whole OAuth round
-# trip would need re-testing. Not worth it for a cosmetic gain.
+# button styling. It is what the `grace-caseworkers` prefix domain still serves.
+# **Do not delete it because managed login v2 shipped** — the prefix domain is the
+# fallback if the custom domain has trouble, and an unstyled fallback is one a
+# caseworker would not recognise. `branding_settings()` is the v2 equivalent, and
+# both render from `PALETTE`.
 #
 # Verified served rather than merely stored: the page links
 # `.../<pool>/<client>/<cssVersion>/assets/CSS/custom-css.css` from CloudFront,
@@ -124,6 +195,193 @@ HOSTED_UI_CSS = """
   padding-top: 12px;
 }
 """
+
+
+def rgba(name: str, alpha: str = "ff") -> str:
+    """A `PALETTE` colour in the form managed login wants: `rrggbbaa`, no `#`.
+
+    Every colour in the branding document is eight hex digits with an alpha byte
+    — measured off the Cognito-provided defaults, which are uniformly
+    `0972d3ff`-shaped. A six-digit value is not rejected; it is *ignored*, and
+    the component silently keeps Cognito's default colour. So the conversion
+    lives in one function with one test rather than in twenty string literals,
+    for the same reason `_most_recent` is imported rather than reimplemented.
+
+    Raises on an unknown name so a typo is a provisioning failure rather than a
+    component that quietly stays blue.
+    """
+    value = COLOURS[name]
+    return f"{value.lstrip('#').lower()}{alpha}"
+
+
+def branding_settings() -> dict:
+    """Managed login v2's settings document, in Grace's palette.
+
+    v2 replaces v1's `*-customizable` CSS classes with a JSON document over three
+    namespaces — `components` (the named parts of the page), `componentClasses`
+    (things that recur, like every input), and `categories` (layout and which
+    chrome is on). Anything omitted falls back to Cognito's default, which is why
+    this is a partial document rather than the full 449-line merged one:
+    re-stating a default would freeze it, and the only values worth pinning are
+    the ones that are Grace's rather than AWS's.
+
+    `colorSchemeMode: "LIGHT"` is set explicitly. The dashboard has one palette
+    and no dark mode, so leaving the sign-in page browser-adaptive would give a
+    caseworker on a dark-mode laptop a dark sign-in page in front of a light app.
+    """
+    return {
+        "categories": {
+            "global": {
+                "colorSchemeMode": "LIGHT",
+                "pageHeader": {"enabled": False},
+                "pageFooter": {"enabled": False},
+                "spacingDensity": "REGULAR",
+            },
+            "form": {
+                "location": {"horizontal": "CENTER", "vertical": "CENTER"},
+                "sessionTimerDisplay": "NONE",
+                "languageSelector": {"enabled": False},
+                # Cognito's stock illustration, on by default. It is a stock
+                # illustration of nothing in particular, and this page guards a
+                # benefits caseload.
+                "displayGraphics": False,
+            },
+        },
+        "components": {
+            "pageBackground": {
+                "image": {"enabled": False},
+                "lightMode": {"color": rgba("paper")},
+            },
+            "pageText": {
+                "lightMode": {
+                    "headingColor": rgba("ink"),
+                    "bodyColor": rgba("ink"),
+                    "descriptionColor": rgba("muted"),
+                },
+            },
+            "form": {
+                "lightMode": {
+                    "backgroundColor": rgba("white"),
+                    "borderColor": rgba("rule"),
+                },
+                "borderRadius": 8.0,
+                "backgroundImage": {"enabled": False},
+            },
+            "primaryButton": {
+                "lightMode": {
+                    "defaults": {
+                        "backgroundColor": rgba("ink"),
+                        "textColor": rgba("paper"),
+                    },
+                    # Escalate-orange on hover, the same accent the dashboard
+                    # uses for the three households waiting on a human.
+                    "hover": {
+                        "backgroundColor": rgba("escalate"),
+                        "textColor": rgba("white"),
+                    },
+                    "active": {
+                        "backgroundColor": rgba("escalate"),
+                        "textColor": rgba("white"),
+                    },
+                },
+            },
+            "secondaryButton": {
+                "lightMode": {
+                    "defaults": {
+                        "backgroundColor": rgba("white"),
+                        "borderColor": rgba("rule"),
+                        "textColor": rgba("ink"),
+                    },
+                    "hover": {
+                        "backgroundColor": rgba("paper"),
+                        "borderColor": rgba("escalate"),
+                        "textColor": rgba("escalate"),
+                    },
+                    "active": {
+                        "backgroundColor": rgba("paper"),
+                        "borderColor": rgba("escalate"),
+                        "textColor": rgba("escalate"),
+                    },
+                },
+            },
+            "alert": {
+                "lightMode": {
+                    "error": {
+                        "backgroundColor": rgba("white"),
+                        "borderColor": rgba("error"),
+                    },
+                },
+                "borderRadius": 6.0,
+            },
+        },
+        "componentClasses": {
+            # **`statusIndicator`, not just `alert`.** Measured off the served
+            # theme stylesheet: `alert` sets the box around a failed sign-in, but
+            # `--color-text-status-error` — the message a caseworker who mistyped
+            # their password actually reads — comes from here. Styling only
+            # `alert` leaves Cognito's own red on the one element the page exists
+            # to show when something goes wrong.
+            "statusIndicator": {
+                "lightMode": {
+                    "error": {
+                        "backgroundColor": rgba("white"),
+                        "borderColor": rgba("error"),
+                        "indicatorColor": rgba("error"),
+                    },
+                },
+            },
+            # The "remember this device" checkbox. Left alone it is the last
+            # AWS blue on an otherwise Grace-coloured page — verified by
+            # grepping the served stylesheet for `0972d3` after a first pass
+            # that omitted this and `secondaryButton`.
+            "optionControls": {
+                "lightMode": {
+                    "defaults": {
+                        "backgroundColor": rgba("white"),
+                        "borderColor": rgba("rule"),
+                    },
+                    "selected": {
+                        "backgroundColor": rgba("ink"),
+                        "foregroundColor": rgba("paper"),
+                    },
+                },
+            },
+            "divider": {"lightMode": {"borderColor": rgba("rule")}},
+            "inputDescription": {"lightMode": {"textColor": rgba("muted")}},
+            "input": {
+                "lightMode": {
+                    "defaults": {
+                        "backgroundColor": rgba("white"),
+                        "borderColor": rgba("rule"),
+                    },
+                    "placeholderColor": rgba("muted"),
+                },
+                "borderRadius": 6.0,
+            },
+            "inputLabel": {"lightMode": {"textColor": rgba("ink")}},
+            "focusState": {"lightMode": {"borderColor": rgba("escalate")}},
+            "link": {
+                "lightMode": {
+                    "defaults": {"textColor": rgba("escalate")},
+                    "hover": {"textColor": rgba("ink")},
+                },
+            },
+            "buttons": {"borderRadius": 6.0},
+        },
+    }
+
+
+def custom_domain_config(certificate_arn: str) -> dict:
+    """The `CreateUserPoolDomain` arguments for the custom domain.
+
+    Kept as data so the two facts a test can actually pin — that the branding
+    version is 2 and that a certificate is attached — are checkable without AWS.
+    """
+    return {
+        "Domain": CUSTOM_DOMAIN,
+        "ManagedLoginVersion": MANAGED_LOGIN_VERSION,
+        "CustomDomainConfig": {"CertificateArn": certificate_arn},
+    }
 
 
 CLIENT_SPEC: dict = {
@@ -217,12 +475,256 @@ def pool_spec() -> dict:
     }
 
 
-def provision(client=None, callback_urls: list[str] | None = None) -> dict:
-    """Create the pool, client, domain, and one caseworker. Idempotent.
+def find_certificate(acm) -> dict | None:
+    """The usable certificate for `CUSTOM_DOMAIN`, or `None`.
 
-    Returns the four values the dashboard needs as environment variables.
+    Paginates, for the reason this file already pages twice: a missed page here
+    does not fail, it *requests a second certificate* — and then a later run
+    could attach whichever one it found first, leaving an unattached certificate
+    behind that nobody can tell from the live one.
+
+    Matches on the subject **and** on the subject-alternative names, because
+    `auth.rosettacloud.app` may perfectly well arrive as a SAN on some later
+    certificate for the parent domain. Matching the subject alone would then
+    request a duplicate for a name that is already covered.
+
+    An `ISSUED` certificate wins over a `PENDING_VALIDATION` one; anything
+    `FAILED`, `EXPIRED`, `REVOKED`, or `INACTIVE` is ignored rather than
+    returned, because `CreateUserPoolDomain` refuses those with an error that
+    names the certificate and not its state.
+    """
+    usable: dict[str, dict] = {}
+    token: str | None = None
+    while True:
+        kwargs: dict = {"MaxItems": 100}
+        if token:
+            kwargs["NextToken"] = token
+        page = acm.list_certificates(**kwargs)
+        for summary in page.get("CertificateSummaryList", []):
+            names = {summary.get("DomainName")}
+            names.update(summary.get("SubjectAlternativeNameSummaries") or [])
+            if CUSTOM_DOMAIN not in names:
+                continue
+            status = str(summary.get("Status") or "")
+            if status in {"ISSUED", "PENDING_VALIDATION"}:
+                usable.setdefault(status, summary)
+        token = page.get("NextToken")
+        if not token:
+            break
+    return usable.get("ISSUED") or usable.get("PENDING_VALIDATION")
+
+
+def validation_change_batch(record: dict) -> dict:
+    """The Route 53 change that proves domain control to ACM."""
+    return {
+        "Comment": f"ACM DNS validation for {CUSTOM_DOMAIN}",
+        "Changes": [
+            {
+                # UPSERT, not CREATE: re-running must converge rather than fail
+                # on a record a previous run already wrote.
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                    "Name": record["Name"],
+                    "Type": record["Type"],
+                    "TTL": 300,
+                    "ResourceRecords": [{"Value": record["Value"]}],
+                },
+            }
+        ],
+    }
+
+
+def ensure_certificate(acm=None, route53=None, poll_seconds: float = 5.0) -> str:
+    """Find or request the `auth.rosettacloud.app` certificate. Returns its ARN.
+
+    Only returns on `ISSUED`. **Do not relax this to accept
+    `PENDING_VALIDATION`:** `CreateUserPoolDomain` refuses an unissued
+    certificate, and the error it raises names the certificate rather than the
+    validation state, so the failure reads as "wrong certificate" and sends the
+    next person looking in the wrong place.
+    """
+    acm = acm or boto3.client("acm", region_name=CERTIFICATE_REGION)
+    route53 = route53 or boto3.client("route53")
+
+    found = find_certificate(acm)
+    if found is None:
+        arn = acm.request_certificate(
+            DomainName=CUSTOM_DOMAIN,
+            ValidationMethod="DNS",
+            Tags=[{"Key": k, "Value": v} for k, v in naming.TAGS.items()],
+        )["CertificateArn"]
+    else:
+        arn = found["CertificateArn"]
+        if found.get("Status") == "ISSUED":
+            return arn
+
+    # ACM computes the validation record asynchronously, so a `describe` issued
+    # immediately after `request` comes back with `DomainValidationOptions`
+    # present and `ResourceRecord` absent. Poll for it rather than reading a
+    # `KeyError` as a service failure.
+    record: dict | None = None
+    for _ in range(24):
+        detail = acm.describe_certificate(CertificateArn=arn)["Certificate"]
+        if detail.get("Status") == "ISSUED":
+            return arn
+        for option in detail.get("DomainValidationOptions", []):
+            if option.get("ResourceRecord"):
+                record = option["ResourceRecord"]
+                break
+        if record:
+            break
+        time.sleep(poll_seconds)
+    if record is None:
+        raise RuntimeError(
+            f"ACM never published a validation record for {CUSTOM_DOMAIN} "
+            f"({arn}); nothing to write to Route 53."
+        )
+
+    route53.change_resource_record_sets(
+        HostedZoneId=HOSTED_ZONE_ID, ChangeBatch=validation_change_batch(record)
+    )
+    acm.get_waiter("certificate_validated").wait(CertificateArn=arn)
+    return arn
+
+
+def ensure_custom_domain(client, pool_id: str, certificate_arn: str) -> str:
+    """Create-or-converge `auth.rosettacloud.app`. Returns the alias target.
+
+    The alias target is a CloudFront hostname; `Step 3` points DNS at it. Read
+    back from `DescribeUserPoolDomain` on the converge path rather than
+    remembered, because `UpdateUserPoolDomain` does not return it on every path
+    and a stale value would produce an alias record pointing at a distribution
+    that is no longer the domain's.
+    """
+    config = custom_domain_config(certificate_arn)
+    existing = _describe_domain(client, CUSTOM_DOMAIN)
+
+    if existing.get("UserPoolId"):
+        # **Refuse rather than converge if it belongs to somewhere else.** This
+        # account holds `astrolabe-paper-auth` and `rosettaclaw-live-auth`, and
+        # `UpdateUserPoolDomain` against another project's pool would repoint
+        # that project's sign-in at Grace's certificate.
+        if existing["UserPoolId"] != pool_id:
+            raise RuntimeError(
+                f"{CUSTOM_DOMAIN} is already attached to user pool "
+                f"{existing['UserPoolId']}, not {pool_id}."
+            )
+        client.update_user_pool_domain(UserPoolId=pool_id, **config)
+        existing = _describe_domain(client, CUSTOM_DOMAIN)
+        return str(existing["CloudFrontDistribution"])
+
+    return str(
+        client.create_user_pool_domain(UserPoolId=pool_id, **config)["CloudFrontDomain"]
+    )
+
+
+def _describe_domain(client, domain: str) -> dict:
+    """`DescribeUserPoolDomain`, flattened to a plain dict.
+
+    Cognito reports an absent domain two different ways depending on the call —
+    an empty `DomainDescription` on some paths and `ResourceNotFoundException`
+    on others — so both mean the same thing here.
+    """
+    try:
+        return dict(client.describe_user_pool_domain(Domain=domain).get(
+            "DomainDescription"
+        ) or {})
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ResourceNotFoundException":
+            return {}
+        raise
+
+
+def alias_change_batch(alias_target: str) -> dict:
+    """The Route 53 change that points `auth.rosettacloud.app` at CloudFront.
+
+    An **A alias**, not a CNAME: `auth.` is a subdomain so a CNAME would work,
+    but an alias costs nothing to resolve and follows the distribution if its
+    address changes.
+
+    `HostedZoneId` here is CloudFront's fixed global zone, never the zone the
+    record lives in. Putting `HOSTED_ZONE_ID` in both places is the mistake this
+    function exists to make impossible to write twice.
+    """
+    return {
+        "Comment": f"Cognito managed login for {CUSTOM_DOMAIN}",
+        "Changes": [
+            {
+                "Action": "UPSERT",
+                "ResourceRecordSet": {
+                    "Name": f"{CUSTOM_DOMAIN}.",
+                    "Type": "A",
+                    "AliasTarget": {
+                        "HostedZoneId": CLOUDFRONT_ALIAS_ZONE_ID,
+                        "DNSName": alias_target,
+                        # Cognito's distribution publishes no health check, and
+                        # an alias that evaluated one would fail closed to
+                        # NXDOMAIN — i.e. no sign-in page at all.
+                        "EvaluateTargetHealth": False,
+                    },
+                },
+            }
+        ],
+    }
+
+
+def ensure_dns_alias(route53, alias_target: str) -> None:
+    """Point the custom domain at its CloudFront distribution."""
+    route53.change_resource_record_sets(
+        HostedZoneId=HOSTED_ZONE_ID, ChangeBatch=alias_change_batch(alias_target)
+    )
+
+
+def ensure_branding(client, pool_id: str, client_id: str) -> str:
+    """Apply Grace's palette to managed login. Returns the branding style id.
+
+    A branding style is bound to an **app client**, not to a domain — so this one
+    style is what the v2 custom domain renders, while the v1 prefix domain keeps
+    reading `HOSTED_UI_CSS`. Both come from `PALETTE`, which is what keeps the
+    fallback from looking like a different product.
+
+    `UseCognitoProvidedValues` is never passed: it is mutually exclusive with
+    `Settings`, and passing it would silently mean "AWS blue".
+    """
+    settings = branding_settings()
+    try:
+        existing = client.describe_managed_login_branding_by_client(
+            UserPoolId=pool_id, ClientId=client_id
+        )["ManagedLoginBranding"]
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "ResourceNotFoundException":
+            raise
+        return str(
+            client.create_managed_login_branding(
+                UserPoolId=pool_id, ClientId=client_id, Settings=settings
+            )["ManagedLoginBranding"]["ManagedLoginBrandingId"]
+        )
+
+    branding_id = str(existing["ManagedLoginBrandingId"])
+    client.update_managed_login_branding(
+        UserPoolId=pool_id, ManagedLoginBrandingId=branding_id, Settings=settings
+    )
+    return branding_id
+
+
+def provision(
+    client=None,
+    callback_urls: list[str] | None = None,
+    acm=None,
+    route53=None,
+) -> dict:
+    """Create the pool, client, both domains, and one caseworker. Idempotent.
+
+    Returns the values the dashboard needs as environment variables. `domain` is
+    the **custom** domain, because that is what `COGNITO_DOMAIN` should be — and
+    `provision_amplify` reads exactly that key, so the switch propagates without
+    a second module having to know the hostname. `fallback_domain` is the prefix
+    domain, kept so the one edit that restores sign-in during a CloudFront
+    problem is visible rather than something to go and look up.
     """
     client = client or boto3.client("cognito-idp", region_name=naming.REGION)
+    acm = acm or boto3.client("acm", region_name=CERTIFICATE_REGION)
+    route53 = route53 or boto3.client("route53")
     callback_urls = callback_urls or ["http://localhost:3000/api/auth/callback"]
 
     # Find an existing Grace pool before creating one. `ListUserPools`
@@ -294,7 +796,9 @@ def provision(client=None, callback_urls: list[str] | None = None) -> dict:
         update = {k: v for k, v in spec.items() if k != "GenerateSecret"}
         client.update_user_pool_client(**update, ClientId=client_id)
 
-    # The hosted UI domain. One API call, and it saves building sign-in forms.
+    # The prefix hosted UI domain. One API call, and it saves building sign-in
+    # forms. **Still created, and never deleted** — see `CUSTOM_DOMAIN`: it is
+    # the fallback, and a pool may hold one of each.
     try:
         client.create_user_pool_domain(Domain=DOMAIN_PREFIX, UserPoolId=pool_id)
     except ClientError as exc:
@@ -303,6 +807,14 @@ def provision(client=None, callback_urls: list[str] | None = None) -> dict:
             "AliasExistsException",
         }:
             raise
+
+    # And Grace's own. Three steps that must happen in this order: a certificate
+    # that is already `ISSUED`, then the domain (which mints a CloudFront
+    # distribution), then DNS pointing at that distribution. Reversing any two
+    # produces an error naming the wrong thing.
+    certificate_arn = ensure_certificate(acm, route53)
+    alias_target = ensure_custom_domain(client, pool_id, certificate_arn)
+    ensure_dns_alias(route53, alias_target)
 
     # One caseworker, with the role claim. A generated password printed once.
     try:
@@ -339,10 +851,25 @@ def provision(client=None, callback_urls: list[str] | None = None) -> dict:
         UserPoolId=pool_id, ClientId=client_id, CSS=HOSTED_UI_CSS
     )
 
+    # And managed login's, for the same reason and with the same discipline: not
+    # wrapped in a `try`, because a run that reports success while the sign-in
+    # page is AWS blue is a run nobody re-does.
+    ensure_branding(client, pool_id, client_id)
+
     return {
         "pool_id": pool_id,
         "client_id": client_id,
-        "domain": f"https://{DOMAIN_PREFIX}.auth.{naming.REGION}.amazoncognito.com",
+        "domain": f"https://{CUSTOM_DOMAIN}",
+        "fallback_domain": (
+            f"https://{DOMAIN_PREFIX}.auth.{naming.REGION}.amazoncognito.com"
+        ),
+        # **Unchanged by the domain switch, and that is the point.** The issuer
+        # is the pool's API URL, so the JWKS `verifySession` fetches lives on
+        # `cognito-idp.<region>.amazonaws.com` rather than on either sign-in
+        # host — a token minted through the new domain verifies against exactly
+        # the same key set as one minted through the old. Measured live rather
+        # than reasoned about: the `iss` claim in a real ID token obtained via
+        # `auth.rosettacloud.app` is this string.
         "issuer": f"https://cognito-idp.{naming.REGION}.amazonaws.com/{pool_id}",
     }
 

@@ -51,17 +51,23 @@ const DECISION = "DECISION#";
 const PENDING = "PENDING_CASEWORKER";
 const FILED = "renewal_submitted";
 
-/** The caseload, as a constant rather than as a discovered set.
+/** The twelve households `fixtures/households.yaml` seeds, as a constant.
  *
- *  There is no index over "every case", and the SSR role deliberately holds no
- *  `dynamodb:Scan` — a bug with Scan could read all 643 ledger rows, and the
- *  audit trail is the one thing this project rests on. So enumeration has to
- *  come from somewhere, and a named constant that is visibly wrong when the
- *  caseload changes is better than a permission that is invisibly dangerous. */
-export const CASE_IDS: readonly string[] = Array.from(
+ *  Still a constant, and still for the original reason: there is no index over
+ *  "every case" and the SSR role deliberately holds no `dynamodb:Scan`, because
+ *  a bug with Scan could read the whole audit trail. What changed in Plan 4 is
+ *  that this is no longer the *whole* caseload — a case submitted through
+ *  `/new` is discovered from the directory partition below. This list survives
+ *  as the floor: the twelve the demo's evidence rests on are listed even before
+ *  seeding has run, so a dashboard cannot come up showing an empty caseload
+ *  because one provisioning step was skipped. */
+export const SEEDED_CASE_IDS: readonly string[] = Array.from(
   { length: 12 },
   (_, n) => `c-${String(n + 1).padStart(3, "0")}`,
 );
+
+/** The partition that enumerates every case record. See `infra/naming.py`. */
+const CASE_DIRECTORY_PK = "CASE_DIRECTORY";
 
 /** Refuse to spin. 643 rows live in the whole table today and the largest
  *  single case holds 72, so any real query finishes in one page; a hundred is
@@ -185,6 +191,38 @@ export async function listQueue(client: DynamoDBClient = defaultClient()): Promi
     .sort((a, b) => a.deadline.localeCompare(b.deadline) || a.caseId.localeCompare(b.caseId));
 }
 
+/** Every case id, from the directory partition and the seeded twelve.
+ *
+ *  A **union**, so neither source can shrink the caseload: a household seeded
+ *  into the table but somehow missing from the directory is still listed, and a
+ *  case submitted through `/new` appears without anyone editing a constant.
+ *  `grace/cases/dynamo_store.py`'s `open_cases()` unions the same two sources
+ *  for the same reason, so the dashboard and the agent enumerate alike.
+ *
+ *  **A read failure propagates rather than falling back to the twelve.** That
+ *  is deliberate and it is the same call `readEnv()` sitting outside `readCase`'s
+ *  `try` already makes: a page that quietly rendered a shorter caseload would
+ *  look healthy while hiding households, and a caseworker cannot tell a caseload
+ *  of twelve from a caseload of thirteen with one silently dropped. A page that
+ *  errors is recoverable; a page that under-reports is not. */
+export async function listCaseIds(
+  client: DynamoDBClient = defaultClient(),
+): Promise<string[]> {
+  const env = readEnv();
+  const rows = await queryAll(client, {
+    TableName: env.tableName,
+    KeyConditionExpression: "pk = :pk",
+    ExpressionAttributeValues: { ":pk": { S: CASE_DIRECTORY_PK } },
+    ScanIndexForward: true,
+  });
+  const ids = new Set<string>(SEEDED_CASE_IDS);
+  for (const row of rows) {
+    const id = str(row.case_id);
+    if (id !== "") ids.add(id);
+  }
+  return [...ids].sort();
+}
+
 /** Every case the ledger knows about, for the sweep summary. */
 export async function listCases(client: DynamoDBClient = defaultClient()): Promise<CaseSummary[]> {
   // Read each case rather than merging `listQueue` with a per-case pass. One
@@ -193,7 +231,9 @@ export async function listCases(client: DynamoDBClient = defaultClient()): Promi
   // the ledger — which is what hard rule 6 is actually about. Concurrent
   // because twelve sequential round trips is twelve times the page latency for
   // no benefit; the reads are independent.
-  const details = await Promise.all(CASE_IDS.map(id => readCase(id, client)));
+  const details = await Promise.all(
+    (await listCaseIds(client)).map(id => readCase(id, client)),
+  );
   return details
     .filter((d): d is CaseDetail => d !== null)
     .map(d => d.summary)

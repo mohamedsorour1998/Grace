@@ -107,6 +107,14 @@ function fallbackDetail(c: CaseSummary): string {
     // its negation. `renewal_submitted` is also the ledger row's actual name.
     return "This run reached no outcome — no renewal was submitted and nothing escalated. Re-run the sweep.";
   }
+  if (c.status === "new") {
+    // Hard rule 6 at the newest boundary. A case submitted through `/new` has a
+    // record and no ledger, and the honest sentence says so: no sweep has looked
+    // at it. The `error` wording — "this run reached no outcome, re-run the
+    // sweep" — would be a false claim about a run that never happened, which is
+    // exactly why `new` exists as a separate status rather than reusing `error`.
+    return "Submitted, and no sweep has evaluated it yet. Grace will pick it up on its next run.";
+  }
   if (c.status === "escalated") {
     // An escalated case with no reason. `filed` is deliberately not consulted:
     // from `listQueue` it is `false` by construction (the GSI projects
@@ -128,6 +136,12 @@ function fallbackDetail(c: CaseSummary): string {
  *  error rather than a silent inheritance of `acted`'s green. */
 export function statusTone(status: CaseStatus): string {
   switch (status) {
+    case "new":
+      // Muted, not green and not orange. A submitted case has had no sweep, so
+      // it has earned neither the reassurance of `acted` nor the urgency of
+      // `escalated` — and colouring it either would state an outcome nobody
+      // reached.
+      return "text-muted";
     case "escalated":
       return "text-escalate";
     case "error":
@@ -140,6 +154,8 @@ export function statusTone(status: CaseStatus): string {
 /** The word a caseworker reads, in their vocabulary rather than the ledger's. */
 export function statusLabel(status: CaseStatus): string {
   switch (status) {
+    case "new":
+      return "Awaiting first sweep";
     case "escalated":
       return "Needs a human";
     case "error":
@@ -149,8 +165,10 @@ export function statusLabel(status: CaseStatus): string {
   }
 }
 
-function statusBadgeTone(status: CaseStatus): "escalate" | "acted" | "error" {
+function statusBadgeTone(status: CaseStatus): "escalate" | "acted" | "error" | "neutral" {
   switch (status) {
+    case "new":
+      return "neutral";
     case "escalated":
       return "escalate";
     case "error":
