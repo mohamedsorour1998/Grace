@@ -13,7 +13,7 @@ a human caseworker only when eligibility is genuinely in doubt.
 Built with the [Strands Agents SDK](https://strandsagents.com) and Amazon Bedrock AgentCore
 for the **AWS Agents for Humans Hackathon** (Good Neighbor track).
 
-> **Status: deployed and running on AWS.** A scheduled sweep of 12 synthetic households reports
+> **Status: deployed and running on AWS.** A scheduled sweep of the twelve seeded synthetic households reports
 > **9 filed autonomously, 3 escalated to a human**, confirmed from DynamoDB rather than from a log
 > line. A caseworker dashboard at **[grace.rosettacloud.app](https://grace.rosettacloud.app)** shows the
 > queue and lets a human decide — and approving the household with a missing document still files
@@ -281,7 +281,7 @@ endpoint.
 
 Three pages, all server-rendered: the sweep at a glance, the escalation queue, and one household's
 full audit trail with an approve/deny control. Verified live with a real Cognito ID token — `/`
-renders 12 households and the headline **"9 handled alone, 3 waiting on you"**, `/queue` shows exactly
+renders the twelve seeded households and the headline **"9 handled alone, 3 waiting on you"**, `/queue` shows exactly
 `c-010 c-011 c-012`, and `/case/c-010` shows the gate's own reason,
 `missing_document: proof_of_residency`.
 
@@ -382,7 +382,7 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m grace.run sweep --auto escalate   # local sweep
 ```
 
-The sweep runs 12 synthetic households. Nine are filed autonomously; three escalate —
+The sweep runs the twelve seeded synthetic households. Nine are filed autonomously; three escalate —
 one missing a document, one with a material income change, one with conflicting sources.
 
 Two suites, deliberately separate. `pytest` runs the fast unit suite — **715 tests**, no network.

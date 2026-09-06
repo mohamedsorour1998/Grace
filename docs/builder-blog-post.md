@@ -35,7 +35,7 @@ a 5% immaterial income band for Medicaid in New York, 6 months and 10% for SNAP.
 renewals that are unambiguous**, chases the one missing document by text, and wakes a human caseworker
 **only** when eligibility is genuinely in doubt.
 
-Across twelve households it handles **nine alone and escalates three**, each with a typed reason a
+Across the twelve seeded households it handles **nine alone and escalates three**, each with a typed reason a
 person can act on. Not "needs review", but the three reasons as they actually appear in the ledger:
 
 ```text
@@ -135,7 +135,7 @@ households never pay for any of it.
 ### Milestones
 
 The gate came first — a pure-Python authority module, table-tested exhaustively, before any agent
-existed. Then the local sweep (12 households, 9 filed / 3 escalated), the AgentCore deployment on an
+existed. Then the local sweep (twelve seeded households, 9 filed / 3 escalated), the AgentCore deployment on an
 EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Last, the safety claim executed
 against live infrastructure.
 

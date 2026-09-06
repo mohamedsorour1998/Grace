@@ -91,7 +91,7 @@ The ~17 million figure is 69% of 25 million — say "roughly" or "about", never 
 > Grace watches every household's renewal clock. It files the renewals that are unambiguous, chases
 > the one missing document by text, and wakes a human **only** when eligibility is genuinely in doubt.
 >
-> On twelve households it handles nine alone and escalates three — each with a typed reason.
+> On the twelve seeded households it handles nine alone and escalates three — each with a typed reason.
 
 `<replace this text by a screenshot of the architecture diagram from docs/architecture.png>`
 
@@ -101,7 +101,7 @@ The ~17 million figure is 69% of 25 million — say "roughly" or "about", never 
 
 Open **`https://grace.rosettacloud.app`**.
 
-> This is the caseworker's view. Twelve households, **nine handled alone, three waiting on a human.**
+> This is the caseworker's view. The twelve seeded households — **nine handled alone, three waiting on a human.**
 > Those numbers are read from the DynamoDB ledger, not from a log line.
 
 `<replace this text by a screenshot of the / page showing "9 handled alone" and "3 waiting on you">`
@@ -189,7 +189,7 @@ Re-measure before recording; do not read a stale number.
 
 | Claim | Source |
 |---|---|
-| 12 households, 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01` |
+| the twelve seeded households: 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01`. **Say "the twelve seeded households"** — the claim must stay true if anyone submits a case through the intake form. |
 | 9 acted / 3 escalated deployed | the `grace-sweep` Step Functions execution output |
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
 | 715 Python tests, 157 vitest | `pytest` and `vitest run` |
