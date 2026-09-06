@@ -37,10 +37,15 @@ export default async function NewCase() {
           could eventually repeat — so it holds none that could identify anyone.
         </p>
         <p>
-          <span className="font-medium text-ink">No documents are uploaded either.</span> Grace
-          records that a proof is on file and when it arrived — never the file. It checks whether
-          paperwork is complete and current, not whether it is authentic; that judgement stays with
-          the people who collected it.
+          <span className="font-medium text-ink">No files are stored anywhere.</span> A document
+          here is an id and a date — Grace tracks whether a required proof is present and still
+          current, never what it contains. Storing the file would also put back the identity above:
+          a proof of income carries a name, an address and an employer.
+        </p>
+        <p>
+          That means Grace takes a caseworker&rsquo;s word that a document exists. In a real
+          deployment that assertion would come from the eligibility system that received the file,
+          not from a checkbox — this form is where that integration would attach.
         </p>
         <p>
           All data in this deployment is <span className="font-medium text-ink">synthetic</span>.

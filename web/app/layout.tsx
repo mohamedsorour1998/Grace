@@ -7,17 +7,21 @@ export const metadata: Metadata = {
   description: "Renewals Grace filed, and the cases it refused to decide.",
 };
 
-/** Three destinations, because there are three things a caseworker does here:
- *  see what happened in the last sweep, work what is waiting on them, and add a
- *  household. Anything else would be navigation for its own sake.
+/** Named in the caseworker's vocabulary, not Grace's.
  *
- *  `/new` is in this list because a page nothing links to is a page nobody can
- *  use — the intake form shipped reachable only by typing the URL, which is
- *  indistinguishable from not having shipped it. */
+ *  "Sweep" and "Queue" were the internal words for these pages and neither says
+ *  what you get: a sweep is what the agent does, and a queue could be anything.
+ *  The page headline already reads "9 handled alone, 3 waiting on you", so the
+ *  nav uses the same words the product already speaks.
+ *
+ *  "Add case" is first because it is the one thing here a caseworker *starts*
+ *  rather than reviews. And `/new` is in this list at all because a page nothing
+ *  links to is a page nobody can use — the intake form shipped reachable only by
+ *  typing the URL, which is indistinguishable from not having shipped it. */
 const NAV = [
-  { href: "/", label: "Sweep" },
-  { href: "/queue", label: "Queue" },
   { href: "/new", label: "Add case" },
+  { href: "/", label: "All households" },
+  { href: "/queue", label: "Waiting on you" },
 ];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -43,6 +47,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </Link>
               ))}
             </nav>
+            <a
+              href="/api/auth/logout"
+              className="ml-auto font-mono text-xs text-muted underline decoration-transparent decoration-2 underline-offset-4 transition-colors hover:text-ink hover:decoration-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+            >
+              Sign out
+            </a>
           </div>
         </header>
         <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>

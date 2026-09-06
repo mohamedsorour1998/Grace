@@ -200,11 +200,12 @@ export function IntakeForm() {
               ))}
             </div>
             <p className="mt-2 text-xs text-muted">
-              <span className="font-medium text-ink">Nothing is uploaded here, on purpose.</span>{" "}
-              Grace records <em>that</em> a document is on file and when it arrived — never the
-              document itself. A proof of income carries a name, an address and an employer, so
-              storing one would put back exactly the identity this form refuses to collect. The file
-              stays with whoever collected it; Grace tracks the clock on it.
+              <span className="font-medium text-ink">There is no upload, and no file is stored
+              anywhere.</span>{" "}
+              A document in Grace is two facts — which kind it is, and the date it arrived. Ticking a
+              box records that a proof exists; Grace then reasons about the clock on it, whether it
+              is still current and whether a required one is missing. It never sees the document and
+              cannot check what it says.
             </p>
             <p className="mt-2 text-xs text-muted">
               Leave one unticked and Grace will escalate rather than file — which is the behaviour

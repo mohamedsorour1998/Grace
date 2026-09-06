@@ -306,6 +306,23 @@ record that referred the household, keyed by case id. `web/lib/intake.ts` refuse
 field **and** any field it does not recognise — an allowlist, so the guard cannot be walked around with
 a field name nobody anticipated.
 
+**Grace stores no documents, and there is no upload.** A document in Grace is two facts — which kind
+it is, and the date it arrived:
+
+```yaml
+- {id: "proof_of_income", received: "2026-09-20"}
+```
+
+That is the entire record. There is no S3 bucket and no file anywhere in the system. Grace reasons
+about the *clock* on a document — is it present, is it still inside the rule pack's freshness window,
+has it expired — and never about its contents.
+
+Two consequences worth stating rather than glossing. Storing the file would reintroduce exactly the
+identity the intake form refuses to collect: a proof of income carries a name, an address, and an
+employer. And **Grace takes the caseworker's word that the document exists** — it cannot verify the
+assertion. In a real deployment that assertion would arrive from the eligibility system that actually
+received the file, rather than from a checkbox; the intake form is where that integration attaches.
+
 Case records live in DynamoDB alongside the ledger, under a `RECORD#v1` sort key. That matters more
 than it sounds: before Plan 4 the records were seeded from `fixtures/households.yaml` into the
 container image at build time, so a form writing to DynamoDB would have rendered on the dashboard and
