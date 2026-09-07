@@ -214,6 +214,161 @@ def rgba(name: str, alpha: str = "ff") -> str:
     return f"{value.lstrip('#').lower()}{alpha}"
 
 
+def login_logo_svg() -> str:
+    """The dashboard's own masthead lockup, as the form's logo.
+
+    `web/app/layout.tsx` sets "Grace" in semibold sans beside "caseworker queue"
+    in mono, uppercase, letter-spaced. This is that lockup — the same two faces
+    from `globals.css`, the same two colours — so the sign-in card opens with the
+    exact wordmark the header shows a second later.
+
+    The font stacks are the app's, not a web font: an SVG asset cannot load one,
+    and both stacks resolve to whatever the caseworker's own system UI face is —
+    which is precisely what the dashboard renders too.
+    """
+    sans = (
+        "ui-sans-serif, system-ui, -apple-system, &apos;Segoe UI&apos;, "
+        "Helvetica, Arial, sans-serif"
+    )
+    mono = (
+        "ui-monospace, &apos;SF Mono&apos;, SFMono-Regular, Menlo, "
+        "Consolas, monospace"
+    )
+    return (
+        # 360×96 is 3.75:1. Managed login refuses a logo outside 1:1–4:1
+        # outright — measured: a 360×54 lockup (6.67:1) came back
+        # `Invalid file dimension` from `UpdateManagedLoginBranding`, so the
+        # ratio is a validated constraint rather than a rendering hint.
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 96" '
+        'width="360" height="96">'
+        f'<text x="180" y="52" text-anchor="middle" font-family="{sans}" '
+        f'font-size="31" font-weight="600" letter-spacing="-0.6" '
+        f'fill="{PALETTE["ink"]}">Grace</text>'
+        f'<text x="180" y="76" text-anchor="middle" font-family="{mono}" '
+        f'font-size="11" letter-spacing="1.9" '
+        f'fill="{PALETTE["muted"]}">CASEWORKER QUEUE</text>'
+        "</svg>"
+    )
+
+
+def login_favicon_svg() -> str:
+    """An ink tile with a paper G. The browser tab a caseworker signs in from
+    should not be the only Cognito-blue surface left in the product."""
+    sans = (
+        "ui-sans-serif, system-ui, -apple-system, &apos;Segoe UI&apos;, "
+        "Helvetica, Arial, sans-serif"
+    )
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" '
+        'width="64" height="64">'
+        f'<rect width="64" height="64" rx="14" fill="{PALETTE["ink"]}"/>'
+        f'<text x="32" y="45" text-anchor="middle" font-family="{sans}" '
+        f'font-size="38" font-weight="600" '
+        f'fill="{PALETTE["paper"]}">G</text>'
+        "</svg>"
+    )
+
+
+# The caseload the sign-in page is a door to. Twelve rows, nine quiet and three
+# accented — the demo's own split, drawn at texture opacity.
+BACKGROUND_ROWS = 12
+BACKGROUND_ESCALATIONS = 3
+
+
+def login_background_svg() -> str:
+    """The page background: Grace's own case table, ghosted back to a texture.
+
+    The complaint this answers is that the sign-in page had *no* background — a
+    flat `#FAF9F7` field behind a white card, which reads as an unstyled page
+    rather than a quiet one. Adding an unrelated stock image would have been the
+    easy fix and the wrong one: this page guards a benefits caseload, and
+    `branding_settings()` already turns Cognito's own illustration off for that
+    reason.
+
+    So the background *is* the after-login screen. Twelve rows of blocks in the
+    dashboard's column rhythm, a hairline under each, and a status pill at the
+    right of every one — nine in `muted`, three in `escalate`, which is the
+    9-acted/3-escalated split the whole product is about. Every colour comes from
+    `PALETTE`, so the test that reads `web/app/globals.css` covers this too.
+
+    Drawn at 1600×1000 and sliced rather than stretched (`xMidYMid slice`), so
+    the rows stay horizontal at any window shape. The centred form card covers
+    the middle columns; what a caseworker actually sees is the ruled structure
+    down both edges.
+    """
+    ink, muted, rule = PALETTE["ink"], PALETTE["muted"], PALETTE["escalate"]
+    parts = [
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" '
+        'width="1600" height="1000" preserveAspectRatio="xMidYMid slice">',
+        '<defs><linearGradient id="ground" x1="0" y1="0" x2="0.35" y2="1">',
+        f'<stop offset="0" stop-color="{PALETTE["paper"]}"/>',
+        f'<stop offset="1" stop-color="{PALETTE["rule"]}"/>',
+        "</linearGradient></defs>",
+        '<rect width="1600" height="1000" fill="url(#ground)"/>',
+        # The masthead: a wordmark block and its label, over the same rule the
+        # dashboard's header sits on.
+        f'<rect x="150" y="60" width="92" height="15" rx="3" fill="{ink}" '
+        'fill-opacity="0.16"/>',
+        f'<rect x="256" y="64" width="132" height="10" rx="3" fill="{muted}" '
+        'fill-opacity="0.13"/>',
+        f'<rect x="150" y="112" width="1300" height="1" fill="{ink}" '
+        'fill-opacity="0.10"/>',
+    ]
+    for index in range(BACKGROUND_ROWS):
+        y = 168 + index * 62
+        escalating = index >= BACKGROUND_ROWS - BACKGROUND_ESCALATIONS
+        pill_colour = rule if escalating else muted
+        pill_alpha = "0.18" if escalating else "0.09"
+        parts += [
+            f'<rect x="150" y="{y}" width="104" height="11" rx="3" fill="{ink}" '
+            'fill-opacity="0.12"/>',
+            f'<rect x="292" y="{y}" width="176" height="11" rx="3" '
+            f'fill="{ink}" fill-opacity="0.06"/>',
+            f'<rect x="508" y="{y}" width="112" height="11" rx="3" '
+            f'fill="{ink}" fill-opacity="0.06"/>',
+            f'<rect x="1246" y="{y - 7}" width="204" height="25" rx="12" '
+            f'fill="{pill_colour}" fill-opacity="{pill_alpha}"/>',
+            f'<rect x="150" y="{y + 32}" width="1300" height="1" fill="{ink}" '
+            'fill-opacity="0.07"/>',
+        ]
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def branding_assets() -> list[dict]:
+    """The three images managed login will actually serve.
+
+    Colours alone left the page looking unstyled — `pageBackground` and
+    `form.logo` are both *disabled by default*, so a settings document that only
+    names colours has nothing to show. These are what `branding_settings()`
+    switches on.
+
+    `ColorMode` is `LIGHT` on every one, matching `colorSchemeMode` below. An
+    asset uploaded under a mode the page never enters is stored and never
+    rendered — the same shape of failure as a six-digit colour.
+    """
+    return [
+        {
+            "Category": "PAGE_BACKGROUND",
+            "ColorMode": "LIGHT",
+            "Extension": "SVG",
+            "Bytes": login_background_svg().encode("utf-8"),
+        },
+        {
+            "Category": "FORM_LOGO",
+            "ColorMode": "LIGHT",
+            "Extension": "SVG",
+            "Bytes": login_logo_svg().encode("utf-8"),
+        },
+        {
+            "Category": "FAVICON_SVG",
+            "ColorMode": "LIGHT",
+            "Extension": "SVG",
+            "Bytes": login_favicon_svg().encode("utf-8"),
+        },
+    ]
+
+
 def branding_settings() -> dict:
     """Managed login v2's settings document, in Grace's palette.
 
@@ -248,8 +403,13 @@ def branding_settings() -> dict:
             },
         },
         "components": {
+            # **`enabled: True`, or the asset is stored and never drawn.** Both
+            # of these default to off, which is why a settings document made
+            # only of colours produced a page a caseworker described as having
+            # no background at all: `#FAF9F7` behind a white card is a 2% step,
+            # and the form's own identity was a heading Cognito wrote.
             "pageBackground": {
-                "image": {"enabled": False},
+                "image": {"enabled": True},
                 "lightMode": {"color": rgba("paper")},
             },
             "pageText": {
@@ -265,8 +425,25 @@ def branding_settings() -> dict:
                     "borderColor": rgba("rule"),
                 },
                 "borderRadius": 8.0,
+                # The card keeps a flat surface — the texture belongs to the
+                # ground behind it, and two competing textures is how a quiet
+                # page stops being quiet.
                 "backgroundImage": {"enabled": False},
+                # Grace's wordmark, inside the card and above the fields, so the
+                # first thing on the page is the product rather than a generic
+                # "Sign in". `IN` keeps it on the card's white; `OUT` would put
+                # ink text over the ghosted table and lose contrast.
+                "logo": {
+                    "enabled": True,
+                    "location": "CENTER",
+                    "position": "TOP",
+                    "formInclusion": "IN",
+                },
             },
+            # Cognito serves both types from one upload slot each; naming only
+            # SVG here means the ICO slot is not advertised for an asset that
+            # was never uploaded.
+            "favicon": {"enabledTypes": ["SVG"]},
             "primaryButton": {
                 "lightMode": {
                     "defaults": {
@@ -687,6 +864,7 @@ def ensure_branding(client, pool_id: str, client_id: str) -> str:
     `Settings`, and passing it would silently mean "AWS blue".
     """
     settings = branding_settings()
+    assets = branding_assets()
     try:
         existing = client.describe_managed_login_branding_by_client(
             UserPoolId=pool_id, ClientId=client_id
@@ -696,13 +874,19 @@ def ensure_branding(client, pool_id: str, client_id: str) -> str:
             raise
         return str(
             client.create_managed_login_branding(
-                UserPoolId=pool_id, ClientId=client_id, Settings=settings
+                UserPoolId=pool_id, ClientId=client_id,
+                Settings=settings, Assets=assets,
             )["ManagedLoginBranding"]["ManagedLoginBrandingId"]
         )
 
     branding_id = str(existing["ManagedLoginBrandingId"])
+    # `Assets` is sent on the converge path too. `branding_settings()` switches
+    # the background and the logo on, so a run that updated only `Settings`
+    # would leave the page asking for two images that were never uploaded —
+    # enabled and empty, which is worse than the flat page it replaced.
     client.update_managed_login_branding(
-        UserPoolId=pool_id, ManagedLoginBrandingId=branding_id, Settings=settings
+        UserPoolId=pool_id, ManagedLoginBrandingId=branding_id,
+        Settings=settings, Assets=assets,
     )
     return branding_id
 

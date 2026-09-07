@@ -198,7 +198,7 @@ Re-measure before recording; do not read a stale number.
 | the twelve seeded households: 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01`. **Say "the twelve seeded households"** — the claim must stay true if anyone submits a case through the intake form. |
 | 9 acted / 3 escalated deployed | the `grace-sweep` Step Functions execution output |
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
-| 863 Python tests, 210 vitest | `pytest` and `vitest run` — re-measure, these move every plan |
+| 865 Python tests, 211 vitest | `pytest` and `vitest run` — re-measure, these move every plan |
 | 23 trajectory evals | `pytest evals/ --co -q` — they cost real Bedrock to run |
 | approving `c-010` files nothing | its decision + outcome rows, and zero `renewal_submitted` rows |
 | four AgentCore surfaces | Runtime, Memory, Identity, harness — Gateway is deferred |

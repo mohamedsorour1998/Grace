@@ -1865,6 +1865,28 @@ nature — it replaces whatever CSS is there). A test asserts all six colours an
 `*-customizable` classes, and it was watched failing on a changed hex value; without it, a colour
 changed in one place and not the other is invisible until someone opens both pages.
 
+**A managed login v2 settings document made only of colours produces a page that reads as
+unstyled, and the branding call returns 200 either way.** `pageBackground.image` and `form.logo`
+both default to `enabled: False` in Cognito's own document, so colours alone left `#FAF9F7` behind
+a white card — a 2% step, no wordmark, and a heading Cognito wrote. Three images now ship
+(`branding_assets()`): a `PAGE_BACKGROUND` that is Grace's own case table ghosted back to a texture
+— twelve rows, nine `muted` pills and three `escalate`, the demo's split drawn at ~9–18% opacity —
+a `FORM_LOGO` carrying the dashboard masthead's exact lockup, and a `FAVICON_SVG`. All three are
+generated from `PALETTE`, so the test that reads `web/app/globals.css` covers them too, and
+`test_an_uploaded_image_is_also_switched_on` checks the asset and its `enabled` flag **as a pair** —
+an asset stored with its switch off is the same silent failure as a six-digit colour.
+
+**Three constraints on managed login assets, each measured off a rejection rather than the docs.**
+The SVG sanitiser refuses `role` and `aria-label` on the root element (`element [svg#role] is not
+allowed`) — so these SVGs carry no ARIA, which is why `PAGE_BACKGROUND` is decorative and the logo's
+name is also the form's own heading. A `FORM_LOGO` must be between **1:1 and 4:1**: a 360×54 lockup
+came back `Invalid file dimension`, and 360×96 was accepted. And `Assets` must be sent on the
+**converge** path as well as the create — `branding_settings()` switches both components on
+unconditionally, so an update that sent only `Settings` would leave the page asking for images that
+were never uploaded, which is worse than the flat page it replaced. Verified served, not merely
+stored: all three come back **200 and byte-identical** to what the module generates, and the theme
+stylesheet's `--cognito-page-background-image` names the light-mode asset.
+
 **Verifying it needs the linked stylesheet, not the HTML.** Grepping the sign-in page for the hex codes
 finds **zero** matches and looks like a failure — the values only ever appear in
 `https://d3oia8etllorh5.cloudfront.net/<pool>/<client>/<cssVersion>/assets/CSS/custom-css.css`, which

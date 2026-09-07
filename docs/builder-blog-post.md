@@ -164,7 +164,7 @@ existed. Then the local sweep (twelve seeded households, 9 filed / 3 escalated),
 EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Last, the safety claim executed
 against live infrastructure.
 
-**863 Python tests and 210 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
+**865 Python tests and 211 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
 holds against real Bedrock calls.
 
 ---

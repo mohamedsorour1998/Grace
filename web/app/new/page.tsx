@@ -24,45 +24,44 @@ export default async function NewCase() {
           Add a household to Grace&rsquo;s caseload.
         </h1>
         <p className="max-w-prose text-sm text-muted">
-          Grace will pick it up on its next sweep, read the rules for its program, and either file
-          the renewal or escalate it to you with a reason. Nothing is filed from this page.
+          Grace picks it up on its next sweep and either files the renewal or escalates it to you
+          with a reason. Nothing is filed from this page.
         </p>
       </header>
 
-      <div className="max-w-prose space-y-3 rounded-md border border-rule bg-paper px-4 py-3 text-sm text-muted">
-        <p>
-          <span className="font-medium text-ink">This form collects no household identity.</span>{" "}
-          No name, no phone number, no address. Grace does not need to know who the family is to
-          know whether their paperwork is complete, and every field it holds is one a model or a log
-          could eventually repeat — so it holds none that could identify anyone.
-        </p>
-        <p>
-          <span className="font-medium text-ink">No files are stored anywhere.</span> A document
-          here is an id and a date — Grace tracks whether a required proof has been sent and is
-          still current, never what it contains. Storing the file would also put back the identity
-          above: a proof of income carries a name, an address and an employer.
-        </p>
-        <p>
-          <span className="font-medium text-ink">The family sends documents to the state, not to
-          Grace.</span> The state&rsquo;s eligibility system is the system of record: it decides,
-          and it holds the paperwork. Grace is the layer alongside a navigator — a clinic, a food
-          bank, a school family-support office — and what a navigator actually knows is
-          <em> &ldquo;I helped this family send their paystub on the 20th&rdquo;</em>. That is
-          status, not custody, and it is exactly what this form records.
-        </p>
-        <p>
-          So ticking a box records <span className="font-medium text-ink">your assertion</span>,
-          which Grace cannot verify. It stores your account&rsquo;s opaque id and the date beside
-          it and shows both on the case page, so whoever decides an escalation can tell an assertion
-          from a confirmed fact. In a real deployment that claim would arrive from the state system
-          that received the document; <code className="font-mono text-xs">
-          grace/cases/document_source.py</code> is the seam where that integration attaches, and it
-          raises rather than pretending to answer.
-        </p>
-        <p>
-          All data in this deployment is <span className="font-medium text-ink">synthetic</span>.
-        </p>
-      </div>
+      {/* Four points, not four paragraphs. Everything here is a constraint a
+          caseworker needs before they type — what Grace will not hold, and what
+          a ticked box actually means — and a wall of prose above a form is a
+          wall of prose nobody reads. The reasoning behind each line lives in
+          `docs/superpowers/plans/2026-09-07-grace-document-provenance.md`; the
+          page states the rule. */}
+      <ul className="max-w-prose space-y-2.5 rounded-md border border-rule bg-paper px-4 py-3.5 text-sm text-muted">
+        <li>
+          <span className="font-medium text-ink">No household identity.</span> No name, phone or
+          address. Grace does not need to know who the family is to know whether their paperwork is
+          complete.
+        </li>
+        <li>
+          <span className="font-medium text-ink">No files, anywhere.</span> A document here is an id
+          and a date. Grace tracks whether a proof was sent and is still current, never what it
+          contains.
+        </li>
+        <li>
+          <span className="font-medium text-ink">The family sends documents to the state.</span>{" "}
+          The state&rsquo;s system decides and holds the paperwork. Grace works alongside a
+          navigator — a clinic, a food bank, a school — so it tracks status, not custody.
+        </li>
+        <li>
+          <span className="font-medium text-ink">Ticking a box is your assertion.</span> Grace
+          cannot verify it, so it records your opaque id and the date and shows both on the case
+          page. <code className="font-mono text-xs">grace/cases/document_source.py</code> is the
+          seam where a state integration would replace it.
+        </li>
+        <li>
+          <span className="font-medium text-ink">Synthetic data only.</span> Nothing here is a real
+          household.
+        </li>
+      </ul>
 
       <IntakeForm />
     </section>

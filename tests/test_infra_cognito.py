@@ -344,6 +344,113 @@ def test_the_sign_in_page_is_not_browser_adaptive():
     )
 
 
+# --- the sign-in page's images ----------------------------------------------
+
+
+def test_an_uploaded_image_is_also_switched_on():
+    """**The defect this exists to catch: an asset stored and never drawn.**
+
+    `pageBackground.image` and `form.logo` both default to `enabled: False` in
+    Cognito's own document. Uploading a background and leaving the flag off
+    succeeds, reports success, and changes nothing a caseworker can see — which
+    is exactly how the page came to be described as having no background while
+    the branding call had been returning 200 all along. Same shape as a
+    six-digit colour: accepted, ignored.
+
+    So every asset category uploaded must have its switch on, checked as a pair
+    rather than one side at a time.
+    """
+    settings = provision_cognito.branding_settings()
+    categories = {asset["Category"] for asset in provision_cognito.branding_assets()}
+
+    assert "PAGE_BACKGROUND" in categories
+    assert settings["components"]["pageBackground"]["image"]["enabled"] is True
+
+    assert "FORM_LOGO" in categories
+    assert settings["components"]["form"]["logo"]["enabled"] is True
+
+    assert "FAVICON_SVG" in categories
+    assert settings["components"]["favicon"]["enabledTypes"] == ["SVG"]
+
+
+def test_every_asset_is_uploaded_for_the_mode_the_page_actually_renders():
+    """An asset's `ColorMode` must match `colorSchemeMode`, or it is stored
+    against a mode the page never enters and the component falls back to
+    Cognito's default with no error anywhere."""
+    mode = provision_cognito.branding_settings()["categories"]["global"][
+        "colorSchemeMode"
+    ]
+    assets = provision_cognito.branding_assets()
+    assert assets, "no assets means the page renders Cognito's own images"
+    for asset in assets:
+        assert asset["ColorMode"] == mode, (
+            f"{asset['Category']} is uploaded for {asset['ColorMode']} while the "
+            f"page renders {mode}"
+        )
+        assert asset["Extension"] == "SVG"
+        assert isinstance(asset["Bytes"], bytes)
+
+
+def test_the_sign_in_images_are_drawn_in_the_dashboards_palette():
+    """The images are the one part of the sign-in page that is not a colour
+    field, so nothing else would notice them drifting. They are generated from
+    `PALETTE` rather than hand-authored for exactly that reason, and this reads
+    the rendered markup back to prove it."""
+    background = provision_cognito.login_background_svg()
+    logo = provision_cognito.login_logo_svg()
+    for name in ("paper", "rule", "ink"):
+        assert provision_cognito.PALETTE[name] in background, (
+            f"{name} is missing from the sign-in background"
+        )
+    assert provision_cognito.PALETTE["escalate"] in background
+    assert provision_cognito.PALETTE["ink"] in logo
+    assert provision_cognito.PALETTE["muted"] in logo
+
+
+def test_the_background_is_graces_own_split_and_not_a_decoration():
+    """Nine quiet rows and three accented ones — the same 9/3 the dashboard
+    headline reports. A background that drifted to some other count would be
+    telling a caseworker a number that is not Grace's."""
+    background = provision_cognito.login_background_svg()
+    escalating = background.count(
+        f'fill="{provision_cognito.PALETTE["escalate"]}"'
+    )
+    assert escalating == provision_cognito.BACKGROUND_ESCALATIONS == 3
+    assert provision_cognito.BACKGROUND_ROWS == 12
+    # Every row draws its own hairline, so the rule count is the row count plus
+    # the one under the masthead.
+    assert background.count('height="1"') == provision_cognito.BACKGROUND_ROWS + 1
+
+
+def test_the_sign_in_images_are_well_formed_xml():
+    """An SVG Cognito cannot parse is an image slot that silently stays empty.
+    Parsing is the cheap check that a generated string is still a document."""
+    import xml.etree.ElementTree as ET
+
+    for svg in (
+        provision_cognito.login_background_svg(),
+        provision_cognito.login_logo_svg(),
+        provision_cognito.login_favicon_svg(),
+    ):
+        root = ET.fromstring(svg)
+        assert root.tag.endswith("svg")
+        assert root.get("viewBox")
+
+
+def test_the_converge_path_re_sends_the_images_it_switched_on():
+    """A second run must not leave the page asking for images it no longer
+    uploads. `branding_settings()` turns the background and the logo on
+    unconditionally, so `Assets` belongs on the update call as much as on the
+    create — enabled-and-empty is worse than the flat page this replaced."""
+    for existing in (None, "style-123"):
+        idp = _FakeIdp(branding=existing)
+        provision_cognito.ensure_branding(idp, "us-east-1_POOL", "client-1")
+        _, kwargs = idp.calls[-1]
+        assert kwargs["Assets"] == provision_cognito.branding_assets(), (
+            f"assets missing from the {'create' if existing is None else 'update'} path"
+        )
+
+
 # --- certificates -----------------------------------------------------------
 
 
