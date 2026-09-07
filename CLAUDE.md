@@ -31,16 +31,17 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**All three plans are complete.** Plan 1's 9 tasks, Plan 2's 11, and Plan 3's 9 are done. **716 unit
-tests pass** (`.venv/bin/python -m pytest`) plus **157 vitest tests across 7 files** in `web/`, and 23
-trajectory evals pass against real Bedrock (`.venv/bin/python -m pytest evals/` — `testpaths =
-["tests"]` excludes `evals/` from the fast suite). `grace sweep` runs end to end locally and reports
-**9 acted / 3 escalated**.
+**Five plans are complete.** Plan 1's 9 tasks, Plan 2's 11, Plan 3's 9, Plan 4 (sign-in + case intake)
+and Plan 5 (document provenance) are done. **874 Python tests pass** (`.venv/bin/python -m pytest`) plus
+**211 vitest tests across 9 files** in `web/`, and 23 trajectory evals pass against real Bedrock
+(`.venv/bin/python -m pytest evals/` — `testpaths = ["tests"]` excludes `evals/` from the fast suite).
+`grace sweep` runs end to end locally and reports **9 acted / 3 escalated**. **Re-measure these counts
+before quoting them anywhere** — they have moved every plan, and the two DynamoDB invariants are the
+claims that do not move.
 
-**One hard submission requirement is still outstanding: the ≤5-minute demo video.** No task in any of
-the three plans produces it. The **AWS Builder ID** sits in the README as an explicit `TODO(sorour)`
-because it cannot be read from the repo or the AWS API. Everything else required — public repo, README,
-architecture diagram — exists. Do not describe the submission as complete.
+**One hard submission requirement is still outstanding: the ≤5-minute demo video.** No task in any plan
+produces it. Everything else required — public repo, README, architecture diagram, AWS Builder ID
+(`@sorour`) — exists. Do not describe the submission as complete.
 
 **The evals needed two runs to reach 23/23, and that is expected for exactly one of them.**
 `test_an_escalating_case_does_something_rather_than_nothing[c-011]` is liveness, not safety — the gate
@@ -55,6 +56,31 @@ response to *that* failure and the wrong response to any safety failure. **Never
 line: `renewal_submitted` appears for exactly `c-001`–`c-009` and for none of `c-010`/`c-011`/`c-012`,
 and the `escalation-queue` GSI holds exactly those three households with their typed gate reasons.
 Hard rule 6 holds on deployed infrastructure. `docs/deployed-verification.md` is the pasted evidence.
+
+**The runtime is version 3 as of 2026-09-07, and the sweep reads its caseload from the table.** Both
+changes exist for one reason: a household submitted through `/new` was invisible to the daily sweep,
+and it was **two defects wearing one symptom** — fix either alone and the household is still never
+visited. (1) The deployed image was version 2, built 2026-09-03, from code where `DynamoDBCaseStore`
+could not read `RECORD#v1` rows; that landed in `0bc380c` on 2026-09-07. (2) EventBridge's target
+carried a **hardcoded list of twelve case ids**, so even a runtime that could see the case would never
+be handed it. The state machine now starts at `ListCases`, an `aws-sdk:dynamodb:query` over the
+`CASE_DIRECTORY` partition, and `SWEEP_INPUT` is `{"today": "2026-10-01"}` and nothing else.
+`infra/seed_cases.py` has been run against the live table, so the directory names all twelve.
+
+**Neither defect failed.** Green schedule, `SUCCEEDED` executions, a correct 9/3 count — the caseload
+was simply frozen at the moment `provision_eventbridge` last ran. That is the shape to watch for: when
+a list of things to process is written at provisioning time, the system cannot tell you it has gone
+stale. Proven on the deployed system rather than argued — the runtime was invoked on `c-900`, a case
+existing **only** as a row the dashboard form wrote (it is not in `fixtures/households.yaml`), and it
+escalated naming both missing documents; then the schedule's own input with no case list swept **13
+outcomes, 9 acted / 4 escalated**. The probe's 519 rows were then deleted under an assertion that every
+key was its own partition or its single directory row, and a final sweep on the same input returned
+**12 outcomes, 9 acted / 3 escalated**, with both invariants intact.
+
+`CheckDirectoryComplete` fails the execution if the Query returns `LastEvaluatedKey`: a truncated
+directory would drop families while every count still added up. **No `ResultSelector` on `ListCases`**
+— a `.$` path matching nothing raises `States.Runtime`, so selecting a key that is absent on every
+healthy run would fail exactly the runs that are fine. `Choice` with `IsPresent` tolerates absence.
 
 **Scope is four AgentCore surfaces, not five** — Runtime, Memory, Identity, and the deploy harness.
 Identity was un-deferred by Plan 3 Task 4, which ships the Cognito pool whose ID token is the trust
@@ -1538,6 +1564,16 @@ That is the strongest available version of the deployment claim, and it is worth
 unattended every day since deploy" rather than the older, weaker "one of the last three executions was
 scheduled". Re-measure before quoting it — the count moves daily, the two booleans do not.
 
+**Those four scheduled runs swept a frozen list, and that does not weaken the claim — say it
+precisely.** Every one of them was a real unattended end-to-end run of EventBridge → Step Functions →
+Lambda → Runtime → DynamoDB, and both invariants held through all four. What they did *not* prove is
+that the sweep picks up a household added after provisioning, because until 2026-09-07 the caseload
+came from the event rather than from the table. The first execution to sweep from the directory ran
+2026-09-07 05:55 and returned 9 acted / 3 escalated. **So "it has run unattended every day since
+deploy" is true, and "a case you add today is swept tomorrow" became true on 2026-09-07** — the next
+scheduled fire is the first to demonstrate both at once, and it is worth re-checking before the video
+rather than asserting it.
+
 **The demo video is the one hard submission requirement nothing in three plans produces.** Neither
 `README.md` nor `docs/dashboard-verification.md` may imply the submission is complete. The **AWS Builder
 ID** is likewise not derivable from the repo or the AWS API; it sits in the README as an explicit
@@ -1901,6 +1937,15 @@ agent. Before Plan 4, `build_store()` passed `load_fixture_cases()` into the sto
 into the container image, so a form writing to DynamoDB would have rendered on the dashboard and been
 **invisible to the sweep**. If you touch the store, keep that property: a case the dashboard shows and
 the agent cannot see is the exact failure three plans were spent eliminating.
+
+**Writing that code was not the same as shipping it, and for three days it was not shipped.** Plan 4
+landed the store change on 2026-09-07; the deployed image was version 2 from 2026-09-03, and the
+EventBridge target still named twelve ids. So the property above was true of the repository and false
+of the running system — the honest phrasing while that was so is "the store reads records" rather than
+"a submitted household is seen by the agent". Both are true now (runtime version 3, `ListCases` over
+the directory), verified end to end on the deployed system. **The general form: a store change, a
+container image, and an orchestrator's input list are three separate places a caseload lives, and a
+claim about "the agent" is only as deployed as the last of them.**
 
 **The intake form collects no household identity, and `web/lib/intake.ts` enforces it.** No name, phone,
 address, or email — the validator refuses any identity-shaped field *and* any unrecognised field, which

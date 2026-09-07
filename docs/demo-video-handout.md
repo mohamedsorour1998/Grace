@@ -197,8 +197,10 @@ Re-measure before recording; do not read a stale number.
 |---|---|
 | the twelve seeded households: 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01`. **Say "the twelve seeded households"** — the claim must stay true if anyone submits a case through the intake form. |
 | 9 acted / 3 escalated deployed | the `grace-sweep` Step Functions execution output |
+| the sweep reads its caseload from the table | `ListCases` queries the `CASE_DIRECTORY` partition; the scheduled event carries only `{"today": "2026-10-01"}`. Started with that input, an execution returns 12 outcomes. **Do not say the schedule names the twelve** — it did until 2026-09-07, and that was the defect. |
+| runtime version 3 | `get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE`. Version 2 could not read `RECORD#v1` rows, so a submitted household was invisible to the sweep. |
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
-| 865 Python tests, 211 vitest | `pytest` and `vitest run` — re-measure, these move every plan |
+| 874 Python tests, 211 vitest | `pytest` and `vitest run` — re-measure, these move every plan |
 | 23 trajectory evals | `pytest evals/ --co -q` — they cost real Bedrock to run |
 | approving `c-010` files nothing | its decision + outcome rows, and zero `renewal_submitted` rows |
 | four AgentCore surfaces | Runtime, Memory, Identity, harness — Gateway is deferred |
@@ -222,6 +224,13 @@ Re-measure before recording; do not read a stale number.
   state integration behind it, and `grace/cases/document_source.py` names the seam where one would
   attach — a stub that **raises**, because one returning an empty tuple would report every household as
   missing every document.
+- Do **not** claim the daily schedule has been picking up submitted cases all along. It has fired
+  unattended every day since the deploy and every run held both invariants — that part is true and
+  worth saying. But until **2026-09-07** the schedule carried a hardcoded list of twelve case ids, so
+  those runs swept a frozen caseload. The safe sentence is *"it has run unattended every day since
+  deploy, and it now reads its caseload from the table rather than from the schedule."* If you want to
+  claim a scheduled run swept a household added afterwards, check that a fire has happened since the
+  fix and say the date — do not infer it.
 - Do **not** say traces or Transaction Search work. Zero spans exist in the account.
 - Do **not** imply SMS is delivered. The channel is a transcript; the account has no origination number.
 - Do **not** describe the household data as real. All twelve are synthetic; phone numbers use the

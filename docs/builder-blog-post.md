@@ -17,7 +17,7 @@ a late filing is still accepted for **90 days** after — so there is a five-mon
 form keeps the coverage. A notice arrives in the mail during that window, in English, addressed to an
 apartment they left four months ago.
 
-Nobody makes a decision about that family. No caseworker reviews their income. No system finds them
+Nobody makes a decision about that family. No caseworker reviews their income, no system finds them
 ineligible. A letter goes unanswered, 150 days elapse, and the coverage stops — silently, with no error
 message anywhere in the process.
 
@@ -56,9 +56,8 @@ school-district family-support offices — tracking recertification windows for 
 across programs with different clocks, with notices written in languages the families do not read.
 
 They do not need another dashboard telling them what they already know. They need the routine work
-done, and the genuinely hard calls handed to them with the reasoning already assembled.
-
-Here is what exists today, and where each stops:
+done, and the hard calls handed over with the reasoning already assembled. What exists today, and where
+each stops:
 
 | Category | What it does | Where it stops |
 |---|---|---|
@@ -69,10 +68,10 @@ Here is what exists today, and where each stops:
 | **A chatbot over benefits policy** | Answers eligibility questions | Answering is not filing, and a wrong answer is invisible |
 | **Grace** | **Files the unambiguous, escalates the rest with a reason** | Deliberately does not decide contested eligibility — that stays human |
 
-The distinction that matters is the last row's second half. Automating benefits filing is not hard;
-plenty of tools submit forms. What is hard is an automation that **knows the boundary of its own
-competence** and can prove where that boundary is. A bot that files 100% of renewals is worse than the
-status quo, because now the wrong filings carry an official-looking submission.
+The distinction is the last row's second half. Automating benefits filing is not hard; plenty of
+tools submit forms. What is hard is an automation that **knows the boundary of its own competence** and
+can prove where it is. A bot that files 100% of renewals is worse than the status quo, because now the
+wrong filings carry an official-looking submission.
 
 Grace's value is the refusal, not the automation.
 
@@ -105,10 +104,9 @@ into a dishonest one.
 An agent that can file a benefits renewal can also file a wrong one. So Grace's defining property is
 that it acts alone on the routine and *provably* escalates the rest. Three layers, strongest first.
 
-**1. Capability absence.** The tool that files a renewal is not registered in the agent's tool list at
-all for a case that has not passed verification. Grace cannot file a renewal it should not, because
-the ability does not exist in that context. *This beats any instruction, because there is nothing to
-disobey.*
+**1. Capability absence.** The tool that files a renewal is not registered in the agent's tool list
+at all for a case that has not passed verification. *This beats any instruction, because there is
+nothing to disobey.*
 
 **2. Identity from the session, never the conversation.** Every household-scoped read tool takes
 **zero arguments** — the case is bound at construction from the authenticated session. A prompt
@@ -119,18 +117,18 @@ mapping case facts to *act* or *escalate*. Any error during verification escalat
 
 ### Three choices worth explaining
 
-**Deadline math is a tool, not an agent.** Deterministic work does not need a model. Early on I let a
-model compare a document's received date against a freshness window; on a real sweep it got that wrong
-on **two of nine clean cases** and texted those families about paperwork that was already in order. The
-comparison now happens in Python and the tool reports `CURRENT` / `STALE` / `EXPIRED` outright. Never
-hand a model two dates and ask it which is later.
+**Deadline math is a tool, not an agent.** Early on I let a model compare a document's received date
+against a freshness window; on a real sweep it got that wrong on **two of nine clean cases** and texted
+those families about paperwork that was already in order. The comparison now happens in Python and the
+tool reports `CURRENT` / `STALE` / `EXPIRED` outright. Never hand a model two dates and ask it which is
+later.
 
-**Three models deliberate, but only on ambiguous cases.** When a case turns on judgement — a 30% income
-change, a household-size conflict between two documents — an advocate (Nova 2 Lite) argues the family
-qualifies, a verifier (Nova Pro) adversarially checks each claim against readable facts, and a referee
-(Nova Micro) decides whether it is genuinely ambiguous. Three *different* models, because two instances
-of the same model agreeing proves nothing and nothing should referee its own argument. The nine clean
-households never pay for any of it.
+**Three models deliberate, but only on ambiguous cases.** When a case turns on judgement — a 30%
+income change, a size conflict between two documents — an advocate (Nova 2 Lite) argues the family
+qualifies, a verifier (Nova Pro) adversarially checks each claim, and a referee (Nova Micro) decides
+whether it is genuinely ambiguous. Three *different* models: two instances of the same model agreeing
+proves nothing, and nothing should referee its own argument. The nine clean households never pay for
+any of it.
 
 **Grace stores no documents, because it is not the party that receives them.** The instinct is to add
 an upload. The domain says otherwise: the family sends documents to the **state**, whose eligibility
@@ -142,29 +140,29 @@ is *"I helped this family send their paystub on the 20th"*. **Status, not custod
 
 So a document in Grace is an id and a date, and the interface says **"documents sent to the state"**
 rather than "documents on file" — three words that had implied custody nobody has. Storing the file
-would have put the maximum-PII payload in the system (a proof of income carries a name, an address, an
-employer, often an SSN) into an architecture whose whole rule is "no household identity anywhere", and
-bought the gate nothing: it reads two dates and never opens a document. What Grace has is a
-caseworker's **assertion**, so the case page names it as one — *"Document status asserted by
-`2448a4e8-…` at intake on 2026-09-06. Grace tracks the deadline on it and does not verify it
-independently."* The opaque id, never a name; both writers refuse a subject that is not opaque.
+would have put the maximum-PII payload in the system into an architecture whose whole rule is "no
+household identity anywhere", and bought the gate nothing: it reads two dates and never opens a
+document. What Grace has is a caseworker's **assertion**, so the case page names it as one — *"Document
+status asserted by `2448a4e8-…` at intake on 2026-09-06. Grace tracks the deadline on it and does not
+verify it independently."* An opaque id, never a name.
 
 The seam where a real answer would arrive is code rather than a sentence in a README:
 `grace/cases/document_source.py`, a protocol whose distinguishing method is `provenance()` — every
 source must say *how it knows* — with the shipped implementation reading the record and the state one
-**raising `NotImplementedError`**. A stub returning an empty tuple would not read as "unknown": the gate
-takes `()` as "this family has sent nothing", so every household would escalate for reasons that were
-not true, silently. What it needs is a per-state data-sharing agreement, which is a legal instrument,
-not a sprint.
+**raising `NotImplementedError`**. Returning an empty tuple would not read as "unknown": the gate takes
+`()` as "this family has sent nothing", so every household would escalate for reasons that were not
+true, silently. What it needs is a per-state data-sharing agreement, which is a legal instrument, not a
+sprint.
 
 ### Milestones
 
 The gate came first — a pure-Python authority module, table-tested exhaustively, before any agent
 existed. Then the local sweep (twelve seeded households, 9 filed / 3 escalated), the AgentCore deployment on an
-EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Last, the safety claim executed
-against live infrastructure.
+EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Then caseworker intake, and making
+the deployed sweep genuinely read its caseload from the table. Last, the safety claim executed against
+live infrastructure.
 
-**865 Python tests and 211 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
+**874 Python tests and 211 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
 holds against real Bedrock calls.
 
 ---
@@ -192,9 +190,8 @@ tools are *absent* rather than *forbidden*.
 
 ### The bug that would have shipped
 
-My Next.js middleware carried a careful docstring: *"a redirect convenience, and never the security
-boundary — a forged cookie gets past it and is then refused by `verifySession`, which is the check that
-matters"*, and that `verifySession` *"still refuses on every page."*
+My Next.js middleware carried a careful docstring: it was *"a redirect convenience, and never the
+security boundary"*, because `verifySession` *"still refuses on every page."*
 
 The second half was false. Grepping for `verifySession` matched the auth callback and the write route.
 **No page verified anything.** Measured against a real server:
@@ -210,23 +207,42 @@ the application.
 
 The sentence had been *true when written* — the write route was the only consumer then. Pages grew
 around it and the comment kept vouching for them. **Comments do not fail when the code they describe
-stops being true**, and this one actively suppressed suspicion: anyone reading it concluded the gate
-was elsewhere.
+stops being true**, and this one suppressed suspicion: anyone reading it concluded the gate was
+elsewhere.
 
 ### The test that passed with the safety removed
 
-The headline test asserted that approving the household missing a document still escalates. It passed.
-It also passed with the gate **deliberately bypassed** — because the test fake filed nothing, so a
+The headline test asserted that approving the household missing a document still escalates. It
+passed. It also passed with the gate **deliberately bypassed** — the test fake filed nothing, so a
 *different* branch escalated the case for every possible input. The claim was true of the run and
 unproven by the test.
 
 When several code paths converge on the same observable result, asserting that result says nothing
-about which path produced it. The fix was to arm the fixture so the other branch could not fire.
+about which produced it. The fix was to arm the fixture so the other branch could not fire.
+
+### The defect that was invisible because nothing failed
+
+The dashboard lets a caseworker add a household. I wrote the code that makes a submitted case visible
+to the agent, tested it, and shipped it. It did not work in production for three days.
+
+Two reasons, and each alone was enough. The deployed container was an older image that could not read
+the new record rows. And the EventBridge schedule carried a **hardcoded list of twelve case ids** — the
+caseload was frozen at the moment I last ran the provisioning script.
+
+Nothing failed. The schedule stayed green, every execution reported `SUCCEEDED`, and the count was
+right, because the twelve it knew about were all still behaving. A submitted household simply was never
+visited. I found it by asking a question no dashboard answers: *is the thing I deployed the thing I
+wrote?*
+
+**A caseload, a container image, and an orchestrator's input list are three different places your
+system's idea of "what to process" can live.** A claim about your agent is only as deployed as the last
+of them.
 
 ### The through-line
 
 Six of the seven serious defects I found shared one shape: **something asserted a property it did not
-verify.** A docstring. A comment. A test. A config. An API's acceptance of my input.
+verify.** A docstring. A comment. A test. A config. An API's acceptance of my input. A running system
+standing in for the code I had written.
 
 So every guard in Grace was sabotaged and watched failing — 51 sabotages in a single task. If you
 cannot make a test fail, you do not have a test; you have a sentence that agrees with you. For a system
@@ -240,9 +256,9 @@ household missing `proof_of_residency`, and the outcome row reads *"Grace re-che
 missing_document: proof_of_residency is not on file."* **Zero renewals filed.** A human said yes and
 the gate still said no.
 
-That guarantee is structural rather than a matter of trust — the gate's `evaluate()` function has no
-parameter an approval could occupy, so a mistaken edit would be a type error rather than a quietly
-looser verdict.
+That guarantee is structural rather than a matter of trust: the gate's `evaluate()` has no parameter
+an approval could occupy, so a mistaken edit would be a type error rather than a quietly looser
+verdict.
 
 `<replace this text by a screenshot of the case page showing the outcome "Grace re-checked and did not file">`
 

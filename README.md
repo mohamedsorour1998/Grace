@@ -365,6 +365,30 @@ than it sounds: before Plan 4 the records were seeded from `fixtures/households.
 container image at build time, so a form writing to DynamoDB would have rendered on the dashboard and
 been **invisible to the agent**. A submitted case is only real if the sweep can see it.
 
+**That took two fixes, and the second one is the interesting one.** Reading records was a store change,
+shipped in the repository on 2026-09-07 — and the deployed container was still the image built on
+2026-09-03, so for three days the property was true of the code and false of the running system. Fixed
+by a redeploy (runtime version 3). But the sweep *still* could not have seen a new household, because
+the EventBridge schedule carried a **hardcoded list of twelve case ids**: the caseload was frozen at the
+moment the provisioning script last ran. The state machine now starts with a `ListCases` query over the
+table's case-directory partition, and the scheduled event carries only `{"today": "2026-10-01"}`.
+
+Neither defect ever failed. The schedule stayed green, every execution reported `SUCCEEDED`, and the
+9/3 count stayed correct — which is precisely what made it invisible. It was found by asking a question
+no dashboard answers: *is the thing I deployed the thing I wrote?*
+
+Verified on the deployed system rather than argued. A household submitted through the form, existing
+only as a row the form wrote and **absent from `fixtures/households.yaml`**, was invoked directly on the
+runtime and escalated naming both of its missing documents; then a sweep started with the schedule's own
+input returned **13 outcomes, 9 acted / 4 escalated**. Its rows were then removed and the same input
+returned **12 outcomes, 9 acted / 3 escalated**, with `renewal_submitted` still present for exactly
+`c-001`–`c-009` and the escalation queue still holding exactly `c-010`/`c-011`/`c-012`.
+
+One guard worth naming: a DynamoDB Query caps at 1 MB, so `CheckDirectoryComplete` **fails the
+execution** if the response carries `LastEvaluatedKey`. Sweeping a truncated directory would drop
+households while every count still added up — the same silent shortfall the store's own reader refuses,
+expressed at the orchestration layer.
+
 A newly submitted case shows the status **`new`** rather than `error`. That distinction is deliberate:
 `error` reads "Grace's last run on this case reached no outcome — re-run the sweep", which would be a
 false claim about a run that never happened. `lib/cases.ts` reads the `RECORD#v1` row and reports `new`
@@ -378,7 +402,11 @@ needs the same per-state data-sharing agreement `StateEligibilityDocumentSource`
 legal instrument rather than code.
 
 You can still add households by editing `fixtures/households.yaml` and re-running the sweep; the
-twelve seeded ones arrive that way, and `infra/seed_cases.py` writes them into the table.
+twelve seeded ones arrive that way, and `infra/seed_cases.py` writes them into the table — which it
+now has, so the case directory names all twelve and the sweep no longer depends on the fixture list
+being compiled into the image. The seeder never overwrites: `create_case` puts each record under
+`attribute_not_exists(sk)`, and `--verify` reads every row back and compares it to the fixture field by
+field rather than trusting that the write returned.
 
 ## What shipped, and what did not
 
