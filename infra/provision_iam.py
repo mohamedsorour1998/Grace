@@ -321,6 +321,22 @@ def _stepfunctions_policy(account_id: str) -> dict:
                 "Resource": f"arn:aws:dynamodb:{region}:{account_id}:table/{naming.TABLE}",
             },
             {
+                # `ListCases` reads the case directory so the sweep's caseload is
+                # whatever the table holds, rather than a list frozen into the
+                # EventBridge target. Query on the table itself, not the GSI: the
+                # directory lives in the base table's `CASE_DIRECTORY` partition.
+                #
+                # Without this the sweep does not fail loudly — it fails at the
+                # *first* state, so no case is ever invoked and the execution
+                # reports a task failure with no escalation rows written. That is
+                # the safe direction (nothing is filed) and still an outage, so it
+                # is granted rather than relied upon.
+                "Sid": "ReadTheCaseDirectory",
+                "Effect": "Allow",
+                "Action": "dynamodb:Query",
+                "Resource": f"arn:aws:dynamodb:{region}:{account_id}:table/{naming.TABLE}",
+            },
+            {
                 "Sid": "DeliverExecutionLogs",
                 "Effect": "Allow",
                 # Required, not hygiene: Task 9's escalation alarm counts

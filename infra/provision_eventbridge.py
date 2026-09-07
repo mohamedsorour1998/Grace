@@ -14,10 +14,18 @@ SCHEDULE = "cron(0 9 * * ? *)"
 # The pinned date travels with the event: a `date.today()` anywhere in this
 # system turns the 9/3 demo into 8/4 from 2026-10-31, and the schedule is the one
 # caller with no human present to notice.
-SWEEP_INPUT = {
-    "case_ids": provision_stepfunctions.CASE_IDS,
-    "today": "2026-10-01",
-}
+#
+# **`case_ids` is deliberately absent, and its absence is the fix for a real
+# defect.** This input used to carry `provision_stepfunctions.CASE_IDS` — the
+# twelve fixture ids, frozen into the schedule at provisioning time. A household
+# submitted through the dashboard wrote a record row and a directory entry, the
+# dashboard rendered it, and the daily sweep never visited it, because the
+# schedule was still naming the same twelve. Nothing failed: the execution
+# reported SUCCEEDED and the 9/3 count stayed correct, which is precisely what
+# made it invisible. The state machine's `ListCases` reads the directory instead,
+# so the caseload is a property of the table rather than of when this script last
+# ran.
+SWEEP_INPUT = {"today": "2026-10-01"}
 
 
 def provision(state_machine_arn: str, client=None, role_arn: str | None = None) -> str:

@@ -1,4 +1,4 @@
-"""The `grace-sweep` state machine: a Map over the twelve cases.
+"""The `grace-sweep` state machine: a Map over every household in the table.
 
 The Catch branch is the fail-closed rule expressed as infrastructure — see the
 note above this task in the plan.
@@ -21,11 +21,6 @@ import boto3
 from botocore.exceptions import ClientError
 
 from infra import naming, provision_iam
-
-# The twelve fixture cases. Listed rather than discovered because the state
-# machine is provisioned from outside the Grace package, and because the demo's
-# claim is about these twelve specifically.
-CASE_IDS = [f"c-{n:03d}" for n in range(1, 13)]
 
 # What a caseworker reads when the automated run produced no verdict at all.
 _NO_VERDICT_REASON = (
@@ -78,16 +73,71 @@ def definition(account_id: str, lambda_arn: str) -> dict:
     """Build the state machine definition."""
     return {
         "Comment": "Grace daily sweep: one runtime invocation per household",
-        "StartAt": "SweepCases",
+        "StartAt": "ListCases",
         "States": {
+            # **The caseload is read at sweep time, not frozen into a schedule.**
+            # This state did not exist until 2026-09-07, and its absence was half
+            # of a two-part defect. The other half was the runtime image: a case
+            # submitted through the dashboard writes a `RECORD#v1` row and a
+            # directory entry, and the deployed image could not read either. That
+            # was fixed by a redeploy — and the sweep still could not see the
+            # case, because EventBridge's target carried a **hardcoded list of
+            # twelve ids**. Both had to move. A household the dashboard shows and
+            # the sweep never visits is the exact failure three plans were spent
+            # eliminating, and it would have looked like success from every
+            # angle: green schedule, `SUCCEEDED` execution, correct 9/3 count.
+            "ListCases": {
+                "Type": "Task",
+                "Resource": "arn:aws:states:::aws-sdk:dynamodb:query",
+                "Parameters": {
+                    "TableName": naming.TABLE,
+                    "KeyConditionExpression": "pk = :pk",
+                    "ExpressionAttributeValues": {
+                        ":pk": {"S": naming.CASE_DIRECTORY_PK}
+                    },
+                },
+                # No `ResultSelector`. A `.$` path that matches nothing raises
+                # `States.Runtime`, and `LastEvaluatedKey` is absent on every
+                # healthy run — so selecting it would fail exactly the runs that
+                # are fine. The whole response lands here instead and `Choice`
+                # asks about the key with `IsPresent`, which tolerates absence.
+                "ResultPath": "$.directory",
+                "Next": "CheckDirectoryComplete",
+            },
+            # A DynamoDB Query caps at 1MB and signals more with
+            # `LastEvaluatedKey`. A directory row is a case id and nothing else,
+            # so this is thousands of households away — but silently sweeping a
+            # truncated caseload drops families while the execution still reports
+            # SUCCEEDED and the counts still add up. `_directory_ids` refuses to
+            # truncate for the same reason; this is that rule at the
+            # orchestration layer.
+            "CheckDirectoryComplete": {
+                "Type": "Choice",
+                "Choices": [{
+                    "Variable": "$.directory.LastEvaluatedKey",
+                    "IsPresent": True,
+                    "Next": "DirectoryTruncated",
+                }],
+                "Default": "SweepCases",
+            },
+            "DirectoryTruncated": {
+                "Type": "Fail",
+                "Error": "CaseDirectoryTruncated",
+                "Cause": (
+                    "The case directory did not fit in one DynamoDB page. "
+                    "Refusing to sweep a partial caseload."
+                ),
+            },
             "SweepCases": {
                 "Type": "Map",
-                "ItemsPath": "$.case_ids",
+                # The directory's own rows, rather than a list handed in by
+                # whoever started the execution.
+                "ItemsPath": "$.directory.Items",
                 # Bounded on purpose: see the plan's note. Twelve at once
                 # invites the throttling the Retry below then has to absorb.
                 "MaxConcurrency": 3,
                 "ItemSelector": {
-                    "case_id.$": "$$.Map.Item.Value",
+                    "case_id.$": "$$.Map.Item.Value.case_id.S",
                     "today.$": "$.today",
                 },
                 "ItemProcessor": {

@@ -161,10 +161,65 @@ def test_the_pinned_date_travels_with_the_scheduled_event():
     from infra import provision_eventbridge
 
     assert provision_eventbridge.SWEEP_INPUT["today"] == "2026-10-01"
-    assert provision_eventbridge.SWEEP_INPUT["case_ids"] == provision_stepfunctions.CASE_IDS
 
 
-def test_the_case_list_is_the_twelve_fixture_households():
-    """The demo's claim is about these twelve specifically."""
-    assert provision_stepfunctions.CASE_IDS == [f"c-{n:03d}" for n in range(1, 13)]
-    assert len(provision_stepfunctions.CASE_IDS) == 12
+def test_the_schedule_carries_no_frozen_case_list():
+    """**The defect this replaces.** `SWEEP_INPUT` used to carry the twelve
+    fixture ids, so the caseload was fixed at the moment this script last ran. A
+    household submitted through the dashboard wrote its record row and its
+    directory entry, rendered on the dashboard, and was never visited by the
+    daily sweep — with the execution reporting SUCCEEDED and the 9/3 count still
+    correct, which is what kept it invisible.
+
+    Asserted as "no key beyond `today`" rather than "no `case_ids` key", because
+    the failure is a frozen caseload however it is spelled.
+    """
+    from infra import provision_eventbridge
+
+    assert set(provision_eventbridge.SWEEP_INPUT) == {"today"}
+
+
+def test_the_sweep_reads_its_caseload_from_the_case_directory():
+    """The caseload is a property of the table, not of the event that started
+    the run — so a case submitted between two sweeps is swept by the next one."""
+    states = _definition()["States"]
+    assert _definition()["StartAt"] == "ListCases"
+
+    query = states["ListCases"]
+    assert query["Resource"] == "arn:aws:states:::aws-sdk:dynamodb:query"
+    assert query["Parameters"]["TableName"] == naming.TABLE
+    assert (
+        query["Parameters"]["ExpressionAttributeValues"][":pk"]["S"]
+        == naming.CASE_DIRECTORY_PK
+    )
+    # The Map must consume what the query produced. A `ListCases` state whose
+    # result nothing reads would leave the frozen list in place while every
+    # assertion about the query itself still passed.
+    assert states["SweepCases"]["ItemsPath"] == "$.directory.Items"
+    assert query["ResultPath"] == "$.directory"
+    assert (
+        states["SweepCases"]["ItemSelector"]["case_id.$"]
+        == "$$.Map.Item.Value.case_id.S"
+    )
+
+
+def test_a_truncated_case_directory_fails_rather_than_sweeping_part_of_it():
+    """A DynamoDB Query caps at 1MB and signals more with `LastEvaluatedKey`.
+    Sweeping a truncated directory drops households while the execution still
+    reports SUCCEEDED and the counts still add up — the same silent-shortfall
+    shape `_directory_ids` refuses in the store, at the orchestration layer."""
+    states = _definition()["States"]
+    choice = states["CheckDirectoryComplete"]
+    rule = choice["Choices"][0]
+    assert rule["Variable"] == "$.directory.LastEvaluatedKey"
+    assert rule["IsPresent"] is True
+    assert states[rule["Next"]]["Type"] == "Fail"
+    assert choice["Default"] == "SweepCases"
+
+
+def test_the_directory_check_does_not_select_a_key_that_is_usually_absent():
+    """`LastEvaluatedKey` is missing on every healthy run, and a `.$` path that
+    matches nothing raises `States.Runtime`. Selecting it would fail exactly the
+    runs that are fine, so the whole response is kept and `Choice` asks with
+    `IsPresent`, which tolerates absence."""
+    assert "ResultSelector" not in _definition()["States"]["ListCases"]
