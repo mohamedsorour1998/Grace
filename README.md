@@ -401,6 +401,13 @@ this project is about — is enforced entirely before that point. Wiring it to a
 needs the same per-state data-sharing agreement `StateEligibilityDocumentSource` documents, which is a
 legal instrument rather than code.
 
+One consequence worth naming: because the gate is pure and cannot read the ledger, nothing asks
+whether this renewal has already been filed, so the daily sweep files each clean household again
+every day — twelve ledger rows per household at the time of writing. That is inert while the tool
+writes a ledger row and nothing else. A real filing endpoint would need idempotency **at the
+endpoint** — a submission id the state system deduplicates on — rather than a ledger lookup here,
+because Grace's own classification counts a filing only within the run that made it.
+
 You can still add households by editing `fixtures/households.yaml` and re-running the sweep; the
 twelve seeded ones arrive that way, and `infra/seed_cases.py` writes them into the table — which it
 now has, so the case directory names all twelve and the sweep no longer depends on the fixture list

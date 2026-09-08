@@ -106,6 +106,25 @@ Plan 2 finished at **622 passed** — Plan 1's 360 unchanged, plus 262 added by 
 Filled in as tasks complete. See `docs/deployed-verification.md` for the evidence that the deployed
 system behaves correctly.
 
+### Seed the case directory before exposing intake
+
+```bash
+.venv/bin/python -m infra.seed_cases
+.venv/bin/python -m infra.seed_cases --verify
+```
+
+Both are required and `--verify` is the one that counts: "the put returned" and "the row is there and
+decodes to the case I meant" are different claims. This is a **prerequisite, not a convenience**.
+`DynamoDBCaseStore.open_cases()` lets a table record row win over the fixture seed, so until the
+twelve fixture ids have record rows, submitting `c-001` through `/new` creates one and silently
+replaces that household's facts for the agent while the dashboard shows nothing wrong. Once seeded,
+`create_case`'s `attribute_not_exists(sk)` refuses the id.
+
+The refusal is a property of the **table's contents**, not of the code, so it does not travel with a
+deploy — a fresh table is exposed until this has run against it.
+`tests/test_recorded_constraints.py::test_seeding_is_what_stops_intake_claiming_a_fixture_household`
+asserts both directions.
+
 ### Task 7 — the Runtime (verified end to end, 2026-09-03)
 
 Deployed runtime: **`arn:aws:bedrock-agentcore:us-east-1:339712964409:runtime/grace_grace-oTyyvo8stE`**
