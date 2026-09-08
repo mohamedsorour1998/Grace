@@ -13,8 +13,13 @@
 #
 # Note on c-002: its SNAP grace period ends 2026-10-30, so the case is `overdue`
 # on the pinned date and `closed` from 2026-10-31. That is the intended demo of a
-# late-but-still-savable renewal — and the reason a stray `date.today()` anywhere
-# in the sweep turns 9-act/3-escalate into 8/4.
+# late-but-still-savable renewal.
+#
+# A stray `date.today()` anywhere in the sweep degrades this demo, but not the way
+# this comment used to say. Measured across all twelve households: c-002 escalates
+# on 2026-10-16 — on `stale_document`, fifteen days before its window closes — and
+# the split is 6/6 by 2026-10-30, not 8/4 from the 31st. `tests/test_demo_dates.py`
+# pins every household's degradation date so this cannot drift again.
 cases:
   - case_id: "c-001"
     program: "medicaid"
