@@ -156,8 +156,9 @@ def test_every_branch_state_is_reachable_from_the_branch_start():
 
 
 def test_the_pinned_date_travels_with_the_scheduled_event():
-    """A `date.today()` anywhere in this system turns the 9/3 demo into 8/4 from
-    2026-10-31, and the schedule is the one caller with no human to notice."""
+    """A `date.today()` anywhere in this system degrades the 9/3 demo from
+    2026-10-16 and reaches 6/6 by 2026-10-30 (`tests/test_demo_dates.py`), and
+    the schedule is the one caller with no human to notice."""
     from infra import provision_eventbridge
 
     assert provision_eventbridge.SWEEP_INPUT["today"] == "2026-10-01"

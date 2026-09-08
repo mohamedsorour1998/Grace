@@ -90,8 +90,9 @@ def test_a_runtime_failure_becomes_an_error_outcome_not_an_exception():
 
 
 def test_the_default_today_is_pinned_never_a_live_clock():
-    """Fixture c-002 goes `closed` on 2026-10-31, so a live clock turns the
-    9-act/3-escalate demo into 8/4 from that date."""
+    """A live clock degrades the 9-act/3-escalate demo from 2026-10-16, when
+    fixture c-002's `proof_of_income` goes stale, and reaches 6/6 by 2026-10-30
+    (`tests/test_demo_dates.py`)."""
     client = FakeRuntimeClient({"status": "acted", "case_id": "c-001"})
     lambda_handler_module.lambda_handler(
         {"case_id": "c-001"}, None, client=client, runtime_arn=RUNTIME_ARN,

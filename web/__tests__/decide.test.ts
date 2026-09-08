@@ -260,10 +260,11 @@ describe("recordDecision", () => {
   it("pins `today` rather than sending a live clock", () =>
     withEnv(async () => {
       // A live date evaluates every renewal window against the wrong day with no
-      // error. Fixture c-002's SNAP grace period ends 2026-10-30, so a real
-      // clock turns the 9-act/3-escalate demo into 8/4 from 2026-10-31 — and the
-      // dashboard and the sweep would then disagree about which day they are
-      // evaluating, producing two correct-looking answers.
+      // error. Measured: the demo degrades from 2026-10-16, when fixture c-002's
+      // `proof_of_income` goes stale, and is 6/6 by 2026-10-30 — see
+      // `tests/test_demo_dates.py`. And the dashboard and the sweep would then
+      // disagree about which day they are evaluating, producing two
+      // correct-looking answers.
       const runtime = new FakeRuntime();
       await recordDecision(permit(), "c-010",
         { dynamo: new FakeDynamo() as never, runtime: runtime as never });
@@ -324,7 +325,15 @@ describe("recordDecision", () => {
         runtime: new FakeRuntime({ status: "acted", case_id: "c-011", filed: true }) as never,
       });
       expect(out.filed).toBe(true);
-      expect(out.graceOutcome).toContain("filed");
+      // "on file", never "was filed". `filed` is true for either ledger kind in
+      // `grace.run.FILED_KINDS`: `renewal_submitted`, which this run wrote, and
+      // `renewal_already_filed`, which `submit_renewal` writes when it finds a
+      // filing for the same certification period and declines to duplicate it.
+      // A past-tense sentence would tell a caseworker their approval caused a
+      // filing that may have happened on an earlier sweep — a claim of cause the
+      // runtime's answer does not support.
+      expect(out.graceOutcome).toContain("a renewal is on file");
+      expect(out.graceOutcome).not.toMatch(/was filed|has been filed|just filed/i);
     }));
 
   it("does not claim a filing when the runtime says acted without filed", () =>

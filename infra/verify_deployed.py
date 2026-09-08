@@ -6,6 +6,12 @@ Exit 0 when the deployed state machine, schedule input, and Step Functions IAM
 policy are equal to what the provisioners in this package produce; exit 1 with a
 list of the differences otherwise.
 
+**Three resources, and the runtime image is not one of them.** The orchestration
+can match this repository perfectly while the container serving every case runs
+code that is weeks old — which is exactly what happened for three days. So the
+question in the title is answered only for what is listed above, and `main()`'s
+success line says so rather than claiming the whole system.
+
 **Why this exists.** All three were edited live on 2026-09-07 to fix a sweep that
 could not see a submitted household, and all three matched their provisioners
 afterwards — but nothing asserted it. The defect that prompted that work was
@@ -143,7 +149,21 @@ def main() -> int:
         account_id,
     )
     if not drift:
-        print("no drift: the deployed sweep matches this repository")
+        # Name the three things that were compared, and name the one that was
+        # not. "the deployed sweep matches this repository" claims more than
+        # this module checks: the **runtime container image** is not among the
+        # comparisons, and a stale image is exactly the drift that went
+        # unnoticed for three days — version 2 was serving code from
+        # 2026-09-03 while the repository had moved on, with the schedule green
+        # and every execution SUCCEEDED. A drift check that overstates its own
+        # coverage is worse than none, because it is the thing an operator
+        # trusts instead of looking.
+        print(
+            "no drift: the state machine definition, the schedule's target "
+            "input, and the Step Functions role policy match this repository. "
+            "The runtime container image version is NOT checked — compare it "
+            "separately before trusting that deployed code matches this repo."
+        )
         return 0
     print(f"DRIFT in {len(drift)} place(s):")
     for item in drift:

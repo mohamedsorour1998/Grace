@@ -33,8 +33,9 @@ from grace.tools.action import TranscriptChannel, make_action_tools
 from grace.tools.read import make_read_tools
 
 
-# Pinned, as in every other test module: fixture c-002 goes `closed` on
-# 2026-10-31, so a real `date.today()` here would silently change the verdicts.
+# Pinned, as in every other test module: a real `date.today()` here would
+# silently change the verdicts from 2026-10-16, when fixture c-002's
+# `proof_of_income` goes stale (`tests/test_demo_dates.py`).
 TODAY = date(2026, 10, 1)
 
 
@@ -255,7 +256,14 @@ def test_check_window_reports_status(store):
 
 def test_check_window_uses_the_bound_date_not_today(store):
     """The sweep date is bound at construction. A `date.today()` inside the
-    tool would turn the 9-act/3-escalate demo into 8/4 on 2026-10-31."""
+    tool would degrade the 9-act/3-escalate demo from 2026-10-16 (see
+    `tests/test_demo_dates.py`).
+
+    The date bound below is 2026-10-31 because that is when c-002's SNAP window
+    genuinely closes — a real fact this test still asserts. It is *not* when the
+    demo degrades: three clean households have already gone stale by then, and
+    the split is 6/6 before the window closes at all.
+    """
     out = _by_name(make_read_tools(store, "c-002", date(2026, 10, 31)))["check_window"]()
     assert "closed" in out.lower()
     assert "2026-10-31" in out

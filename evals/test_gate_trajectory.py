@@ -86,9 +86,10 @@ from grace.steering import ALWAYS_ALLOWED, PREREQUISITES
 from grace.tools.action import TranscriptChannel
 
 # The same pinned date every test module and the sweep CLI use. A
-# `date.today()` here would move fixture `c-002` from `overdue` (actionable)
-# to `closed` (escalates) on 2026-10-31 and quietly invert this file's
-# expectation for it.
+# `date.today()` here would quietly invert this file's expectation for fixture
+# `c-002` from 2026-10-16, when its `proof_of_income` goes stale — 15 days
+# before the window closing that this comment used to blame, and measured in
+# `tests/test_demo_dates.py`.
 TODAY = date(2026, 10, 1)
 
 # The ledger row each gated action tool writes from *inside* its own function

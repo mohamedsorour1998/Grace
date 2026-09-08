@@ -1,9 +1,10 @@
 """Tests for the authority gate wired into the Strands agent loop.
 
 Every case id here is a fixture household. `TODAY` is pinned for the same
-reason it is pinned in every other test module: `c-002` goes `closed` on
-2026-10-31, so a `date.today()` anywhere in the stack turns the 9-act /
-3-escalate demo into 8/4 on that date.
+reason it is pinned in every other test module: a `date.today()` anywhere in
+the stack degrades the 9-act/3-escalate demo from 2026-10-16, when `c-002`'s
+`proof_of_income` goes stale, and reaches 6/6 by 2026-10-30. Measured and
+pinned by `tests/test_demo_dates.py`.
 """
 
 import ast
@@ -510,7 +511,8 @@ async def test_gate_never_reads_a_case_other_than_its_own():
 
 
 def test_gate_takes_today_and_never_calls_date_today():
-    """A `date.today()` in the gate turns the 9/3 demo into 8/4 on 2026-10-31.
+    """A `date.today()` in the gate degrades the 9/3 demo from 2026-10-16 and
+    reaches 6/6 by 2026-10-30 (`tests/test_demo_dates.py`).
 
     Asserted structurally rather than by mocking the clock: mocking proves
     only that today's code path avoids it, while this fails on the next

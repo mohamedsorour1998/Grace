@@ -315,8 +315,9 @@ def test_a_non_dict_payload_is_an_error_not_a_crash():
 
 def test_a_bad_today_is_refused_rather_than_defaulted():
     """A silent `date.today()` fallback evaluates every renewal window against
-    the wrong day — and fixture c-002 flips from `in_grace` to `closed` on
-    2026-10-31, turning 9/3 into 8/4 with no error."""
+    the wrong day — and fixture c-002's `proof_of_income` goes stale on
+    2026-10-16, degrading 9/3 with no error and reaching 6/6 by 2026-10-30
+    (`tests/test_demo_dates.py`)."""
     out = entrypoint.process_case({"case_id": "c-001", "today": "not-a-date"})
     assert out["status"] == "error"
 

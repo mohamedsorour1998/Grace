@@ -302,8 +302,9 @@ def _calls_date_today(func) -> bool:
 
 
 def test_the_graph_binds_the_passed_date_not_todays():
-    """A `date.today()` anywhere in graph construction turns the 9/3 demo into
-    8/4 from 2026-10-31, when fixture c-002's grace period ends."""
+    """A `date.today()` anywhere in graph construction degrades the 9/3 demo
+    from 2026-10-16, when fixture c-002's `proof_of_income` goes stale, and
+    reaches 6/6 by 2026-10-30 (`tests/test_demo_dates.py`)."""
     assert not _calls_date_today(build_case_graph)
     store = InMemoryCaseStore(load_fixture_cases())
     graph = build_case_graph(store, "c-001", date(2030, 1, 1), TranscriptChannel())
@@ -1235,7 +1236,8 @@ def test_a_case_that_errors_is_never_reported_as_acted(monkeypatch):
 
 
 def test_sweep_passes_the_pinned_date_into_every_graph(monkeypatch):
-    """A `date.today()` in the sweep would break the demo on 2026-10-31."""
+    """A `date.today()` in the sweep would start degrading the demo on
+    2026-10-16 (`tests/test_demo_dates.py`)."""
     seen: list[date] = []
     store = InMemoryCaseStore(load_fixture_cases())
     import grace.run as run
@@ -1359,7 +1361,8 @@ def test_summary_of_an_empty_report_still_reads_as_a_report():
 
 def test_main_defaults_today_to_the_pinned_date(monkeypatch, capsys):
     """`--today` defaults to 2026-10-01 rather than to the wall clock, or the
-    demo becomes 8/4 from 2026-10-31."""
+    demo starts degrading on 2026-10-16 and is 6/6 by 2026-10-30
+    (`tests/test_demo_dates.py`)."""
     seen: list[date] = []
     import grace.run as run
 

@@ -12,8 +12,10 @@ from infra import naming, provision_iam, provision_stepfunctions
 SCHEDULE = "cron(0 9 * * ? *)"
 
 # The pinned date travels with the event: a `date.today()` anywhere in this
-# system turns the 9/3 demo into 8/4 from 2026-10-31, and the schedule is the one
-# caller with no human present to notice.
+# system degrades the 9/3 demo from 2026-10-16, when c-002's `proof_of_income`
+# goes stale, and reaches 6/6 by 2026-10-30 — measured, and pinned by
+# `tests/test_demo_dates.py`. The schedule is the one caller with no human
+# present to notice.
 #
 # **`case_ids` is deliberately absent, and its absence is the fix for a real
 # defect.** This input used to carry `provision_stepfunctions.CASE_IDS` — the

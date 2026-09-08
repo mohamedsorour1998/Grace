@@ -56,9 +56,16 @@ So each case is classified from two sources that cannot be argued with:
 
 - `evaluate()` — the deterministic gate, the same function the steering handler
   calls, run directly on the case. It decides whether the case *needed* a human.
-- the ledger — what actually executed. `renewal_submitted` is the only evidence
-  that a renewal was filed (hard rule 6: never claim an action without tool
-  confirmation).
+- the ledger — what actually executed. A row in `FILED_KINDS` is the only
+  evidence that a renewal is on file (hard rule 6: never claim an action
+  without tool confirmation). There are **two** such kinds, not one:
+  `submit_renewal` writes `renewal_submitted` when it files, and
+  `renewal_already_filed` when it finds a filing for the same certification
+  period and declines to duplicate it. Both are outcomes; only a run that
+  reached neither escalates. Grep `FILED_KINDS` rather than `renewal_submitted`
+  — a reader who greps for the one kind finds half the contract, and the half
+  they miss is what keeps the second day's sweep from escalating nine clean
+  households.
 
 An interrupt still forces an escalation and supplies the caseworker's reason,
 but it is no longer the only thing that can produce one.

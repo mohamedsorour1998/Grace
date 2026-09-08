@@ -59,9 +59,13 @@ interface Clients {
 /** The date every Grace surface pins to. Never a live clock.
  *
  *  `grace/entrypoint.py`'s `DEFAULT_TODAY` is the same value and for the same
- *  reason: fixture `c-002`'s SNAP grace period ends 2026-10-30, so a real
- *  `date.today()` turns the 9-act/3-escalate demo into 8/4 from 2026-10-31. The
- *  entrypoint would default to this anyway if the key were absent; it is sent
+ *  reason: a real `date.today()` degrades the 9-act/3-escalate demo from
+ *  2026-10-16, when fixture `c-002`'s `proof_of_income` goes stale, and reaches
+ *  6/6 by 2026-10-30 — measured across all twelve households and pinned by
+ *  `tests/test_demo_dates.py`. The named cause used to be `c-002`'s SNAP window
+ *  closing on 2026-10-31; that is 15 days later than the real degradation and
+ *  understates it. The entrypoint would default to this anyway if the key were
+ *  absent; it is sent
  *  explicitly so the dashboard and the sweep cannot disagree about which day
  *  they are evaluating, which is the kind of difference that produces two
  *  correct-looking answers. */
@@ -193,8 +197,16 @@ export async function recordDecision(
     // rather than truthiness for the same reason the Python side uses `is True`
     // — this value crosses a JSON boundary, so `"false"` would otherwise pass.
     filed = body.status === "acted" && body.filed === true;
+    // "is on file", not "was filed". `filed` is true for either of the two
+    // ledger kinds in `grace.run.FILED_KINDS`: `renewal_submitted`, which this
+    // run wrote, and `renewal_already_filed`, which `submit_renewal` writes when
+    // it finds a filing for the same certification period and declines to
+    // duplicate it. A sentence in the past tense would tell a caseworker their
+    // approval caused a filing that in fact happened on an earlier sweep — an
+    // unearned claim of cause, and hard rule 6 is about not making claims the
+    // tool output does not support.
     graceOutcome = filed
-      ? "Grace re-checked, the gate cleared the case, and the renewal was filed."
+      ? "Grace re-checked, the gate cleared the case, and a renewal is on file for this certification period."
       : `Grace re-checked and did not file. ${describe(body)}`;
   } catch (error) {
     // The decision is already recorded, so say what happened rather than losing

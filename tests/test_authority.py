@@ -5,7 +5,7 @@ hardest. Two classes of bug are specifically hunted here:
 
 * **Too loose** — a case with a real problem is filed without human review.
 * **Too strict** — a clean case escalates, which burns the caseworker time
-  Grace exists to save and turns the 9-act/3-escalate demo into 8/4.
+  Grace exists to save and shrinks the 9-act/3-escalate demo.
 
 Boundary cases get their own tests on both sides of every threshold, because
 every one of them is an off-by-one away from the wrong answer.
@@ -27,8 +27,9 @@ from grace.rules.pack import RulePack, load_pack
 MEDICAID = load_pack("medicaid", "NY")
 SNAP = load_pack("snap", "NY")
 
-# Pinned, as every test module in this repo does: fixture c-002 goes `closed`
-# on 2026-10-31, so a real `date.today()` would silently change the answers.
+# Pinned, as every test module in this repo does: a real `date.today()` would
+# silently change the answers from 2026-10-16, when fixture c-002's
+# `proof_of_income` goes stale (`tests/test_demo_dates.py`).
 TODAY = date(2026, 10, 1)
 
 # The complete set of reason codes the gate may emit. Duplicated here on purpose
