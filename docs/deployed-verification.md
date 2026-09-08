@@ -507,3 +507,47 @@ too.
 **Infrastructure drift:** `.venv/bin/python -m infra.verify_deployed` reports no drift between the
 deployed state machine definition, the EventBridge target input, the Step Functions IAM policy, and
 what `infra/` produces — re-run after the redeploy.
+
+### The approve path, end to end on runtime version 5
+
+The audit's final review found a defect the seven tasks had between them missed: **an approve
+re-escalated itself.** The dashboard writes the `DECISION#` row, then re-invokes the runtime; the
+runtime refused to file (correctly) and wrote a *fresh* escalation row seconds later — which made the
+newest escalation newer than the decision, and put the household straight back into the queue with the
+decision form offered again. Each retry cost a real Bedrock run, and the caseworker's decision looked
+lost. Fixed by having `_escalate` skip the row when it is re-invoked with a caseworker's approval: on
+that path a pending escalation row necessarily already exists, so nothing can vanish from the queue.
+
+Executed against the deployed system after redeploying to **version 5**:
+
+```text
+POST /api/case/c-010/decide  {"decision":"approve"}
+
+{"recorded": true, "caseId": "c-010", "decision": "approve", "filed": false,
+ "graceOutcome": "Grace re-checked and did not file. missing_document:
+   proof_of_residency is not on file (Grace has already messaged the family.)
+   (A caseworker approved this case; Grace re-checked and the gate still
+   requires a human, so nothing was filed.)"}
+```
+
+Read back from DynamoDB rather than from that response:
+
+```text
+escalation rows:   18  (was 18 — a new one would have made it 19)
+human decisions:    2  (was 1)
+newest decision  > newest escalation:  True
+renewal_submitted:  0  (hard rule 6)
+```
+
+And the dashboard followed: `/queue` went from `c-010 c-011 c-012` to **`c-011 c-012`**, "2 households
+need a decision", and a second attempt on `c-010` is refused **409 `already_decided`**. Tomorrow's
+sweep will re-escalate it — the document is still missing — and it becomes decidable again. That is
+the whole lifecycle, working: decide it, it clears; the situation persists, it comes back.
+
+**A wording inconsistency this exposes, left deliberately unchanged.** `/` still reads
+"9 handled alone, **3** waiting on you" while `/queue` says **2**. Both counts are correct for what
+they measure — `/` counts households Grace could not decide (still three; nothing was filed for any of
+them), and `/queue` counts those still awaiting a person (two, now that one has been answered). But
+"waiting on you" overstates for a decided-but-still-escalated case. The headline is quoted verbatim in
+the README, the video handout, and the article, so changing it is a deliberate editorial decision
+rather than a silent fix.
