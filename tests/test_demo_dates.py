@@ -14,7 +14,7 @@ of date — which is how it went wrong the first time.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from grace.authority import evaluate
 from grace.cases.store import load_fixture_cases
@@ -68,7 +68,15 @@ def test_every_clean_case_degrades_on_the_measured_day():
     """The full table, so a fixture edit that moves any one of them is caught.
 
     Measured 2026-09-08 against `fixtures/households.yaml`; every one is a
-    `stale_document`, none is a window closing.
+    `stale_document`, none is a window closing — asserted rather than merely
+    stated, because *which* reason fires is the whole substance of this
+    correction. The comments this test replaces blamed a closed window, and a
+    docstring making that claim without checking it is the same defect again.
+
+    `checked` guards the `continue` above. Renaming a clean fixture id would
+    otherwise drop that household from the table in silence, and the 9/3 split
+    test cannot catch it: nine clean cases are still nine however they are
+    named, and the escalating three are asserted by id there rather than here.
     """
     expected = {
         "c-001": date(2026, 11, 20), "c-002": date(2026, 10, 16),
@@ -77,14 +85,25 @@ def test_every_clean_case_degrades_on_the_measured_day():
         "c-007": date(2026, 11, 30), "c-008": date(2026, 10, 27),
         "c-009": date(2026, 11, 29),
     }
+    checked = set()
     for case in load_fixture_cases():
         if case.case_id not in expected:
             continue
         pack = load_pack(case.program, case.state)
         day = expected[case.case_id]
-        assert evaluate(case, day.fromordinal(day.toordinal() - 1), pack).decision == "act", (
+        assert evaluate(case, day - timedelta(days=1), pack).decision == "act", (
             f"{case.case_id} should still be clean the day before {day}"
         )
-        assert evaluate(case, day, pack).decision == "escalate", (
-            f"{case.case_id} should escalate on {day}"
+        verdict = evaluate(case, day, pack)
+        assert verdict.decision == "escalate", f"{case.case_id} should escalate on {day}"
+        codes = [r.code for r in verdict.reasons]
+        assert codes == ["stale_document"], (
+            f"{case.case_id} should escalate on {day} for a stale document alone, "
+            f"not a closed window — found {codes}"
         )
+        checked.add(case.case_id)
+
+    assert checked == set(expected), (
+        f"every id in the table must be checked, or an entry stops being tested "
+        f"in silence — missed {sorted(set(expected) - checked)}"
+    )
