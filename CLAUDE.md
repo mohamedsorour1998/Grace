@@ -172,9 +172,12 @@ grace period — that is the procedural save it exists to make. Only `not_open` 
 escalate on window grounds. The two are distinguished for the caseworker briefing, not for the
 gate.
 
-**Pin the date.** Every test module uses `TODAY = date(2026, 10, 1)`. Fixture `c-002` goes
-`closed` on 2026-10-31, so a `date.today()` anywhere in the sweep turns the 9-act/3-escalate
-demo into 8/4 on that date. Task 6's CLI takes `--today` defaulting to the pinned value.
+**Pin the date.** Every test module uses `TODAY = date(2026, 10, 1)`. A `date.today()` anywhere in
+the sweep degrades the demo **from 2026-10-16**, when `c-002`'s `proof_of_income` goes stale — not
+from 2026-10-31 when its SNAP window closes, which is 15 days later and was the number this file
+carried for five plans. By 2026-10-30 the split is **6/6**, not 8/4. `tests/test_demo_dates.py` pins
+every fixture's degradation date so this cannot drift again. Task 6's CLI takes `--today` defaulting
+to the pinned value.
 
 ### What Task 2 established — follow these
 

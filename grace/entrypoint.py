@@ -50,8 +50,9 @@ from grace.run import deliberation_note, gate_reason, outreach_sent, renewal_fil
 from grace.store_factory import build_store
 from grace.tools.action import Channel, TranscriptChannel
 
-# Never `date.today()`. Fixture c-002's SNAP grace period ends 2026-10-30, so a
-# live clock turns the 9-act/3-escalate demo into 8/4 from 2026-10-31.
+# Never `date.today()`. A live clock degrades the 9-act/3-escalate demo from
+# 2026-10-16 (c-002's proof_of_income goes stale) and reaches 6/6 by
+# 2026-10-30. See `tests/test_demo_dates.py`.
 DEFAULT_TODAY = "2026-10-01"
 
 # What a case is escalated with when the graph reports an interrupt but carries

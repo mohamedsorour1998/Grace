@@ -117,9 +117,10 @@ class AuthorityGate(SteeringHandler):
         super().__init__(context_providers=[LedgerProvider()])
         self._store = store
         self._case_id = case_id
-        # Passed in, never `date.today()`: fixture c-002 goes `closed` on
-        # 2026-10-31, so a clock read here would turn the 9-act/3-escalate
-        # demo into 8/4 on that date.
+        # Passed in, never `date.today()`: a clock read here would degrade the
+        # 9-act/3-escalate demo from 2026-10-16, when c-002's proof_of_income
+        # goes stale — 6/6 by 2026-10-30, before any window closes. See
+        # `tests/test_demo_dates.py`.
         self._today = today
         # Reads observed in this run. Tracked here rather than read from the
         # SDK's `LedgerProvider` context so the gate works even when that

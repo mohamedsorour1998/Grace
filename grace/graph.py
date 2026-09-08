@@ -130,9 +130,10 @@ def build_case_graph(
     """Build the per-case graph. One graph per case keeps household data
     isolated — nothing is shared between cases.
 
-    `today` is passed in and never read from the clock. Fixture `c-002`'s grace
-    period ends 2026-10-30, so a `date.today()` here turns the 9-act/3-escalate
-    demo into 8/4 from 2026-10-31 onward.
+    `today` is passed in and never read from the clock. A `date.today()` here
+    degrades the 9-act/3-escalate demo from 2026-10-16, when `c-002`'s
+    `proof_of_income` goes stale, and reaches 6/6 by 2026-10-30 — before
+    `c-002`'s SNAP grace period ends. See `tests/test_demo_dates.py`.
     """
     read_tools = make_read_tools(store, case_id, today)
     action_tools = make_action_tools(store, case_id, channel)

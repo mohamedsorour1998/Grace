@@ -90,8 +90,9 @@ from grace.rules.pack import load_pack
 from grace.tools.action import Channel, TranscriptChannel
 
 # The date every fixture window is anchored to. A default of `date.today()`
-# would turn the 9-act/3-escalate demo into 8/4 from 2026-10-31, when fixture
-# c-002's SNAP grace period ends.
+# would degrade the 9-act/3-escalate demo from 2026-10-16, when c-002's
+# proof_of_income goes stale — and the split is 6/6 by 2026-10-30, before
+# c-002's SNAP grace period ends. `tests/test_demo_dates.py` pins the dates.
 DEFAULT_TODAY = "2026-10-01"
 
 # Caseworker decisions that mean "yes, file this after all" — the only
