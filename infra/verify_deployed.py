@@ -51,8 +51,25 @@ import boto3
 
 from infra import naming, provision_eventbridge, provision_iam, provision_stepfunctions
 
-SFN_ROLE = "grace-stepfunctions-role"
-SFN_POLICY = "grace-stepfunctions-policy"
+# The purpose key the Step Functions role and its inline policy are registered
+# under in `provision_iam`. Both names come from that module's own builders
+# rather than being written out here, for the reason `role_name`'s docstring
+# already gives: a rename reflected in only one place orphans a role nobody
+# notices.
+#
+# A drift check is the worst possible home for a second copy of that name.
+# Every other identifier this module compares is rebuilt from `naming`, so a
+# stale one reports drift — loudly, which is the job. A stale *role* name
+# instead makes `get_role_policy` raise `NoSuchEntity`, and by the limit in this
+# module's docstring that aborts the state machine and schedule checks too. One
+# literal out of date here would quietly stop all three comparisons rather than
+# failing the one it belongs to.
+#
+# `role_name` raises `KeyError` on an unrecognised purpose, so a typo in this
+# constant fails at import rather than against the live account.
+SFN_PURPOSE = "stepfunctions"
+SFN_ROLE = provision_iam.role_name(SFN_PURPOSE)
+SFN_POLICY = provision_iam.policy_name(SFN_PURPOSE)
 
 
 def check_drift(sfn, events, iam, account_id: str) -> list[str]:

@@ -22,13 +22,22 @@ from __future__ import annotations
 import json
 
 from infra import naming, provision_eventbridge, provision_iam, provision_stepfunctions
-from infra.verify_deployed import SFN_POLICY, SFN_ROLE, check_drift
+from infra.verify_deployed import check_drift
 
 ACCOUNT = "339712964409"
 LAMBDA_ARN = f"arn:aws:lambda:{naming.REGION}:{ACCOUNT}:function:{naming.LAMBDA}"
 STATE_MACHINE_ARN = (
     f"arn:aws:states:{naming.REGION}:{ACCOUNT}:stateMachine:{naming.STATE_MACHINE}"
 )
+
+# Built from `provision_iam`'s own builders, **not** imported from the module
+# under test. Importing `verify_deployed.SFN_ROLE` would make the assertion
+# self-referential: it would agree with whatever that module happens to say,
+# which is exactly the check that is wanted here. The state machine ARN and the
+# rule name above are independent of the module for the same reason, and this
+# was the one identifier that was not.
+SFN_ROLE = provision_iam.role_name("stepfunctions")
+SFN_POLICY = provision_iam.policy_name("stepfunctions")
 
 
 # The three fakes record what they were asked about, and read their arguments by
