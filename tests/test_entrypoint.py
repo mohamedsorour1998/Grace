@@ -79,18 +79,32 @@ def test_a_clean_case_with_a_filed_renewal_is_acted(monkeypatch):
     function out, which passes even if `renewal_filed` searched for the wrong
     ledger `kind` — the one thing this branch actually depends on (hard rule 6:
     the ledger row is the only evidence a renewal was filed).
+
+    **The row is written *during* the run, not before it.** `renewal_filed` is
+    now scoped to the current run, so a row appended ahead of `process_case`
+    predates the run boundary and correctly reads as "an earlier sweep filed
+    this, not this one". Writing it from the fake graph's own `__call__` is what
+    a real `submit_renewal` does, and it is what makes this test assert `acted`
+    on evidence *this* run produced — which is the whole point of the branch.
     """
     store = _store()
-    graph = FakeGraph()
+
+    class FilingGraph(FakeGraph):
+        """Files the renewal when invoked, as `submit_renewal` would."""
+
+        def __call__(self, task):
+            store.append_ledger(
+                LedgerEntry(
+                    case_id="c-001",
+                    at=datetime.now(timezone.utc),
+                    kind="renewal_submitted",
+                    detail={"tool": "submit_renewal"},
+                )
+            )
+            return super().__call__(task)
+
+    graph = FilingGraph()
     monkeypatch.setattr(entrypoint, "build_case_graph", lambda *a, **k: graph)
-    store.append_ledger(
-        LedgerEntry(
-            case_id="c-001",
-            at=datetime.now(timezone.utc),
-            kind="renewal_submitted",
-            detail={"tool": "submit_renewal"},
-        )
-    )
     out = entrypoint.process_case(_payload("c-001"), store=store,
                                   channel=TranscriptChannel())
     assert out["status"] == "acted"
@@ -310,18 +324,55 @@ def test_a_bad_today_is_refused_rather_than_defaulted():
 def test_the_default_today_is_pinned():
     """Never a live clock. See above.
 
-    Both halves matter: the constant is the pinned value, and no line in the
-    module calls `date.today()` / `datetime.now()`. **Parsed, not grepped** —
-    this module *documents* why the live clock must not appear, so a substring
-    check matches the comment warning against it and fails on correct code.
+    Both halves matter: the constant is the pinned value, and the module never
+    derives `today` from a live clock. **Parsed, not grepped** — this module
+    *documents* why the live clock must not appear, so a substring check matches
+    the comment warning against it and fails on correct code.
     `tests/test_graph.py` records the same lesson: a test that can only pass by
     deleting the explanation is a bad test.
+
+    **The carve-out, and why it is narrow.** This guard used to forbid `.today()`
+    and `.now()` anywhere in the module, which was the same claim as "`today` is
+    never a live clock" only while the module had no other reason to read one.
+    Run-scoping `renewal_filed` gives it exactly one: `run_started`, a boundary
+    for the *ledger* that has nothing to do with which day eligibility is
+    evaluated against. So `.today()` stays banned outright — there is no
+    legitimate use of it here — and `.now()` is permitted only when its result is
+    bound to `run_started`. Anything else, including `today = datetime.now(...)`,
+    still fails.
+
+    The carve-out is itself asserted to have applied to something. A permitted
+    exception nobody exercises is a hole that silently widens: if `run_started`
+    is ever removed, this test must fail rather than quietly go back to banning
+    everything and passing for the wrong reason.
     """
     assert entrypoint.DEFAULT_TODAY == "2026-10-01"
     tree = ast.parse(inspect.getsource(entrypoint))
+
+    # The single legitimate clock read: `run_started = datetime.now(timezone.utc)`.
+    # Collected by identity, so only that exact binding is exempt — a `.now()`
+    # anywhere else, or assigned to any other name, is still a failure.
+    permitted: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and any(
+                isinstance(t, ast.Name) and t.id == "run_started"
+                for t in node.targets
+            )
+        ):
+            permitted.add(id(node.value))
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            assert node.func.attr not in {"today", "now"}, ast.dump(node.func)
+            # `.today()` is never legitimate here; `.now()` only as `run_started`.
+            assert node.func.attr != "today", ast.dump(node.func)
+            if node.func.attr == "now":
+                assert id(node) in permitted, ast.dump(node.func)
+
+    # The exception must actually be exercised — see the docstring.
+    assert permitted, "the run_started carve-out matched nothing"
 
 
 def test_the_classification_helpers_are_shared_with_the_sweep():

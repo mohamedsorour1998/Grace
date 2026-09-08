@@ -38,7 +38,7 @@ model failure produces a `CaseOutcome` dict. Step Functions can branch on
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, TypedDict
 
 from strands.multiagent.base import Status
@@ -174,6 +174,13 @@ def process_case(
     reason_is_run_status = False
     deliberation: str | None = None
 
+    # See `renewal_filed`'s docstring: captured before the graph runs so that a
+    # filing from an earlier sweep cannot be mistaken for this run's work. The
+    # deployed table holds twelve filings per household, so without this the
+    # outcome this function returns — which `web/lib/decide.ts` renders as
+    # "the renewal was filed" — would be a claim about history.
+    run_started = datetime.now(timezone.utc)
+
     try:
         graph = build_case_graph(store, case_id, today, channel)
         result = graph(
@@ -246,7 +253,7 @@ def process_case(
         return _escalate(store, case_id, reason,
                          caseworker_approved=caseworker_approved)
 
-    if renewal_filed(store, case_id):
+    if renewal_filed(store, case_id, since=run_started):
         return {"status": "acted", "case_id": case_id, "filed": True,
                 "trace_id": _current_trace_id()}
 

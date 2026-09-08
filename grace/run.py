@@ -79,7 +79,7 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
 from strands.multiagent.base import Status
 
@@ -352,8 +352,10 @@ def gate_reason(store: CaseStore, case_id: str, today: date) -> str | None:
 _gate_reason = gate_reason
 
 
-def renewal_filed(store: CaseStore, case_id: str) -> bool:
-    """Whether the ledger confirms a renewal was actually filed.
+def renewal_filed(
+    store: CaseStore, case_id: str, since: datetime | None = None
+) -> bool:
+    """Whether the ledger confirms a renewal was filed, optionally in this run.
 
     Public for the same reason as `gate_reason`: the deployed entrypoint must
     answer this question from the same source the local sweep does.
@@ -362,11 +364,33 @@ def renewal_filed(store: CaseStore, case_id: str) -> bool:
     is the ground truth for what executed. `submit_renewal` writes
     `renewal_submitted` only after the store operation returns, so this is a
     confirmed action rather than a claimed one (hard rule 6).
+
+    **`since` scopes the claim to one run, and callers with a run boundary must
+    pass it.** Without it this reads the whole ledger, which made the answer
+    monotonic: a household filed once reported `acted` from every later run
+    whatever happened in it. Measured live, every clean case carried twelve
+    `renewal_submitted` rows across twelve sweeps — the agent was filing each
+    time, and this function could not have distinguished that from a gate that
+    had stopped working, because both produce a row that already exists. A
+    check that cannot fail is indistinguishable from a passing one.
+
+    `>=` rather than `>`: a row written in the same microsecond the run began
+    belongs to that run, and excluding it would report a real filing as absent.
+    Both stamps come from `datetime.now(timezone.utc)` in the same process, so
+    there is no clock skew between them.
+
+    The default stays `None` so a caller with no run boundary — a verification
+    script asking "was this household ever filed" — still gets a truthful
+    all-time answer rather than being forced to invent a start time.
     """
     try:
-        return any(e.kind == "renewal_submitted" for e in store.ledger(case_id))
+        entries = store.ledger(case_id)
     except Exception:  # noqa: BLE001 — an unreadable ledger confirms nothing
         return False
+    return any(
+        e.kind == "renewal_submitted" and (since is None or e.at >= since)
+        for e in entries
+    )
 
 
 # Retained so nothing that already imports the private name breaks.
@@ -430,6 +454,11 @@ def sweep(
         # path, and a reason that merely *looks* like the fallback is not the
         # same thing as being it.
         reason_is_run_status = False
+        # Captured before the graph runs, so every `renewal_submitted` row this
+        # case writes is at or after it. Read from the same clock the ledger
+        # writes with — `datetime.now(timezone.utc)` in this process — so there
+        # is no skew to allow for.
+        run_started = datetime.now(timezone.utc)
         try:
             graph = build_case_graph(store, case.case_id, today, channel)
             result = graph(
@@ -579,7 +608,7 @@ def sweep(
             if deliberation:
                 reason = f"{reason} Deliberation — {deliberation}"
             escalated.append((case.case_id, reason))
-        elif _renewal_filed(store, case.case_id):
+        elif _renewal_filed(store, case.case_id, since=run_started):
             acted.append(case.case_id)
         else:
             # Clean case, clean run, and no renewal on the ledger. Grace did not
