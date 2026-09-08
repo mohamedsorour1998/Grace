@@ -382,15 +382,28 @@ def renewal_filed(
     The default stays `None` so a caller with no run boundary — a verification
     script asking "was this household ever filed" — still gets a truthful
     all-time answer rather than being forced to invent a start time.
+
+    **The comparison is inside the `try`, not just the read.** `LedgerEntry`
+    rejects a naive `at` but *accepts* a `tzinfo` whose `utcoffset()` returns
+    `None` (the same gap `infra/naming.py`'s `_utc_stamp` refuses separately),
+    and comparing an aware datetime against one of those raises `TypeError`.
+    That matters more than its likelihood, because of where the two callers sit:
+    `sweep`'s call is *outside* its per-case `try`, so one malformed row would
+    abort all twelve households rather than one; and `grace/entrypoint.py`
+    promises "nothing here raises" as a contract Step Functions branches on. It
+    also keeps this correct against a `ledger()` that returns a lazy iterator —
+    the `CaseStore` annotation says `list`, but an annotation enforces nothing,
+    and a generator would do its I/O during iteration rather than at the call.
+    An unreadable *or* uncomparable ledger confirms nothing, which is the same
+    answer for the same reason.
     """
     try:
-        entries = store.ledger(case_id)
+        return any(
+            e.kind == "renewal_submitted" and (since is None or e.at >= since)
+            for e in store.ledger(case_id)
+        )
     except Exception:  # noqa: BLE001 — an unreadable ledger confirms nothing
         return False
-    return any(
-        e.kind == "renewal_submitted" and (since is None or e.at >= since)
-        for e in entries
-    )
 
 
 # Retained so nothing that already imports the private name breaks.

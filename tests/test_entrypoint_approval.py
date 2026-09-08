@@ -128,29 +128,66 @@ def test_approving_c010_escalates_even_when_a_renewal_row_exists(monkeypatch):
     was filed" reason, and the assertions above all held. The safety claim was
     true of the run and unproven by the test.
 
-    So this one removes that alibi. A `renewal_submitted` row is written first,
-    which makes `renewal_filed` return `True` and gives the sabotaged code a
-    path to `acted`. The gate is then the *only* thing standing between an
-    approval and a household missing a required document being reported as
-    filed — which is exactly the claim the demo makes.
+    So this one removes that alibi. A `renewal_submitted` row is written, which
+    makes `renewal_filed` return `True` and gives the sabotaged code a path to
+    `acted`. The gate is then the *only* thing standing between an approval and
+    a household missing a required document being reported as filed — which is
+    exactly the claim the demo makes.
+
+    **The row is written from inside the run, and the arming check asks the
+    run-scoped question.** Both halves of that are load-bearing since
+    `renewal_filed` became run-scoped. The row used to be appended before
+    `process_case` with a hardcoded `2026-10-01T12:00Z` stamp, which counted as
+    "this run" only because that date was still in the future — so the trap
+    would have silently disarmed on 2026-10-01, and the alibi this test exists
+    to remove would have come back. Worse, the arming assertion called
+    `renewal_filed` with **no `since`**, the all-time reading, which is a
+    different question from the one `process_case` asks: it would have kept
+    passing while the trap was gone. Writing the row from the graph's own
+    `__call__` makes it land during the run by construction rather than by a
+    date that expires, and asking the arming question with a `since` captured
+    before the run makes the check fail if it ever stops being armed.
     """
     store = _store()
-    store.append_ledger(
-        LedgerEntry(
-            case_id="c-010",
-            at=datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc),
-            kind="renewal_submitted",
-            detail={"confirmation": "test-only"},
-        )
-    )
-    assert entrypoint.renewal_filed(store, "c-010"), "the fixture must arm the trap"
 
-    monkeypatch.setattr(entrypoint, "build_case_graph", lambda *a, **k: FakeGraph())
+    def _filing_graph_for(target_store):
+        """A graph that files the renewal when invoked, as `submit_renewal` does."""
+
+        class FilingGraph(FakeGraph):
+            def __call__(self, task):
+                target_store.append_ledger(
+                    LedgerEntry(
+                        case_id="c-010",
+                        at=datetime.now(timezone.utc),
+                        kind="renewal_submitted",
+                        detail={"confirmation": "test-only"},
+                    )
+                )
+                return super().__call__(task)
+
+        return FilingGraph()
+
+    # Captured before the run, so it is at or before `process_case`'s own
+    # `run_started`. The arming assertion below therefore asks exactly the
+    # question `process_case` asks — "was a renewal filed at or after a boundary
+    # taken before this run began" — rather than the all-time question, which
+    # cannot notice the trap being disarmed.
+    probe_started = datetime.now(timezone.utc)
+
+    monkeypatch.setattr(
+        entrypoint, "build_case_graph", lambda *a, **k: _filing_graph_for(store)
+    )
     out = entrypoint.process_case(
         {"case_id": "c-010", "today": TODAY, "caseworker_approved": True},
         store=store,
         channel=TranscriptChannel(),
     )
+    assert entrypoint.renewal_filed(store, "c-010", since=probe_started), (
+        "the fixture must arm the trap: without a renewal row from THIS run, "
+        "the 'clean but no renewal was filed' branch escalates c-010 for every "
+        "input and this test cannot see an approval reaching the gate"
+    )
+
     # The gate ran on the case record and found the document still missing, so
     # the presence of a renewal row cannot turn this into `acted`.
     assert out["status"] == "escalated", (
@@ -163,19 +200,18 @@ def test_approving_c010_escalates_even_when_a_renewal_row_exists(monkeypatch):
     # And the same fixture without the approval behaves identically, so the
     # assertion above is about the gate rather than about the flag.
     plain_store = _store()
-    plain_store.append_ledger(
-        LedgerEntry(
-            case_id="c-010",
-            at=datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc),
-            kind="renewal_submitted",
-            detail={"confirmation": "test-only"},
-        )
+    plain_probe_started = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        entrypoint, "build_case_graph", lambda *a, **k: _filing_graph_for(plain_store)
     )
     plain = entrypoint.process_case(
         {"case_id": "c-010", "today": TODAY},
         store=plain_store,
         channel=TranscriptChannel(),
     )
+    assert entrypoint.renewal_filed(
+        plain_store, "c-010", since=plain_probe_started
+    ), "the unapproved half must arm the same trap, or it proves nothing either"
     assert plain["status"] == "escalated"
 
 
