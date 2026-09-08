@@ -96,6 +96,10 @@ export interface CaseDetail {
    *  state, not an error: a case can exist in the ledger without one. The page
    *  must then say nothing about document provenance rather than guess. */
   record: CaseRecordFacts | null;
+  /** Whether the newest human decision is newer than the newest escalation.
+   *  `false` means this household is still waiting on a person — see the note
+   *  in `lib/cases.ts` on why a decision is scoped to an escalation episode. */
+  decidedSinceEscalation: boolean;
 }
 
 /** Only the opaque `sub`, the role, and the expiry. Never an email or a name:

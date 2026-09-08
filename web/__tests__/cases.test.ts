@@ -73,6 +73,41 @@ class FakeDynamo {
   }
 }
 
+/** A DynamoDB double that routes by partition key, unlike `FakeDynamo` above.
+ *
+ *  `listQueue` now reads each escalated case's own partition — Task 1 of the
+ *  audit-fixes plan, so a decision can be scoped to the escalation it answers
+ *  rather than to the case forever — and `FakeDynamo` serves pages
+ *  positionally with no regard for what a query actually asked for. That was
+ *  fine while `listQueue` issued exactly one query; reusing it unchanged for
+ *  the per-case reads would hand every candidate whichever page position it
+ *  landed on, which is not what a real Query does and is not what these two
+ *  tests are trying to measure. GSI pages are still served positionally
+ *  (unaffected — these tests exercise the GSI's own pagination separately from
+ *  the partition reads), and a `pk`-bearing query is answered from
+ *  `partitions` by the case id it names. */
+class RoutingFakeDynamo {
+  public sent: Record<string, unknown>[] = [];
+  private index = 0;
+  constructor(
+    private gsiPages: Page[],
+    private partitions: Record<string, Record<string, AttrValue>[]>,
+  ) {}
+
+  async send(command: { input: Record<string, unknown> }): Promise<Page> {
+    const input = command.input;
+    this.sent.push(input);
+    if (input.IndexName !== undefined) {
+      const page = this.gsiPages[Math.min(this.index, this.gsiPages.length - 1)];
+      this.index += 1;
+      return page ?? {};
+    }
+    const values = (input.ExpressionAttributeValues ?? {}) as Record<string, { S?: string }>;
+    const pk = values[":pk"]?.S ?? "";
+    return { Items: this.partitions[pk.replace("CASE#", "")] ?? [] };
+  }
+}
+
 const S = (s: string): AttrValue => ({ S: s });
 
 // Real rows are `datetime.isoformat()` output — `+00:00`, microsecond precision,
@@ -228,7 +263,12 @@ describe("listQueue", () => {
       escalationRow("c-011", "2026-09-03T05:00:01+00:00", "2026-10-22"),
       escalationRow("c-012", "2026-09-03T06:00:00+00:00", "2026-10-12", "source_conflict"),
     ];
-    const fake = new FakeDynamo([{ Items: rows }]);
+    // `listQueue` now reads each candidate's own partition too (Task 1 of the
+    // audit-fixes plan), so the fake must route each per-case read to that
+    // case's own row rather than handing every candidate the same page.
+    const fake = new RoutingFakeDynamo([{ Items: rows }], {
+      "c-010": [rows[0]!], "c-011": [rows[1]!], "c-012": [rows[2]!],
+    });
     const queue = await listQueue(fake as never);
     expect(queue.map(c => c.caseId)).toEqual(["c-012", "c-010", "c-011"]);
     // GSI order and escalation-time order are both c-010, c-011, c-012 here, so
@@ -282,16 +322,26 @@ describe("listQueue", () => {
 
   it("follows LastEvaluatedKey", async () => {
     // Truncation would silently drop households from a work queue.
-    const fake = new FakeDynamo([
-      { Items: [escalationRow("c-010", "2026-09-03T00:00:00+00:00", "2026-10-18")],
-        LastEvaluatedKey: { pk: S("CASE#c-010"), sk: S("ESCALATION#2026-09-03T00:00:00+00:00") } },
-      { Items: [escalationRow("c-011", "2026-09-03T00:00:00+00:00", "2026-10-22")] },
-    ]);
+    const fake = new RoutingFakeDynamo(
+      [
+        { Items: [escalationRow("c-010", "2026-09-03T00:00:00+00:00", "2026-10-18")],
+          LastEvaluatedKey: { pk: S("CASE#c-010"), sk: S("ESCALATION#2026-09-03T00:00:00+00:00") } },
+        { Items: [escalationRow("c-011", "2026-09-03T00:00:00+00:00", "2026-10-22")] },
+      ],
+      {
+        "c-010": [escalationRow("c-010", "2026-09-03T00:00:00+00:00", "2026-10-18")],
+        "c-011": [escalationRow("c-011", "2026-09-03T00:00:00+00:00", "2026-10-22")],
+      },
+    );
     const queue = await listQueue(fake as never);
-    expect(fake.sent).toHaveLength(2);
+    // 2 GSI pages plus one partition read per candidate (c-010, c-011) — the
+    // partition reads are what Task 1 added, to measure whether a decision
+    // answers the newest escalation.
+    expect(fake.sent).toHaveLength(4);
     expect(queue.map(c => c.caseId)).toEqual(["c-010", "c-011"]);
-    // The second call must carry the first page's key, or the loop re-reads page
-    // one forever and only terminates because the fake stops offering a key.
+    // The second GSI call must carry the first page's key, or the loop re-reads
+    // page one forever and only terminates because the fake stops offering a
+    // key.
     expect(fake.sent[0]!.ExclusiveStartKey).toBeUndefined();
     expect(fake.sent[1]!.ExclusiveStartKey).toEqual({
       pk: S("CASE#c-010"), sk: S("ESCALATION#2026-09-03T00:00:00+00:00"),

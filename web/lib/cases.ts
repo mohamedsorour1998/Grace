@@ -129,9 +129,23 @@ function str(v: AttributeValue | undefined, fallback = ""): string {
  *
  *  An unparseable timestamp sorts as older than everything, so a corrupt row
  *  cannot displace a good one as "newest". */
-function instant(v: AttributeValue | undefined): number {
-  const t = Date.parse(str(v));
+/** An ISO stamp as milliseconds, or `-Infinity` when it is unparseable.
+ *
+ *  Separate from `instant` because a decision's `decided_at` arrives as a
+ *  `string` off a parsed row while an escalation's arrives as an
+ *  `AttributeValue`, and both have to be compared on the same scale. Never
+ *  compare these as strings: `Z` (0x5A) sorts above `.` (0x2E), so
+ *  `"…T05:00:01Z" > "…T05:00:01.500000+00:00"` is `true` while the offset row
+ *  is the *later* instant. Grace writes microsecond `+00:00` stamps from
+ *  Python and `Z` stamps from Step Functions, so both spellings are live in
+ *  this table. */
+function parseInstant(value: string): number {
+  const t = Date.parse(value);
   return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY;
+}
+
+function instant(v: AttributeValue | undefined): number {
+  return parseInstant(str(v));
 }
 
 /** The `RECORD#v1` row, as the provenance the case page renders.
@@ -212,27 +226,40 @@ export async function listQueue(client: DynamoDBClient = defaultClient()): Promi
     if (!seen || instant(row.escalated_at) > instant(seen.escalated_at)) newest.set(id, row);
   }
 
-  return [...newest.values()]
-    .map((row): CaseSummary => ({
-      caseId: str(row.case_id),
-      status: "escalated",
-      // No escalation row carries a program: measured across all 18 live rows,
-      // whose only attributes are pk/sk/case_id/status/escalated_at/deadline/
-      // reason/question. `d_program` exists solely on `renewal_submitted`
-      // ledger rows, which an escalated case by definition does not have — so
-      // for these three households the program is genuinely not in the table,
-      // and `""` says so. `listCases` fills it in for the nine that filed.
-      program: "",
-      deadline: str(row.deadline),
-      reason: str(row.reason) || null,
-      // NOT MEASURED, and false by construction rather than by evidence: the
-      // GSI projects escalation rows only, so this query cannot see whether a
-      // `renewal_submitted` row exists. Hard rule 6 says it must not — and a
-      // page that wants to *check* that must use `listCases`, which reads the
-      // ledger. Do not render this field from `listQueue`.
-      filed: false,
-    }))
-    .sort((a, b) => a.deadline.localeCompare(b.deadline) || a.caseId.localeCompare(b.caseId));
+  // The GSI gives the candidates; only the case partition knows whether a
+  // caseworker has already answered. The index projects escalation rows alone,
+  // so it can see neither decisions nor `renewal_submitted` — which is also why
+  // the summary below now comes from `readCase` rather than from the GSI row:
+  // it measures `filed` and `program` instead of asserting them.
+  //
+  // One extra read per *escalated* household, which is the small set. Reading
+  // every case here would make the queue cost the whole caseload.
+  const candidates = [...newest.entries()];
+  const details = await Promise.all(
+    candidates.map(([id]) => readCase(id, client).catch(() => null)),
+  );
+
+  const queue: CaseSummary[] = [];
+  candidates.forEach(([id, row], index) => {
+    const detail = details[index];
+    if (detail === null || detail === undefined) {
+      // An unreadable partition must not remove a household from the queue.
+      // Dropping an escalated family because a read failed is the silent
+      // omission this project exists to prevent, so fall back to the GSI row —
+      // degraded (no `program`, `filed` unmeasured) but present.
+      queue.push({
+        caseId: id, status: "escalated", program: "",
+        deadline: str(row.deadline), reason: str(row.reason) || null, filed: false,
+      });
+      return;
+    }
+    if (detail.decidedSinceEscalation) return;
+    queue.push(detail.summary);
+  });
+
+  return queue.sort(
+    (a, b) => a.deadline.localeCompare(b.deadline) || a.caseId.localeCompare(b.caseId),
+  );
 }
 
 /** Every case id, from the directory partition and the seeded twelve.
@@ -395,6 +422,29 @@ export async function readCase(
     if (outcome !== undefined && outcome !== "") d.outcome = outcome;
   }
 
+  // **A decision answers one escalation, not the case forever.**
+  //
+  // Every sweep appends a fresh `PENDING_CASEWORKER` escalation row for a
+  // household it still cannot settle, and nothing ever changes that status —
+  // so "has this case ever been decided" is permanently true once a caseworker
+  // acts, and the household is then stuck in the queue and refused as
+  // `already_decided` if anyone tries again. Measured live: `c-010` held one
+  // approval and sixteen PENDING rows.
+  //
+  // Scoping the question to the newest escalation makes both surfaces correct.
+  // The caseworker's decision clears the case from `/queue`; the next sweep,
+  // finding the document still missing, escalates again and the case becomes
+  // decidable again — which is right, because the family's situation has not
+  // changed and a human should see that it is still outstanding.
+  const newestEscalation = escalation ? instant(escalation.escalated_at) : Number.NEGATIVE_INFINITY;
+  const newestDecision = decisions.reduce(
+    (max, d) => Math.max(max, parseInstant(d.decidedAt)),
+    Number.NEGATIVE_INFINITY,
+  );
+  // Strictly greater. A decision stamped at the same instant as the escalation
+  // it would answer cannot have been made in response to it.
+  const decidedSinceEscalation = newestDecision > newestEscalation;
+
   const pending = escalation !== undefined && str(escalation.status) === PENDING;
   // A submitted case that no sweep has looked at: a record row and nothing else.
   // `new` was declared in `lib/types.ts`, rendered in `case-table.tsx`, and
@@ -418,6 +468,7 @@ export async function readCase(
         : "error";
   return {
     record,
+    decidedSinceEscalation,
     summary: {
       caseId,
       status,
@@ -454,6 +505,10 @@ export async function readFacts(
   return {
     caseId,
     status: detail.summary.status,
-    alreadyDecided: detail.decisions.length > 0,
+    // Scoped to the newest escalation, not to the case's whole history. A
+    // household re-escalated after a decision is decidable again, because the
+    // sweep found the same problem unresolved and a human should answer for
+    // the current escalation rather than be told they already did.
+    alreadyDecided: detail.decidedSinceEscalation,
   };
 }
