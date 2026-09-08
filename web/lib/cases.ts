@@ -118,32 +118,33 @@ function str(v: AttributeValue | undefined, fallback = ""): string {
   return typeof p === "string" ? p : fallback;
 }
 
-/** Order two ISO timestamps by the instant they name, not by their spelling.
+/** An ISO stamp as milliseconds, or `-Infinity` when it is unparseable.
  *
- *  Real rows are `datetime.isoformat()` output — `2026-09-03T23:39:22.314855+00:00`,
- *  offset-suffixed and microsecond-precision, never `Z`. A string `>` on mixed
- *  spellings inverts: `"...T05:00:01Z" > "...T05:00:01.5+00:00"` is `true`
- *  because `Z` (0x5A) sorts above `.` (0x2E), so the *earlier* row would win a
- *  newest-wins comparison. Plan 2 found the same class of bug in the sort key
- *  itself, where a non-UTC offset sorted bytewise against a UTC one.
+ *  Order two ISO timestamps by the instant they name, never by their
+ *  spelling: `Z` (0x5A) sorts above `.` (0x2E), so
+ *  `"…T05:00:01Z" > "…T05:00:01.500000+00:00"` is `true` as a string
+ *  comparison while the offset row is the *later* instant. This is reachable,
+ *  not theoretical, because two different writers use two different spellings
+ *  on the same table: Grace's Python side (`infra/naming.py`,
+ *  `grace/ledger.py`) writes microsecond, offset-suffixed stamps —
+ *  `2026-09-03T23:39:22.314855+00:00` — for every escalation and ledger row,
+ *  while `web/lib/decide.ts`'s `utcStamp()` (`new Date().toISOString()`)
+ *  writes the `Z` spelling for `decided_at` on every human decision row. A
+ *  decision's stamp and an escalation's stamp must therefore be compared on
+ *  the same scale rather than by whichever format each happened to use. Plan
+ *  2 found the same class of bug in the sort key itself, where a non-UTC
+ *  offset sorted bytewise against a UTC one.
  *
  *  An unparseable timestamp sorts as older than everything, so a corrupt row
  *  cannot displace a good one as "newest". */
-/** An ISO stamp as milliseconds, or `-Infinity` when it is unparseable.
- *
- *  Separate from `instant` because a decision's `decided_at` arrives as a
- *  `string` off a parsed row while an escalation's arrives as an
- *  `AttributeValue`, and both have to be compared on the same scale. Never
- *  compare these as strings: `Z` (0x5A) sorts above `.` (0x2E), so
- *  `"…T05:00:01Z" > "…T05:00:01.500000+00:00"` is `true` while the offset row
- *  is the *later* instant. Grace writes microsecond `+00:00` stamps from
- *  Python and `Z` stamps from Step Functions, so both spellings are live in
- *  this table. */
 function parseInstant(value: string): number {
   const t = Date.parse(value);
   return Number.isFinite(t) ? t : Number.NEGATIVE_INFINITY;
 }
 
+/** The `AttributeValue` wrapper over `parseInstant`, for a stamp read
+ *  straight off a DynamoDB row rather than off an already-parsed field like
+ *  `Decision.decidedAt`. */
 function instant(v: AttributeValue | undefined): number {
   return parseInstant(str(v));
 }

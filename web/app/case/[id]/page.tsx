@@ -52,14 +52,22 @@ export default async function Case({ params }: { params: Promise<{ id: string }>
   const detail = await readCase(id);
   if (detail === null) notFound();
 
-  const { summary, ledger, decisions, record } = detail;
+  const { summary, ledger, decisions, record, decidedSinceEscalation } = detail;
   const row = formatCaseRow(summary);
-  // The same three conditions `authorize` will re-check server-side when the
-  // form posts, so the form is offered only where a decision is actually
-  // permitted. Showing it on a case `authorize` refuses would let a caseworker
-  // write a note and be told no — and `not_escalated` and `case_incomplete` are
-  // both refusals, so `status === "escalated"` is not one condition but two.
-  const decidable = summary.status === "escalated" && decisions.length === 0;
+  // The same conditions `authorize` will re-check server-side when the form
+  // posts, so the form is offered only where a decision is actually permitted.
+  // Showing it on a case `authorize` refuses would let a caseworker write a
+  // note and be told no — and `not_escalated` and `case_incomplete` are both
+  // refusals, so `status === "escalated"` is not one condition but two.
+  //
+  // `decidedSinceEscalation`, never a raw count of `decisions` — a decision
+  // answers the escalation it was made against, not the case forever (see the
+  // note in `lib/cases.ts` beside where this field is computed). Tomorrow's
+  // sweep re-escalates a household whose problem persists and writes a fresh
+  // PENDING row; `/queue` lists it again and the write route accepts a new
+  // decision, so the page must offer the form again too, or a caseworker who
+  // clicks through from the queue reaches a case with nothing to do.
+  const decidable = summary.status === "escalated" && !decidedSinceEscalation;
 
   return (
     <section className="space-y-10">

@@ -569,6 +569,29 @@ describe("the pages", () => {
     expect(src.toLowerCase()).not.toContain("documents on file");
   });
 
+  it("offers the decision form again once a case is re-escalated, not only the first time", async () => {
+    // `decidable` used to read `decisions.length === 0` — an all-time check
+    // that, once a caseworker ever decided the case, stayed true forever. Task
+    // 1 fixed exactly this defect everywhere in `lib/cases.ts` but missed this
+    // page: after tomorrow's sweep re-escalates a household whose problem
+    // persists, `/queue` lists it again and the write route accepts a new
+    // decision, but this page would never render `DecisionForm` a second
+    // time — a caseworker clicking through from the queue would reach a dead
+    // end. Asserted against the source because the page is an async server
+    // component that reads DynamoDB and `renderToStaticMarkup` cannot drive it
+    // — the same reason the `requireSession` and document-provenance guards
+    // above are source-level too.
+    const fs = await import("node:fs");
+    const src = fs.readFileSync(
+      new URL("../app/case/[id]/page.tsx", import.meta.url), "utf8");
+    expect(src).toContain("decidedSinceEscalation");
+    expect(src).toMatch(
+      /decidable\s*=\s*summary\.status\s*===\s*"escalated"\s*&&\s*!decidedSinceEscalation/,
+    );
+    // The old, all-time check must not survive alongside the new one.
+    expect(src).not.toMatch(/decisions\.length\s*===\s*0/);
+  });
+
   it("says nowhere in the interface that Grace holds a document", async () => {
     // The vocabulary invariant, over every surface rather than the one that was
     // changed. Sabotaging the intake form's legend back to "Documents on file"

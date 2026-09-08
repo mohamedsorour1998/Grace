@@ -78,11 +78,17 @@ export function splitReason(reason: string): { code: string | null; detail: stri
 
 /** What one row says.
  *
- *  `reason` first, and for an escalated case that is the only source — `filed`
- *  arrives from `listQueue` as `false` **by construction** rather than by
- *  measurement (the GSI projects escalation rows only, so that query cannot see
- *  a `renewal_submitted` row), so reading it on an escalated row would render a
- *  claim about a fact nobody measured.
+ *  `reason` first, and for an escalated case that is the only source this
+ *  function consults — not because `filed` is unmeasured on every such row
+ *  anymore. Since Task 1 of the 2026-09-08 audit, `listQueue` reads each
+ *  candidate's own partition through `readCase`, which measures `filed` from
+ *  the ledger the same way `listCases` already did; it is `false` **by
+ *  construction** rather than by measurement only on the one degraded row
+ *  `listQueue` falls back to when a partition cannot be read at all (see
+ *  `lib/cases.ts`). This function takes a plain `CaseSummary` with no way to
+ *  tell which path produced it, so it still never leans on `filed` for an
+ *  escalated row — `reason` is always real, because the escalation row is
+ *  what the caseworker is deciding.
  *
  *  With no reason, the three statuses say three different things, and the
  *  difference is whether the sentence is true. `acted` has a `renewal_submitted`
@@ -116,13 +122,17 @@ function fallbackDetail(c: CaseSummary): string {
     return "Submitted, and no sweep has evaluated it yet. Grace will pick it up on its next run.";
   }
   if (c.status === "escalated") {
-    // An escalated case with no reason. `filed` is deliberately not consulted:
-    // from `listQueue` it is `false` by construction (the GSI projects
-    // escalation rows only, so that query cannot see a `renewal_submitted` row),
-    // so trusting it here would let the queue page make a claim about a fact
-    // nobody measured — in either direction. Caught by the "only where a filing
-    // is confirmed" test, which found this branch returning "Renewal filed." for
-    // an escalated case.
+    // An escalated case with no reason. `filed` is deliberately not consulted
+    // here either. Most escalated rows now carry a MEASURED `filed` — Task 1
+    // of the 2026-09-08 audit made `listQueue` read each candidate's own
+    // partition through `readCase`, the same measurement `listCases` already
+    // used — but the one row `listQueue` falls back to when a partition read
+    // fails still reports `filed: false` by construction, not by evidence (see
+    // `lib/cases.ts`). This function cannot tell the two apart from a plain
+    // `CaseSummary`, so trusting `filed` here would risk a claim about a fact
+    // that specific row never measured — in either direction. Caught by the
+    // "only where a filing is confirmed" test, which found this branch
+    // returning "Renewal filed." for an escalated case.
     return "Grace escalated this case without recording a reason. Read the audit trail below.";
   }
   if (c.filed) return "Handled alone. Renewal filed.";
