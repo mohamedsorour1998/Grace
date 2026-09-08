@@ -236,12 +236,45 @@ def evaluate(case: Case, today: date, pack: RulePack | None = None) -> GateResul
                         ),
                     )
                 )
-            else:
+            elif problem == "expired" and doc.expires is not None:
                 reasons.append(
                     GateReason(
                         code="stale_document",
                         detail=f"{required.doc_id} expired {doc.expires.isoformat()}",
                     )
+                )
+            elif problem == "expired":
+                # Unreachable today, and stated rather than assumed:
+                # `document_problems` guards this code behind
+                # `doc.expires is not None`, so the pairing means that guard
+                # was dropped. It gets its own message rather than sharing the
+                # unknown-code one below, because the two send a reader to
+                # different files — this one to `document_problems`, that one
+                # to the rendering here. Calling this "unhandled" would repeat
+                # the defect this whole change exists to fix: a branch whose
+                # sentence stopped being true once a second variant reached it.
+                raise ValueError(
+                    f"{required.doc_id}: document_problems reported 'expired' "
+                    f"with no expiry date"
+                )
+            else:
+                # Exhaustive on purpose, with no `else` that guesses. The
+                # previous `if/else` sent every unrecognised code down the
+                # expiry branch, which mislabelled it and then crashed on
+                # `doc.expires.isoformat()` when the document had no expiry —
+                # reaching a caseworker as "'NoneType' object has no attribute
+                # 'isoformat'", a sentence naming nothing.
+                #
+                # Raising is the right direction rather than a lapse: every
+                # caller of `evaluate` catches `Exception` broadly and
+                # escalates, so an unrenderable verdict already became a human
+                # decision. This only changes what that human reads. Do not
+                # wrap it in a `try` or return a `verification_error`
+                # `GateResult` — that is indistinguishable from an ordinary
+                # escalation at the call site, so a new code would be absorbed
+                # silently instead of naming itself.
+                raise ValueError(
+                    f"{required.doc_id}: unhandled document problem {problem!r}"
                 )
 
     # 3. Income unchanged outside the band the pack calls immaterial.

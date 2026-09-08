@@ -908,3 +908,61 @@ def test_evaluate_and_document_problems_agree_on_every_fixture():
             1 for r in evaluate(case, TODAY, pack).reasons if r.code == "stale_document"
         )
         assert actual == expected, case.case_id
+
+
+def test_an_unhandled_document_problem_names_itself():
+    """`evaluate` renders each `document_problems` code explicitly.
+
+    The rendering used to be `if stale_by_age … else …`, so a third code fell
+    into the expiry branch, was mislabelled as an expiry, and dereferenced
+    `doc.expires` — which is `None` for a document that never expires. The
+    result was `AttributeError: 'NoneType' object has no attribute 'isoformat'`
+    in a caseworker's escalation reason. Every caller catches broadly, so this
+    always failed closed; what was missing was a message naming the cause.
+
+    Patched on the module rather than through the `from`-import at the top of
+    this file, because `evaluate` resolves `document_problems` as a module
+    global at call time — rebinding the local name here would change nothing.
+    """
+    case = _clean_case()
+    original = grace.authority.document_problems
+    grace.authority.document_problems = lambda doc, required, today: ("unreadable",)
+    try:
+        with pytest.raises(ValueError, match="unreadable"):
+            grace.authority.evaluate(case, TODAY, MEDICAID)
+    finally:
+        grace.authority.document_problems = original
+
+
+def test_an_expired_code_without_an_expiry_date_is_refused_not_rendered():
+    """The impossible pairing is refused rather than crashing on `None`.
+
+    `document_problems` only emits `expired` when `expires` is set, so this
+    combination cannot arise today — which is exactly why the branch needs to
+    say so rather than assume it.
+
+    It also gets its own message rather than sharing the unknown-code one. The
+    two failures send a reader to different files: an unrecognised code means
+    `evaluate` is missing a rendering, while `expired` with no date means
+    `document_problems` emitted a code its own precondition forbids. Calling
+    the second "unhandled" would be the project's recurring defect — a branch
+    whose message stopped being true once a second variant could reach it.
+    """
+    case = _clean_case()
+    original = grace.authority.document_problems
+    grace.authority.document_problems = lambda doc, required, today: ("expired",)
+    try:
+        # `_clean_case`'s documents are built without `expires`, so the expiry
+        # branch has nothing to render. Asserted rather than assumed — if a
+        # future edit gives the fixture an expiry, this test would silently
+        # stop exercising the branch it exists for.
+        for document in case.documents:
+            assert document.expires is None, "fixture must have no expiry set"
+        with pytest.raises(ValueError, match="expired") as raised:
+            grace.authority.evaluate(case, TODAY, MEDICAID)
+        # The diagnosis, not merely the exception type: this message must point
+        # at the missing date, never at a code the gate does in fact handle.
+        assert "no expiry date" in str(raised.value)
+        assert "unhandled" not in str(raised.value)
+    finally:
+        grace.authority.document_problems = original
