@@ -27,6 +27,7 @@ const IDENTITY = new RegExp(`${FIXTURE_NAMES.join("|")}|\\+1555|Household`, "i")
 const escalated: CaseSummary = {
   caseId: "c-011", status: "escalated", program: "medicaid",
   deadline: "2026-10-22", reason: "material_income_change: Income moved 30.0%", filed: false,
+  awaitingDecision: true,
 };
 
 describe("the case row", () => {
@@ -590,6 +591,28 @@ describe("the pages", () => {
     );
     // The old, all-time check must not survive alongside the new one.
     expect(src).not.toMatch(/decisions\.length\s*===\s*0/);
+  });
+
+  it("counts 'waiting on you' on / the same way /queue does", async () => {
+    // **The inconsistency this closes.** `/` counted every escalated household
+    // and `/queue` counted the undecided ones, so after a caseworker answered a
+    // case the two pages reported 3 and 2 for the same phrase — both
+    // defensible, which is worse than one being wrong, because a reader cannot
+    // audit two right answers.
+    //
+    // `__tests__/queue-consistency.test.ts` asserts the two counts are equal
+    // through the real readers; this asserts the page reaches for the field
+    // that makes them equal, because a page reading `sweep.escalated` would
+    // reintroduce the gap while every count in that file still matched.
+    // Source-level for the same reason as the guard above: an async server
+    // component reading DynamoDB is not something `renderToStaticMarkup` can
+    // drive.
+    const fs = await import("node:fs");
+    const src = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+    expect(src).toMatch(/\{sweep\.awaiting\}\s*waiting on you/);
+    // `escalated` may still appear — it is Grace's verdict, and the page says
+    // so once a case has been answered — but never as the "waiting" number.
+    expect(src).not.toMatch(/\{sweep\.escalated\}\s*waiting on you/);
   });
 
   it("says nowhere in the interface that Grace holds a document", async () => {

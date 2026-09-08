@@ -66,10 +66,28 @@ export default async function Home() {
         </p>
         {/* The one large type size in the application, on the one claim the
             whole system makes. */}
+        {/* `sweep.awaiting`, never `sweep.escalated`. The two differ once a
+            caseworker answers something, and this line and `/queue` were
+            counting the phrase "waiting on you" differently — 3 here against 2
+            there, both defensible, which is worse than one of them being wrong.
+            Both now read `CaseSummary.awaitingDecision`.
+
+            With nothing answered the two counts are equal, so this renders
+            byte-identically to what it always did — "9 handled alone, 3 waiting
+            on you." — which is the sentence the README, the video handout and
+            the article all quote. The answered clause appears only once a human
+            has actually decided something, and then it accounts for the
+            difference rather than hiding it. */}
         <h1 className="max-w-3xl text-3xl leading-tight font-semibold tracking-tight text-balance">
           <span className="text-acted">{sweep.acted} handled alone</span>
           <span className="text-muted">, </span>
-          <span className="text-escalate">{sweep.escalated} waiting on you</span>
+          <span className="text-escalate">{sweep.awaiting} waiting on you</span>
+          {sweep.answered > 0 && (
+            <>
+              <span className="text-muted">, </span>
+              <span className="text-muted">{sweep.answered} you&rsquo;ve answered</span>
+            </>
+          )}
           {sweep.incomplete > 0 && (
             <>
               <span className="text-muted">, </span>
@@ -82,6 +100,15 @@ export default async function Home() {
           A case counts as handled only when a <code className="font-mono text-xs">renewal_submitted</code>{" "}
           row proves it was filed. Anything Grace could not decide is below, with the
           reason its own check produced.
+          {sweep.answered > 0 && (
+            <>
+              {" "}
+              Grace escalated {sweep.escalated} this sweep and still would; the{" "}
+              {sweep.answered === 1 ? "one you answered has" : `${sweep.answered} you answered have`}{" "}
+              left the queue until the next sweep re-escalates{" "}
+              {sweep.answered === 1 ? "it" : "them"}.
+            </>
+          )}
         </p>
         <SweepStrip cases={cases} />
       </header>

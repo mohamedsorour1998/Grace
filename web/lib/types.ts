@@ -33,6 +33,21 @@ export interface CaseSummary {
   deadline: string;
   reason: string | null;
   filed: boolean;
+  /** Escalated, and no caseworker has answered *this* escalation yet.
+   *
+   *  **The single source for "waiting on you", on every surface.** `/` and
+   *  `/queue` used to count that phrase two different ways — `/` counted every
+   *  escalated household and `/queue` counted the undecided ones — so after a
+   *  caseworker decided one case the two pages disagreed, 3 against 2, with
+   *  both numbers defensible and neither wrong. A reader cannot audit that;
+   *  they can only distrust it.
+   *
+   *  Deriving both from one boolean makes the disagreement unrepresentable
+   *  rather than merely fixed. It is strictly narrower than
+   *  `status === "escalated"`: a decided-but-still-escalated household is
+   *  `escalated` and **not** awaiting, which is exactly the distinction the two
+   *  pages were groping at. */
+  awaitingDecision: boolean;
 }
 
 export interface LedgerRow {

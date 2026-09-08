@@ -9,9 +9,13 @@ describe("the scaffold", () => {
     const c: CaseSummary = {
       caseId: "c-011", status: "escalated", program: "medicaid",
       deadline: "2026-10-20", reason: "material_income_change", filed: false,
+      awaitingDecision: true,
     };
     expect(c.caseId).toBe("c-011");
     expect(c.filed).toBe(false);
+    // Escalated and awaiting are different questions — `/` and `/queue` counted
+    // them as one and disagreed, 3 against 2, the moment a case was decided.
+    expect(c.awaitingDecision).toBe(true);
   });
 
   it("does not ship a static export config", async () => {

@@ -191,7 +191,14 @@ function statusBadgeTone(status: CaseStatus): "escalate" | "acted" | "error" | "
 export interface SweepSummary {
   total: number;
   acted: number;
+  /** Every household Grace refused to decide. Grace's own verdict, and it does
+   *  not change when a human answers one. */
   escalated: number;
+  /** The subset of `escalated` still waiting on a person — the number `/queue`
+   *  shows. `awaiting + answered === escalated`, always. */
+  awaiting: number;
+  /** Escalated, and a caseworker has already answered this escalation. */
+  answered: number;
   incomplete: number;
 }
 
@@ -202,17 +209,39 @@ export interface SweepSummary {
  *  renewal was never filed sitting inside the nine. So `acted` requires the
  *  filing that proves it, exactly as `lib/cases.ts` requires it before reporting
  *  the status, and every case lands in exactly one bucket (Plan 1 Task 6: a case
- *  counted twice or counted nowhere makes a total that still looks plausible). */
+ *  counted twice or counted nowhere makes a total that still looks plausible).
+ *
+ *  **`escalated` splits into `awaiting` and `answered`, and that split is why
+ *  this function changed.** "Waiting on you" was counted here as every escalated
+ *  household and on `/queue` as the undecided ones, so the moment a caseworker
+ *  decided a case the two pages disagreed — 3 against 2 — with both numbers
+ *  defensible and neither wrong. Both now read `CaseSummary.awaitingDecision`,
+ *  computed once in `lib/cases.ts`, so they cannot drift apart again.
+ *
+ *  `escalated` is kept rather than replaced. It is Grace's verdict about the
+ *  sweep — the claim the README and the demo make — and it stays 3 whatever a
+ *  caseworker does afterwards. `awaiting` is the working state. Reporting one
+ *  number for both questions is what the inconsistency actually was. */
 export function summarise(cases: readonly CaseSummary[]): SweepSummary {
   let acted = 0;
   let escalated = 0;
+  let awaiting = 0;
   let incomplete = 0;
   for (const c of cases) {
-    if (c.status === "escalated") escalated += 1;
-    else if (c.status === "acted" && c.filed) acted += 1;
+    if (c.status === "escalated") {
+      escalated += 1;
+      if (c.awaitingDecision) awaiting += 1;
+    } else if (c.status === "acted" && c.filed) acted += 1;
     else incomplete += 1;
   }
-  return { total: cases.length, acted, escalated, incomplete };
+  return {
+    total: cases.length,
+    acted,
+    escalated,
+    awaiting,
+    answered: escalated - awaiting,
+    incomplete,
+  };
 }
 
 /** The heading over a household's documents.

@@ -251,10 +251,16 @@ export async function listQueue(client: DynamoDBClient = defaultClient()): Promi
       queue.push({
         caseId: id, status: "escalated", program: "",
         deadline: str(row.deadline), reason: str(row.reason) || null, filed: false,
+        // `true`, because the partition that would have told us otherwise is
+        // the one that could not be read. Same polarity as keeping the row at
+        // all: a household wrongly shown as needing a decision costs a
+        // caseworker one click, and one wrongly hidden costs a family its
+        // coverage.
+        awaitingDecision: true,
       });
       return;
     }
-    if (detail.decidedSinceEscalation) return;
+    if (!detail.summary.awaitingDecision) return;
     queue.push(detail.summary);
   });
 
@@ -473,6 +479,11 @@ export async function readCase(
     summary: {
       caseId,
       status,
+      // Computed once, here, and read by both `/` and `/queue`. Escalated is
+      // Grace's verdict and does not change when a human answers; awaiting is
+      // the working state and does. Conflating them is what made the two pages
+      // report 3 and 2 for the same phrase.
+      awaitingDecision: status === "escalated" && !decidedSinceEscalation,
       // Evidence first, then the record. `d_program` exists only on a
       // `renewal_submitted` ledger row, so before the record row was read here
       // an escalated case had no program at all and `/case/c-010` rendered a
