@@ -11,8 +11,12 @@ alternative broken: classifying by "did an interrupt fire" reported an incomplet
 household as handled — 10/2 instead of 9/3, no error, because on `c-010` the
 model called `send_family_message` rather than `submit_renewal` and the gate
 correctly allowed it. Classification therefore comes from two things that cannot
-be argued with: `evaluate()` run directly on the case, and the ledger's
-`renewal_submitted` row (hard rule 6).
+be argued with: `evaluate()` run directly on the case, and a ledger row in
+`grace.run.FILED_KINDS` (hard rule 6). **That is two kinds, not one** —
+`renewal_submitted` when `submit_renewal` files, and `renewal_already_filed`
+when it finds a filing for the same certification period and declines to
+duplicate it. Both mean a renewal is on file for this period; only a run that
+produced neither escalates. Grep `FILED_KINDS`, not `renewal_submitted`.
 
 `gate_reason`, `renewal_filed`, `outreach_sent`, and `deliberation_note` are
 imported from `grace.run` rather than reimplemented. Task 7 recorded what a
@@ -176,10 +180,15 @@ def process_case(
     deliberation: str | None = None
 
     # See `renewal_filed`'s docstring: captured before the graph runs so that a
-    # filing from an earlier sweep cannot be mistaken for this run's work. The
-    # deployed table holds twelve filings per household, so without this the
-    # outcome this function returns — which `web/lib/decide.ts` renders as
-    # "the renewal was filed" — would be a claim about history.
+    # filing from an earlier sweep cannot be mistaken for this run's work.
+    #
+    # The invariant rather than a row count, because counts move with every
+    # sweep and a number written into a comment goes stale in silence: **every
+    # household `c-001`–`c-009` already carries a filing in the deployed table,
+    # and has since the first sweep.** Without this boundary the outcome this
+    # function returns — which `web/lib/decide.ts` renders to a caseworker as
+    # "a renewal is on file" — would be a claim about history rather than about
+    # this run.
     run_started = datetime.now(timezone.utc)
 
     try:
@@ -308,7 +317,9 @@ def _escalate(
     clause that never appears, so the default exists for `_escalate`'s own
     readability and not as a route any caller relies on.
 
-    It changes wording only. It reaches no gate, no tool, and no graph.
+    It reaches no gate, no tool, and no graph. It changes the wording, and it
+    suppresses the escalation row — see the comment beside `writer` for why the
+    second of those is not a weakening.
     """
     if caseworker_approved:
         # Hard rule 5's forbidden direction, made impossible rather than
@@ -329,7 +340,36 @@ def _escalate(
         # urgency, and an unsorted queue entry still reaches a human.
         pass
 
-    writer = getattr(store, "write_escalation", None)
+    # **An approved re-check writes no escalation row, because it is not a new
+    # escalation event — it is the outcome of the decision that just triggered
+    # it.**
+    #
+    # `web/lib/cases.ts` scopes a caseworker's decision to the escalation it
+    # answers: `decidedSinceEscalation = newestDecision > newestEscalation`, and
+    # a case is decidable again only once a *later* escalation appears. But
+    # `web/lib/decide.ts` writes the `DECISION#` row **before** it invokes the
+    # runtime, so a row written here lands seconds after the decision that caused
+    # it and is always the newer of the two. The result inverts the scoping
+    # entirely: a caseworker approves `c-010`, Grace re-checks, correctly refuses
+    # to file, and the case is back in `/queue` with the decision form offered
+    # again before the page has finished reloading. The decision reads as lost,
+    # and every retry buys another paid Bedrock run to reach the same verdict.
+    #
+    # Skipping is safe because the row this write exists to guarantee is already
+    # there. `web/lib/authorize.ts` permits a decision only when
+    # `facts.status === "escalated"`, which `readCase` derives from a **pending**
+    # escalation row on the case partition — and `infra/lambda_src/handler.py`,
+    # the only other caller, sends `case_id`/`today` and nothing else. So a
+    # payload carrying `caseworker_approved: true` cannot reach this line unless
+    # the sweep that escalated the household already wrote its queue entry. The
+    # one failure this row prevents — a family silently missing from the
+    # caseworker's queue — is prevented by that earlier row instead.
+    #
+    # Only the DynamoDB row is skipped. The returned `CaseOutcome` is unchanged,
+    # and `web/lib/decide.ts` records what Grace concluded on its own
+    # `DECISION#<ts>#outcome` row, so the re-check is still durable evidence —
+    # just not a second queue entry for a household that is already in the queue.
+    writer = None if caseworker_approved else getattr(store, "write_escalation", None)
     if callable(writer):
         try:
             writer(case_id, reason=detail, question=detail, deadline=deadline)

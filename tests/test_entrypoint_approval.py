@@ -77,6 +77,25 @@ def _store() -> InMemoryCaseStore:
     return InMemoryCaseStore(load_fixture_cases())
 
 
+class RecordingStore:
+    """A store that records every escalation row `_escalate` asks it to write.
+
+    `InMemoryCaseStore` has no `write_escalation` at all, so the deployed
+    behaviour is invisible to a local store — a test that used one would pass
+    whether the row was written or not.
+    """
+
+    def __init__(self, inner: InMemoryCaseStore) -> None:
+        self._inner = inner
+        self.written: list[tuple[str, str, str, str]] = []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def write_escalation(self, case_id, reason, question, deadline):
+        self.written.append((case_id, reason, question, deadline))
+
+
 def _run(
     monkeypatch,
     case_id: str,
@@ -330,6 +349,110 @@ def test_every_escalate_call_site_passes_the_flag_explicitly(monkeypatch):
             f"an _escalate call on line {site.lineno} does not pass "
             "caseworker_approved, so the clause can never appear on that path"
         )
+
+
+# --------------------------------------------------------------------------
+# An approved re-check must not re-escalate the case it just answered
+# --------------------------------------------------------------------------
+
+
+def test_an_approved_re_check_writes_no_new_escalation_row(monkeypatch):
+    """An approved re-invocation is the *outcome* of a decision, not a new
+    escalation event — so it must leave no new row behind.
+
+    **Why skipping the write is correct, rather than merely convenient.** A
+    caseworker's decision is scoped to the escalation it answers:
+    `web/lib/cases.ts` computes `decidedSinceEscalation = newestDecision >
+    newestEscalation`, and a household becomes decidable again only when a
+    *later* escalation appears. `web/lib/decide.ts` writes the `DECISION#` row
+    **before** it invokes the runtime, so a row written from this path is stamped
+    seconds after the decision that caused it and always wins that comparison.
+    The effect is that approving `c-010` puts `c-010` straight back into
+    `/queue` with the decision form offered again — the caseworker's answer looks
+    lost, and each retry pays for another Bedrock run to reach the same verdict.
+
+    **And skipping cannot lose a family**, which is the only thing this row
+    exists to prevent. `web/lib/authorize.ts` permits a decision only when
+    `facts.status === "escalated"`, which `readCase` derives from a *pending*
+    escalation row — so the flag cannot arrive here unless the sweep that
+    escalated the household already wrote its queue entry.
+    `infra/lambda_src/handler.py`, the only other caller of this runtime, sends
+    `case_id` and `today` and nothing else, so there is no second path that
+    could set the flag without a prior escalation.
+    """
+    store = RecordingStore(_store())
+    monkeypatch.setattr(entrypoint, "build_case_graph", lambda *a, **k: FakeGraph())
+    out = entrypoint.process_case(
+        {"case_id": "c-012", "today": TODAY, "caseworker_approved": True},
+        store=store,
+        channel=TranscriptChannel(),
+    )
+
+    assert store.written == [], (
+        "an approved re-check wrote a fresh escalation row, which is newer than "
+        "the decision that triggered it — the case returns to /queue immediately "
+        "and the caseworker's decision reads as lost"
+    )
+
+    # The payload is unchanged. Only the DynamoDB row is skipped: the dashboard
+    # reads `status`/`reason` from what this function returns, and
+    # `web/lib/decide.ts` records the re-check on its own outcome row.
+    assert out["status"] == "escalated"
+    assert out.get("filed") is not True
+    assert "source_conflict" in out["reason"]
+    assert CLAUSE in out["reason"].lower()
+    assert out["question"] == out["reason"]
+    # c-012's cert_end, so the payload still carries the urgency field.
+    assert out["deadline"] == "2026-10-12"
+
+
+def test_the_same_case_without_an_approval_still_writes_its_row(monkeypatch):
+    """The negative twin, and the one that stops the fix above from becoming
+    "never write an escalation row".
+
+    A sweep's own escalation is what puts a household in front of a human. If
+    the guard were widened — or written the other way round — every escalation
+    would vanish from the queue with the payload still reporting three, which is
+    the exact silent-omission failure `_escalate` was written to prevent.
+    """
+    store = RecordingStore(_store())
+    monkeypatch.setattr(entrypoint, "build_case_graph", lambda *a, **k: FakeGraph())
+    out = entrypoint.process_case(
+        {"case_id": "c-012", "today": TODAY},
+        store=store,
+        channel=TranscriptChannel(),
+    )
+
+    assert len(store.written) == 1, store.written
+    case_id, reason, question, deadline = store.written[0]
+    assert case_id == "c-012"
+    assert "source_conflict" in reason
+    assert question == reason
+    assert deadline == "2026-10-12"
+    assert out["status"] == "escalated"
+    assert CLAUSE not in out["reason"].lower()
+
+
+def test_a_truthy_non_boolean_flag_still_writes_the_escalation_row(monkeypatch):
+    """The suppression follows the same allowlist polarity as the wording.
+
+    `"false"`, `1`, and `[0]` are all truthy in Python and none of them is a
+    caseworker's approval. A truthiness test here would silently drop the queue
+    entry for a household nobody decided — the failure direction that loses a
+    family, reached through a payload key rather than through the gate.
+    """
+    checked = 0
+    for value in ["true", "false", 1, 0, "yes", [], {}, None, [0]]:
+        store = RecordingStore(_store())
+        monkeypatch.setattr(entrypoint, "build_case_graph", lambda *a, **k: FakeGraph())
+        entrypoint.process_case(
+            {"case_id": "c-012", "today": TODAY, "caseworker_approved": value},
+            store=store,
+            channel=TranscriptChannel(),
+        )
+        assert len(store.written) == 1, (value, store.written)
+        checked += 1
+    assert checked == 9, "the loop must actually run for every value"
 
 
 # --------------------------------------------------------------------------
