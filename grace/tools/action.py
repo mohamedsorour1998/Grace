@@ -88,6 +88,35 @@ def make_action_tools(store: CaseStore, case_id: str, channel: Channel) -> list:
             )
         )
 
+    def _already_filed_for(cert_end: str) -> bool:
+        """Whether the ledger already holds a filing for this period.
+
+        Reads the **whole** ledger on purpose. The question here is "does a
+        filing exist for this certification period", which is a fact about the
+        household rather than about this run — the opposite scoping to
+        `grace.run.renewal_filed`, which asks whether *this run* reached an
+        outcome. Both exist because they answer different questions.
+
+        Keyed on `cert_end`, not on the case id: a household whose
+        certification has rolled over needs a new renewal, and a check keyed on
+        the household alone would refuse to file it forever.
+
+        **Fails toward filing.** Everywhere Grace answers a *verification*
+        question it fails closed, because an unverified case must reach a
+        human. This is not that question — the gate has already cleared this
+        case, and the only thing in doubt is whether a duplicate exists. An
+        unreadable ledger that stopped the filing would mean a family's renewal
+        silently never happens; one that allows it means a duplicate row.
+        """
+        try:
+            entries = store.ledger(case_id)
+        except Exception:  # noqa: BLE001 — see the docstring: file anyway
+            return False
+        return any(
+            e.kind == "renewal_submitted" and e.detail.get("cert_end") == cert_end
+            for e in entries
+        )
+
     @tool
     def submit_renewal() -> str:
         """File the renewal for the current case.
@@ -96,7 +125,20 @@ def make_action_tools(store: CaseStore, case_id: str, channel: Channel) -> list:
         tool only executes if the authority gate has already passed.
         """
         c = store.get(case_id)
-        _log("renewal_submitted", program=c.program, cert_end=c.cert_end.isoformat())
+        cert_end = c.cert_end.isoformat()
+        if _already_filed_for(cert_end):
+            # A row is still written, and that is load-bearing rather than
+            # tidy. `grace.run.renewal_filed` counts filings *within this run*
+            # to tell a working sweep from one that did nothing, so a silent
+            # short-circuit would make the second day's run look empty and
+            # escalate a clean household. Two kinds, both counted, keeps the
+            # no-duplicate property and the run-scoped property together.
+            _log("renewal_already_filed", program=c.program, cert_end=cert_end)
+            return (
+                f"Renewal for {c.case_id} ({c.program}) was already filed for the "
+                f"period ending {cert_end}. Not filing it again."
+            )
+        _log("renewal_submitted", program=c.program, cert_end=cert_end)
         return f"Renewal filed for {c.case_id} ({c.program})."
 
     @tool

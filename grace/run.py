@@ -353,6 +353,13 @@ def gate_reason(store: CaseStore, case_id: str, today: date) -> str | None:
 _gate_reason = gate_reason
 
 
+# The ledger kinds that mean a renewal is on file for this certification
+# period. `renewal_already_filed` is written by `submit_renewal` when it
+# declines to file a duplicate — it must count here, or the second day's run
+# looks like a run that did nothing and a clean household escalates.
+FILED_KINDS = frozenset({"renewal_submitted", "renewal_already_filed"})
+
+
 def renewal_filed(
     store: CaseStore, case_id: str, since: datetime | None = None
 ) -> bool:
@@ -380,6 +387,11 @@ def renewal_filed(
     Both stamps come from `datetime.now(timezone.utc)` in the same process, so
     there is no clock skew between them.
 
+    Counts `renewal_already_filed` as well as `renewal_submitted` (see
+    `FILED_KINDS`). A sweep that finds an existing filing for the period
+    declines to duplicate it and records that decision, which is an outcome —
+    unlike a run that reached none at all, which still escalates.
+
     The default stays `None` so a caller with no run boundary — a verification
     script asking "was this household ever filed" — still gets a truthful
     all-time answer rather than being forced to invent a start time.
@@ -400,7 +412,7 @@ def renewal_filed(
     """
     try:
         return any(
-            e.kind == "renewal_submitted" and (since is None or e.at >= since)
+            e.kind in FILED_KINDS and (since is None or e.at >= since)
             for e in store.ledger(case_id)
         )
     except Exception:  # noqa: BLE001 — an unreadable ledger confirms nothing

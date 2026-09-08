@@ -401,12 +401,14 @@ this project is about — is enforced entirely before that point. Wiring it to a
 needs the same per-state data-sharing agreement `StateEligibilityDocumentSource` documents, which is a
 legal instrument rather than code.
 
-One consequence worth naming: because the gate is pure and cannot read the ledger, nothing asks
-whether this renewal has already been filed, so the daily sweep files each clean household again
-every day — twelve ledger rows per household at the time of writing. That is inert while the tool
-writes a ledger row and nothing else. A real filing endpoint would need idempotency **at the
-endpoint** — a submission id the state system deduplicates on — rather than a ledger lookup here,
-because Grace's own classification counts a filing only within the run that made it.
+Grace files a renewal **once per certification period**. The gate itself is pure and cannot read the
+ledger, so the check lives in `submit_renewal`: it looks for an existing `renewal_submitted` row
+carrying the same `cert_end` and, finding one, records `renewal_already_filed` instead of filing
+again. It still writes a row, deliberately — Grace's classification counts a filing only within the
+run that made it, so a silent short-circuit would make the next day's sweep look like a run that did
+nothing and escalate a household that is perfectly fine. If the ledger cannot be read it files
+anyway: the gate has already cleared the case, and a renewal that silently never happens is worse
+than a duplicate row.
 
 You can still add households by editing `fixtures/households.yaml` and re-running the sweep; the
 twelve seeded ones arrive that way, and `infra/seed_cases.py` writes them into the table — which it

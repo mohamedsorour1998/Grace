@@ -1,7 +1,7 @@
 """TWO TRUE STATEMENTS THAT NOTHING WAS HOLDING.
 
-Neither is a defect today. Both are properties a future change could reverse
-without any test noticing, and each has a named consequence when it does.
+Both were properties a future change could reverse without any test noticing,
+and each has a named consequence when it does.
 
 **Only the first was genuinely unheld, and that was measured rather than
 assumed.** The audit named two findings; before this file existed, the three
@@ -12,6 +12,13 @@ reversing the record-over-seed precedence, and turning `open_cases()`'s
 `tests/test_dynamo_store.py`. So the second finding is pinned here at the layer
 that was actually bare: not the precedence itself, which is held, but the
 *seeding prerequisite* that the precedence makes load-bearing.
+
+**The first statement has since been inverted rather than merely pinned.**
+Grace now files a renewal once per certification period, so the constraint
+recorded here asserts the fixed behaviour instead of the old one — the
+substance is in `tests/test_no_duplicate_filing.py`, and this file keeps the
+constraint where it was first written down so a change cannot quietly reverse
+it in the place a reader would look for it.
 """
 
 from __future__ import annotations
@@ -36,39 +43,22 @@ TABLE = "grace-cases-test"
 SUBMITTER = "2448a4e8-c021-70f6-382c-e8acbb6cc956"
 
 
-def test_submit_renewal_files_every_time_it_is_called():
-    """**Grace has no idempotency check, and this pins that it is a choice.**
+def test_submit_renewal_does_not_duplicate_a_filing_for_the_same_period():
+    """Kept from the audit, inverted by the fix.
 
-    `evaluate` is pure and cannot read the ledger, so nothing asks whether this
-    renewal has already been filed. The daily sweep therefore files the same
-    renewal every day — twelve rows per clean household on the live table.
-
-    Harmless today: `submit_renewal` writes a ledger row and there is no state
-    integration behind it (the README says so outright). It becomes a
-    duplicate-submission bug the moment one is attached.
-
-    **Do not "fix" this by short-circuiting on an existing row.** Task 2 scoped
-    `renewal_filed` to the current run, so a `submit_renewal` that declined to
-    write a second row would make a clean household read as unfiled and
-    escalate on day two. A real filing endpoint needs idempotency at the
-    endpoint — a submission id the state system deduplicates on — not a ledger
-    lookup here.
+    This test used to assert that Grace filed the same renewal every day —
+    twelve rows per household on the live table — and to explain why that was
+    left alone. `tests/test_no_duplicate_filing.py` now covers the behaviour
+    properly; this remains as the constraint that a future change must not
+    quietly reverse, in the file where the constraint was first recorded.
     """
     store = InMemoryCaseStore(load_fixture_cases())
     tools = {t.tool_name: t for t in make_action_tools(store, "c-001", TranscriptChannel())}
-    # `DecoratedFunctionTool._tool_func` is the undecorated callable. Verified:
-    # `original_function` does not exist on this SDK version, and `stream()`
-    # would drag the whole tool-execution path into a test about ledger rows.
     submit = tools["submit_renewal"]._tool_func
-
     submit()
     submit()
-
     filings = [e for e in store.ledger("c-001") if e.kind == "renewal_submitted"]
-    assert len(filings) == 2, (
-        "submit_renewal deduplicated. If that was deliberate, read this test's "
-        "docstring: it breaks Task 2's run-scoped classification."
-    )
+    assert len(filings) == 1, "the same renewal was filed twice"
 
 
 def test_seeding_is_what_stops_intake_claiming_a_fixture_household():
