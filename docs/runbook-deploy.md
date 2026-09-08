@@ -441,4 +441,26 @@ redeploy and confirm zero hits. Pre-fix events cannot be unwritten; they age out
 retention. Until the redeploy, "no household identity reaches CloudWatch" is true of the repository
 and not of the running system — do not state it unqualified.
 
+### After any deploy, and before recording anything
+
+```bash
+.venv/bin/python -m infra.verify_deployed
+```
+
+Compares the deployed state machine definition, the EventBridge target input, and the Step Functions
+IAM policy against what `infra/` produces. Reads only — no writes of any kind — so it is safe to run
+against production at any time. Exit 1 lists every difference rather than the first.
+
+It exists because all three were edited live on 2026-09-07 and nothing asserted that they still
+matched the repository afterwards. A `case_ids` key reappearing in the schedule's input is the
+specific regression to watch for: it freezes the caseload at provisioning time, and every symptom
+stays green.
+
+One limit worth knowing before you read its output: a resource that is **missing outright** raises out
+of the boto3 call rather than being collected alongside the other differences, so the remaining checks
+do not run. That still exits non-zero and the exception names the resource, so it does not mislead —
+it is simply less complete than a run that reports drift. `tests/test_verify_deployed.py` drives the
+comparison with fakes, so the suite proves the logic without touching the account; this command is
+what proves the account.
+
 
