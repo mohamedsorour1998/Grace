@@ -31,9 +31,10 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Five plans are complete.** Plan 1's 9 tasks, Plan 2's 11, Plan 3's 9, Plan 4 (sign-in + case intake)
-and Plan 5 (document provenance) are done. **874 Python tests pass** (`.venv/bin/python -m pytest`) plus
-**211 vitest tests across 9 files** in `web/`, and 23 trajectory evals pass against real Bedrock
+**Six plans are complete.** Plan 1's 9 tasks, Plan 2's 11, Plan 3's 9, Plan 4 (sign-in + case intake),
+Plan 5 (document provenance) and Plan 6 (the 2026-09-08 audit fixes,
+`docs/superpowers/plans/2026-09-08-grace-audit-fixes.md`) are done. **Python tests pass** plus
+**vitest tests across 10 files** in `web/`, and 23 trajectory evals pass against real Bedrock
 (`.venv/bin/python -m pytest evals/` — `testpaths = ["tests"]` excludes `evals/` from the fast suite).
 `grace sweep` runs end to end locally and reports **9 acted / 3 escalated**. **Re-measure these counts
 before quoting them anywhere** — they have moved every plan, and the two DynamoDB invariants are the
@@ -81,6 +82,31 @@ key was its own partition or its single directory row, and a final sweep on the 
 directory would drop families while every count still added up. **No `ResultSelector` on `ListCases`**
 — a `.$` path matching nothing raises `States.Runtime`, so selecting a key that is absent on every
 healthy run would fail exactly the runs that are fine. `Choice` with `IsPresent` tolerates absence.
+
+**Six defects were found by audit on 2026-09-08 and all seven fixes are deployed.** Three of them
+shared one root cause worth naming: **a per-run claim answered from an all-time record.** A caseworker's
+decision was permanent while an escalation recurs every sweep, so a decided household sat in `/queue`
+forever and answered `409 already_decided` to anyone who tried again. And `renewal_filed` read the whole
+ledger, so a run in which Grace did nothing still reported `acted` — which made the demo's own headline
+invariant unfalsifiable: a gate that broke and filed nothing would have left every check in this repo
+passing. Both are now scoped to an episode: a decision counts only if it is newer than the newest
+escalation, and a filing counts only from the moment the run started.
+
+**The two fixes that touch filing are coupled, and the coupling is the design.** `submit_renewal` now
+declines to file a renewal already on file for the same certification period — but the short-circuit
+**still writes a ledger row**, of kind `renewal_already_filed`, and `grace/run.py`'s `FILED_KINDS`
+counts both. A *silent* short-circuit would make the second day's run look like a run that reached no
+outcome, and a clean household would escalate. A run that genuinely reached no outcome writes neither
+kind and still escalates, which is the property that must survive any edit here. `web/lib/cases.ts`'s
+`FILED = "renewal_submitted"` is deliberately unchanged, so the dashboard still reads exactly the rows
+that prove a real filing. Verified together on runtime **version 4**: one deployed sweep returned
+9 acted / 3 escalated with **zero** new `renewal_submitted` rows and **nine** `renewal_already_filed`
+rows — had the short-circuit been silent, all nine would have escalated.
+
+**`infra/verify_deployed.py` is the read-only drift check** that the deployed state machine, the
+EventBridge target input, and the Step Functions IAM policy still match `infra/`. It exists because all
+three were edited live on 2026-09-07 and nothing asserted they still agreed. It issues no write, so it
+is safe against production at any time — a drift check nobody dares run is not a drift check.
 
 **Scope is four AgentCore surfaces, not five** — Runtime, Memory, Identity, and the deploy harness.
 Identity was un-deferred by Plan 3 Task 4, which ships the Cognito pool whose ID token is the trust

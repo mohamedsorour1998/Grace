@@ -443,3 +443,67 @@ unwritten. They age out with the log group's retention. So the accurate statemen
 happened, was found by scanning rather than by assumption, is closed at the source in the repository,
 in the running system, and now in durable storage as well — and its historical log events remain until
 retention expires.
+
+---
+
+## 2026-09-08 — runtime version 4, and two coupled behaviour changes verified together
+
+An audit on 2026-09-08 found seven defects. Two of them changed how the deployed sweep classifies a
+household, so both had to be re-verified against real infrastructure rather than against tests alone.
+
+**What changed.** `renewal_filed` now counts a filing only within the run that made it, so a run in
+which Grace did nothing can no longer report `acted` on the strength of a filing from days ago. And
+`submit_renewal` no longer files a renewal that is already on file for the same certification
+period — it writes a `renewal_already_filed` row instead.
+
+Those two are coupled, and the coupling is the whole point: a short-circuit that wrote **nothing**
+would make the second day's run look like a run that reached no outcome, and a perfectly clean
+household would escalate. `FILED_KINDS` counts both kinds, so the property survives — a run that
+reached no outcome at all writes neither kind and still escalates.
+
+**Verified on the deployed system, not argued.** Runtime redeployed to **version 4**; a sweep started
+with the schedule's own input, `{"today": "2026-10-01"}`, carrying no case list:
+
+```text
+outcomes: 12   Counter({'acted': 9, 'escalated': 3})
+escalated: ['c-010', 'c-011', 'c-012']
+acted:     ['c-001' … 'c-009']
+
+new renewal_submitted rows this sweep: 0    (must be 0)
+renewal_already_filed rows written:    9    (must be 9)
+
+renewal_submitted per case:      {c-001…c-009: 13 each}
+renewal_already_filed per case:  {c-001…c-009: 1 each}
+```
+
+Nine households were recognised as already filed, were **not** filed again, and were still reported
+`acted`. That single run demonstrates both changes at once: had the short-circuit been silent, all
+nine would have escalated instead.
+
+**Both invariants held throughout**, checked by a full table scan rather than from a log line:
+`renewal_submitted` exists for exactly `c-001`–`c-009`; no household in `c-010`/`c-011`/`c-012` has
+one; and the escalation queue holds exactly those three.
+
+**The caseworker dashboard, same evening** (Amplify build 26). A caseworker's decision is now scoped
+to the escalation it answers rather than being permanent. `c-010` was decided on 2026-09-04 and
+re-escalated by the 2026-09-08 sweep, so it correctly remains in the queue **and is decidable again**.
+Proven without writing anything: `authorize` checks `alreadyDecided` before the decision allowlist, so
+an unrecognised decision word distinguishes the two refusals.
+
+```text
+c-010 (decided 09-04, re-escalated 09-08) -> 400 unknown_decision   (was 409 already_decided)
+c-011 (never decided, control)            -> 400 unknown_decision
+c-001 (Grace filed it, control)           -> 409 not_escalated
+```
+
+Confirmed afterwards from the table that the probes wrote nothing: `c-010` still holds exactly one
+human `DECISION#` row, and `renewal_submitted` is still exactly `c-001`–`c-009`.
+
+A PII scan of **404 KB** of deployed markup across four authenticated pages returned **NONE** for all
+twelve fixture surnames, the reserved `+1555` range, and any email shape — the scanner self-tested
+against a planted name and phone number first, because a scanner that matches nothing reports `NONE`
+too.
+
+**Infrastructure drift:** `.venv/bin/python -m infra.verify_deployed` reports no drift between the
+deployed state machine definition, the EventBridge target input, the Step Functions IAM policy, and
+what `infra/` produces — re-run after the redeploy.
