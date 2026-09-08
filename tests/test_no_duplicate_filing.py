@@ -18,16 +18,16 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from grace.cases.models import LedgerEntry
 from grace.cases.store import InMemoryCaseStore, load_fixture_cases
 from grace.run import FILED_KINDS, renewal_filed
 from grace.tools.action import TranscriptChannel, make_action_tools
 
-TODAY = date(2026, 10, 1)
-
 
 def _submit(store: InMemoryCaseStore, case_id: str = "c-001"):
     tools = {t.tool_name: t for t in make_action_tools(store, case_id, TranscriptChannel())}
+    # `DecoratedFunctionTool._tool_func` is the undecorated callable. Verified:
+    # `original_function` does not exist on this SDK version, and `stream()`
+    # would drag the whole tool-execution path into a test about ledger rows.
     return tools["submit_renewal"]._tool_func
 
 
@@ -64,6 +64,16 @@ def test_the_short_circuit_still_writes_a_row_so_the_run_is_not_reported_empty()
     submit()
 
     run_started = datetime.now(timezone.utc)
+    # The day-one row must be *outside* this run's boundary before the real
+    # assertion is worth anything. Without this line the test leans on the wall
+    # clock: `renewal_filed` uses `>=`, so a clock coarse enough to stamp the
+    # day-one row at `run_started` would satisfy the final assertion from that
+    # row alone — and the test would pass with the short-circuit's `_log` line
+    # deleted, which is the one change that reintroduces the conflict with
+    # run-scoped classification. Prove the boundary excludes day one first, then
+    # ask whether day two put something inside it.
+    assert renewal_filed(store, "c-001", since=run_started) is False
+
     submit()
     assert renewal_filed(store, "c-001", since=run_started) is True
 

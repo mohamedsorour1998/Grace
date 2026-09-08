@@ -1,4 +1,4 @@
-"""TWO TRUE STATEMENTS THAT NOTHING WAS HOLDING.
+"""TWO STATEMENTS THAT NOTHING WAS HOLDING.
 
 Both were properties a future change could reverse without any test noticing,
 and each has a named consequence when it does.

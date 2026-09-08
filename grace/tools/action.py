@@ -106,7 +106,12 @@ def make_action_tools(store: CaseStore, case_id: str, channel: Channel) -> list:
         human. This is not that question — the gate has already cleared this
         case, and the only thing in doubt is whether a duplicate exists. An
         unreadable ledger that stopped the filing would mean a family's renewal
-        silently never happens; one that allows it means a duplicate row.
+        silently never happens; one that allows it means a duplicate row. Worse
+        than either: with the write path healthy, a fail-closed read would take
+        the branch below and write `renewal_already_filed`, so the run would
+        report `acted` for a renewal nobody filed — a false success claim rather
+        than an escalation. Pinned by
+        `tests/test_no_duplicate_filing.py::test_an_unreadable_ledger_files_rather_than_skipping`.
         """
         try:
             entries = store.ledger(case_id)
