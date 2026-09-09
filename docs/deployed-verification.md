@@ -544,10 +544,42 @@ need a decision", and a second attempt on `c-010` is refused **409 `already_deci
 sweep will re-escalate it — the document is still missing — and it becomes decidable again. That is
 the whole lifecycle, working: decide it, it clears; the situation persists, it comes back.
 
-**A wording inconsistency this exposes, left deliberately unchanged.** `/` still reads
-"9 handled alone, **3** waiting on you" while `/queue` says **2**. Both counts are correct for what
-they measure — `/` counts households Grace could not decide (still three; nothing was filed for any of
-them), and `/queue` counts those still awaiting a person (two, now that one has been answered). But
-"waiting on you" overstates for a decided-but-still-escalated case. The headline is quoted verbatim in
-the README, the video handout, and the article, so changing it is a deliberate editorial decision
-rather than a silent fix.
+### The inconsistency this exposed, and how it was closed
+
+Approving `c-010` left `/` reading "9 handled alone, **3** waiting on you" while `/queue` said **2**.
+Both counts were correct for what they measured — `/` counted every household Grace could not decide
+(still three; nothing was filed for any of them), `/queue` counted those still awaiting a person. And
+that is worse than one of them being wrong: a reader cannot audit two defensible answers, they can
+only stop trusting the page.
+
+Fixed **structurally rather than arithmetically.** `CaseSummary.awaitingDecision` is computed once in
+`web/lib/cases.ts` — escalated *and* not answered since the newest escalation — `summarise` counts it,
+and `listQueue` filters on it. Both surfaces read one field, so the disagreement is now
+unrepresentable rather than merely corrected.
+
+`escalated` is kept alongside `awaiting` rather than replaced. It is Grace's verdict about the sweep,
+which is the claim this project actually makes, and it stays **3** whatever a caseworker does
+afterwards. `awaiting` is the working state. Reporting one number for both questions was the bug.
+
+**The demo headline is unchanged in the state the demo shows.** With nothing answered,
+`awaiting == escalated` and `/` renders `9 handled alone, 3 waiting on you.` byte for byte — verified
+against the deployed page, character by character. The answered clause appears only once a human has
+decided something, and then it accounts for the difference instead of hiding it.
+
+The full lifecycle, executed against the live system in one sitting:
+
+| Live state | `/` headline | `/queue` |
+|---|---|---|
+| after the sweep | `9 handled alone, 3 waiting on you.` | 3 households |
+| after approving `c-010` | `9 handled alone, 2 waiting on you, 1 you've answered.` | 2 households |
+| after the next sweep re-escalates it | `9 handled alone, 3 waiting on you.` | 3 households |
+
+Decide it and it clears; the document is still missing, so the next sweep raises it again and it
+becomes decidable again. The two numbers agree at every step, and the middle row is the exact state
+that used to read 3 against 2.
+
+`/queue`'s empty state was corrected for the mirror-image reason. It read "Grace reached an outcome on
+every case in the last sweep", which stops being true the moment a decision can empty the queue: a
+household Grace escalated and a human answered leaves without Grace having settled anything. That page
+reads the escalation index and genuinely cannot distinguish the two, so the wording now covers both
+rather than inventing a distinction that would cost a second full caseload read for one sentence.

@@ -39,18 +39,33 @@ print(f"no escalating case was filed: {not (set(esc) & set(filed))}")
 PY
 ```
 
-**One thing to know before you demo the approval.** `c-010` has **already been approved once** — Task 8
-did it during verification, and the duplicate guard is deliberate, so a second attempt returns
-`409 already_decided` rather than re-running Grace. You have two honest options:
-
-- **Recommended: demo the approval on `c-011` or `c-012`**, which are still undecided. Say plainly that
-  Grace re-checks and decides for itself; if it *does* file, that is a legitimate outcome — the gate
-  escalated on an ambiguity a human resolved, and the reason is recorded either way.
-- **Or show `c-010`'s existing decision** on its case page. The outcome row already reads *"Grace
-  re-checked and did not file. missing_document: proof_of_residency is not on file"* — which is the
-  stronger claim, just not filmed live.
+**Any of the three escalated households can be approved on camera.** `c-010` has been approved twice
+before, during verification — but a decision answers *one escalation*, not the case forever, and every
+sweep since has raised a fresh one. So it is decidable again, and `c-010` is the one to use: it is the
+household missing `proof_of_residency`, so Grace's refusal to file is guaranteed and you can say what
+will happen before you click. `c-011` and `c-012` turn on judgement, and a filing there would be a
+legitimate outcome — honest, but a weaker thing to narrate live.
 
 Do not stage a fake approval to make the demo cleaner. The whole entry rests on claims being real.
+
+**What the headline does when you approve, so it does not surprise you on camera.** `/` reads
+`9 handled alone, 3 waiting on you.` before you decide anything. The moment you approve one, it becomes
+`9 handled alone, 2 waiting on you, 1 you've answered.` and `/queue` drops to two households — the two
+pages move together, by construction. That is worth narrating rather than hiding: *"the case leaves my
+queue because I answered it, not because Grace filed anything — and tomorrow's sweep will raise it
+again, because the document is still missing."*
+
+If you want the untouched `9 / 3` headline back for a retake, run one sweep — it re-escalates whatever
+was answered and the headline returns byte for byte:
+
+```bash
+aws stepfunctions start-execution --region us-east-1 \
+  --state-machine-arn arn:aws:states:us-east-1:339712964409:stateMachine:grace-sweep \
+  --input '{"today":"2026-10-01"}'
+```
+
+It takes about a minute and files nothing new — the nine clean households are already filed for this
+period, so Grace records `renewal_already_filed` for each and files none of them again.
 
 ---
 
@@ -198,11 +213,13 @@ Re-measure before recording; do not read a stale number.
 | the twelve seeded households: 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01`. **Say "the twelve seeded households"** — the claim must stay true if anyone submits a case through the intake form. |
 | 9 acted / 3 escalated deployed | the `grace-sweep` Step Functions execution output |
 | the sweep reads its caseload from the table | `ListCases` queries the `CASE_DIRECTORY` partition; the scheduled event carries only `{"today": "2026-10-01"}`. Started with that input, an execution returns 12 outcomes. **Do not say the schedule names the twelve** — it did until 2026-09-07, and that was the defect. |
-| runtime version 3 | `get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE`. Version 2 could not read `RECORD#v1` rows, so a submitted household was invisible to the sweep. |
+| runtime version 5 | `get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE`. v2 could not read `RECORD#v1` rows (a submitted household was invisible to the sweep), v4 added run-scoped classification and no-duplicate filing, v5 stopped an approval re-escalating itself. |
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
-| 874 Python tests, 211 vitest | `pytest` and `vitest run` — re-measure, these move every plan |
+| 904 Python tests, 226 vitest across 11 files | `pytest` and `vitest run` — re-measure, these move every plan |
 | 23 trajectory evals | `pytest evals/ --co -q` — they cost real Bedrock to run |
 | approving `c-010` files nothing | its decision + outcome rows, and zero `renewal_submitted` rows |
+| Grace files a renewal once per period | a sweep after the nine are filed writes **0** new `renewal_submitted` rows and **9** `renewal_already_filed` rows |
+| "waiting on you" on `/` equals the `/queue` count | one field, `CaseSummary.awaitingDecision`. **They disagreed until 2026-09-09** — `/` said 3 and `/queue` said 2 after a decision. Do not describe them as separate counts. |
 | four AgentCore surfaces | Runtime, Memory, Identity, harness — Gateway is deferred |
 
 **Never say five surfaces.** It is four, and Gateway's absence is stated in the README with its reason.

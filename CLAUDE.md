@@ -103,6 +103,25 @@ that prove a real filing. Verified together on runtime **version 4**: one deploy
 9 acted / 3 escalated with **zero** new `renewal_submitted` rows and **nine** `renewal_already_filed`
 rows — had the short-circuit been silent, all nine would have escalated.
 
+**Two defensible numbers for one question are worse than one wrong number — and the fix is to make
+the disagreement unrepresentable.** `/` reported "3 waiting on you" while `/queue` reported 2. Neither
+was wrong: `/` counted every household Grace escalated, `/queue` counted the ones still undecided, and
+they diverged the moment a caseworker answered something. A reader cannot audit two right answers;
+they can only stop trusting the page. The fix was **not** to pick a number. `CaseSummary.awaitingDecision`
+is computed once in `web/lib/cases.ts` (escalated **and** unanswered since the newest escalation),
+`summarise` counts it, and `listQueue` filters on it — so both surfaces read one field and cannot drift
+apart again. `escalated` is kept beside `awaiting` rather than replaced, because they answer genuinely
+different questions: `escalated` is Grace's verdict about the sweep and stays 3 whatever a human does;
+`awaiting` is the working state. **When two surfaces disagree, first ask whether they are answering the
+same question — if they are not, name both; if they are, give them one field.**
+
+**The demo headline survives that change untouched, and that was a design constraint rather than luck.**
+With nothing answered, `awaiting == escalated`, so `/` renders `9 handled alone, 3 waiting on you.` byte
+for byte — the sentence the README, the video handout, and the article all quote. The "you've answered"
+clause appears only once a human has decided something. Adding the field to `CaseSummary` also made both
+test fixtures a **compile error**, which is the same discipline as `case-table.tsx`'s `switch`
+statements carrying no `default:`.
+
 **`infra/verify_deployed.py` is the read-only drift check** that the deployed state machine, the
 EventBridge target input, and the Step Functions IAM policy still match `infra/`. It exists because all
 three were edited live on 2026-09-07 and nothing asserted they still agreed. It issues no write, so it
