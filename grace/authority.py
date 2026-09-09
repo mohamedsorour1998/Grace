@@ -255,7 +255,7 @@ def evaluate(case: Case, today: date, pack: RulePack | None = None) -> GateResul
                 # sentence stopped being true once a second variant reached it.
                 raise ValueError(
                     f"{required.doc_id}: document_problems reported 'expired' "
-                    f"with no expiry date"
+                    "with no expiry date"
                 )
             else:
                 # Exhaustive on purpose, with no `else` that guesses. The
@@ -297,7 +297,7 @@ def evaluate(case: Case, today: date, pack: RulePack | None = None) -> GateResul
                 GateReason(
                     code="verification_error",
                     detail=(
-                        f"On-file income is negative "
+                        "On-file income is negative "
                         f"({case.household.monthly_income_cents} cents)"
                     ),
                 )

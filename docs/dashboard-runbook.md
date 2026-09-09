@@ -28,6 +28,26 @@ so the GSI legitimately holds one row per case per sweep. A queue page that list
 a caseworker deciding the same family repeatedly — `lib/cases.ts` must de-duplicate by case and keep
 the newest row. Task 3 asserts this, and Task 6's manual check is "the queue shows exactly three".
 
+**Seed the case directory before exposing intake — a prerequisite, not a convenience.**
+
+```bash
+.venv/bin/python -m infra.seed_cases
+.venv/bin/python -m infra.seed_cases --verify
+```
+
+`DynamoDBCaseStore.open_cases()` lets a table record row win over the fixture seed, which is what makes
+a household submitted through `/new` visible to the agent — and, until the twelve fixture ids have
+record rows of their own, is also what would let someone submit `c-001` through the form and silently
+replace that household's facts while the dashboard showed nothing wrong. Once seeded, `create_case`'s
+`attribute_not_exists(sk)` refuses the id. `--verify` is the half that counts: "the put returned" and
+"the row decodes to the case I meant" are different claims. Full reasoning in
+[docs/runbook-deploy.md](runbook-deploy.md).
+
+**Row counts on this page are measurements with a date, never constants.** The 17 above was true on
+2026-09-03; every sweep since has added one row per escalated household. The invariants are what hold:
+`renewal_submitted` exists for exactly `c-001`–`c-009`, no escalating household ever has one, and the
+queue shows exactly three **distinct** families however many rows the GSI holds.
+
 ### Package versions — the plan's first pins were wrong
 
 Observed with `npm view <pkg> version`, and the plan was corrected to match. Recording both numbers,
