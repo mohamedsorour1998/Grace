@@ -331,21 +331,76 @@ export function noteIsInert(note: string): boolean {
   return !/[<>]/.test(note);
 }
 
-/** The reason line: the typed code as a chip, the measurement as prose.
+/** The separator `grace/run.py` and `grace/entrypoint.py` both append when a
+ *  deliberation swarm reached a conclusion: `f"{detail} Deliberation — {note}"`. */
+export const DELIBERATION_MARKER = " Deliberation — ";
+
+/** Split the referee's conclusion off the gate's own measurement.
+ *
+ *  They arrive concatenated into one reason string and render as a run-on —
+ *  *"…3 on most recent wage record Deliberation — AMBIGUOUS: Does the household
+ *  size conflict affect…"* — where a sentence ends and another begins with no
+ *  punctuation between them. They are two claims by two different authors: a
+ *  deterministic check that measured something, and three models' conclusion
+ *  about what it means. A caseworker deciding the case needs to tell which is
+ *  which, and the gate's measurement is the one that is not a model's opinion.
+ *
+ *  Split at the **render** boundary and never in the stored reason. That string
+ *  is the escalation row's audit evidence, and `grace/authority.py`'s standing
+ *  rule applies here as it does to escaping: whichever surface renders a reason
+ *  decides how to present it, because only it knows the context.
+ *
+ *  Returns `deliberation: null` when there is no note, which is every case the
+ *  swarm never ran on — nine of twelve. */
+export function splitDeliberation(
+  detail: string,
+): { measured: string; deliberation: string | null } {
+  const at = detail.indexOf(DELIBERATION_MARKER);
+  if (at === -1) return { measured: detail, deliberation: null };
+  return {
+    measured: detail.slice(0, at),
+    deliberation: detail.slice(at + DELIBERATION_MARKER.length),
+  };
+}
+
+/** The reason line: the typed code above, the measurement as prose below.
  *
  *  Two typefaces doing two jobs — mono for anything Grace or the table wrote,
  *  the body face for the sentence a human reads. The chip is not decoration: it
  *  is a value from a closed set of eight, and that is what makes it worth
- *  setting apart from the prose beside it. */
+ *  setting apart from the prose it introduces.
+ *
+ *  **Stacked at every width, and that is the whole point of this layout.** It
+ *  used to go side by side above `sm`, which made the prose start wherever the
+ *  code happened to end — `missing_document` is eight characters shorter than
+ *  `material_income_change`, so three rows of a three-row queue each began at a
+ *  different x. Nothing was misaligned by accident; the layout was aligning the
+ *  wrong edge. Reading down a column of reasons is the whole job of this page,
+ *  and a ragged left edge makes the eye re-find the start of every sentence.
+ *
+ *  Stacking fixes it structurally rather than by padding the codes to a common
+ *  width: a ninth code longer than any current one changes nothing here, where a
+ *  fixed column would silently start wrapping or truncating. It also gives the
+ *  prose the full cell to wrap in, which the two deliberation reasons need. */
 function ReasonLine({ row }: { row: CaseRow }) {
+  const { measured, deliberation } = splitDeliberation(row.detail);
   return (
-    <span className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:gap-2">
+    <span className="flex flex-col gap-1">
       {row.code !== null && (
-        <code className={`shrink-0 font-mono text-[0.6875rem] tracking-tight ${statusTone(row.status)}`}>
+        <code className={`font-mono text-[0.6875rem] tracking-tight ${statusTone(row.status)}`}>
           {row.code}
         </code>
       )}
-      <span className="text-ink">{row.detail}</span>
+      <span className="text-ink">{measured}</span>
+      {deliberation !== null && (
+        // Set apart and quieter than the measurement above it. The gate's
+        // verdict is what makes the escalation auditable; this is three models
+        // arguing about what it means, and it must never look like the same
+        // kind of claim.
+        <span className="text-muted">
+          <span className="font-medium">Deliberation</span> — {deliberation}
+        </span>
+      )}
     </span>
   );
 }

@@ -593,6 +593,60 @@ describe("the pages", () => {
     expect(src).not.toMatch(/decisions\.length\s*===\s*0/);
   });
 
+  it("gives every reason row the same left edge, whatever its code is", async () => {
+    // **The defect this closes.** The code and the prose sat side by side above
+    // `sm`, so the sentence began wherever the code happened to end:
+    // `missing_document` is eight characters shorter than
+    // `material_income_change`, and a three-row queue started at three
+    // different x positions. Nothing was misaligned by accident — the layout
+    // was aligning the wrong edge. Reading down a column of reasons is this
+    // page's whole job.
+    //
+    // Asserted as the absence of the side-by-side modifiers rather than by
+    // measuring pixels, which a jsdom test cannot do. Padding the codes to a
+    // common width would have been the other fix and a worse one: a ninth code
+    // longer than any current one silently starts wrapping.
+    const fs = await import("node:fs");
+    const src = fs.readFileSync(
+      new URL("../components/case-table.tsx", import.meta.url), "utf8");
+    const reasonLine = src.slice(src.indexOf("function ReasonLine"));
+    const body = reasonLine.slice(0, reasonLine.indexOf("\n}"));
+    expect(body).toContain("flex flex-col");
+    expect(body).not.toMatch(/sm:flex-row/);
+    expect(body).not.toMatch(/sm:items-baseline/);
+  });
+
+  it("sets the swarm's conclusion apart from the gate's measurement", async () => {
+    // They arrive concatenated — `f"{detail} Deliberation — {note}"` in both
+    // `grace/run.py` and `grace/entrypoint.py` — and rendered as one string they
+    // read as a run-on: "...on most recent wage record Deliberation —
+    // AMBIGUOUS: Does the household size...". Two claims, two authors: a
+    // deterministic check, and three models' opinion about it. A caseworker
+    // deciding the case has to be able to tell which is which.
+    const { splitDeliberation, DELIBERATION_MARKER } = await import("@/components/case-table");
+
+    // The live `c-012` reason, verbatim from the deployed escalation row.
+    const real =
+      "household size 5 on application, 3 on most recent wage record" +
+      DELIBERATION_MARKER +
+      "AMBIGUOUS: Does the household size conflict affect the renewal process?";
+    const split = splitDeliberation(real);
+    expect(split.measured).toBe("household size 5 on application, 3 on most recent wage record");
+    expect(split.deliberation).toBe(
+      "AMBIGUOUS: Does the household size conflict affect the renewal process?");
+    // Nothing is dropped: the two halves plus the marker are the original.
+    expect(split.measured + DELIBERATION_MARKER + split.deliberation).toBe(real);
+  });
+
+  it("leaves a reason with no deliberation exactly as it was", async () => {
+    // Nine of twelve households never reach the swarm, and `c-010` is one of
+    // the three that escalate without it. A splitter that mangled those would
+    // be worse than the run-on it replaces.
+    const { splitDeliberation } = await import("@/components/case-table");
+    const plain = "proof_of_residency is not on file (Grace has already messaged the family.)";
+    expect(splitDeliberation(plain)).toEqual({ measured: plain, deliberation: null });
+  });
+
   it("counts 'waiting on you' on / the same way /queue does", async () => {
     // **The inconsistency this closes.** `/` counted every escalated household
     // and `/queue` counted the undecided ones, so after a caseworker answered a

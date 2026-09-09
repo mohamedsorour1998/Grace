@@ -7,6 +7,7 @@ import {
   formatCaseRow,
   noteIsInert,
   sentLabel,
+  splitDeliberation,
   statusLabel,
   statusTone,
 } from "@/components/case-table";
@@ -68,6 +69,9 @@ export default async function Case({ params }: { params: Promise<{ id: string }>
   // decision, so the page must offer the form again too, or a caseworker who
   // clicks through from the queue reaches a case with nothing to do.
   const decidable = summary.status === "escalated" && !decidedSinceEscalation;
+  // The gate's measurement and the swarm's conclusion arrive concatenated into
+  // one reason string; split for display only, never in the stored row.
+  const { measured, deliberation } = splitDeliberation(row.detail);
 
   return (
     <section className="space-y-10">
@@ -80,10 +84,21 @@ export default async function Case({ params }: { params: Promise<{ id: string }>
             {statusLabel(summary.status)}
           </Badge>
         </div>
-        <p className={`max-w-prose ${statusTone(summary.status)}`}>
-          {row.code !== null && <code className="mr-2 font-mono text-xs">{row.code}</code>}
-          {row.detail}
-        </p>
+        {/* Stacked, and the deliberation split off — the same shape the queue
+            table uses, so one household reads the same way on both pages. The
+            run-on it replaces put the gate's measurement and three models'
+            conclusion in one sentence with no punctuation between them. */}
+        <div className={`flex max-w-prose flex-col gap-1 ${statusTone(summary.status)}`}>
+          {row.code !== null && (
+            <code className="font-mono text-[0.6875rem] tracking-tight">{row.code}</code>
+          )}
+          <p>{measured}</p>
+          {deliberation !== null && (
+            <p className="text-muted">
+              <span className="font-medium">Deliberation</span> — {deliberation}
+            </p>
+          )}
+        </div>
         <dl className="flex flex-wrap gap-x-8 gap-y-1 font-mono text-xs text-muted">
           <div className="flex gap-2">
             <dt>program</dt>
