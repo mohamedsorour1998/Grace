@@ -54,7 +54,15 @@ def test_it_uses_the_outreach_role_and_not_a_banned_model():
     from grace.models import BANNED_MODEL_IDS, _ROLES
 
     source = inspect.getsource(make_outreach_tool)
-    assert 'nova("outreach")' in source, "the outreach role exists for this tool"
+    # `nova("outreach"`, not `nova("outreach")` — the same correction the role
+    # guard below needed, for the same reason. `swarm.py` already calls
+    # `nova("advocate", temperature=0.4)`, so a closing-paren anchor declares
+    # that a call site is only real when it passes no keyword arguments. Adding
+    # a temperature to the drafter is an ordinary tuning change and must not
+    # fail a correct file. The two anchors now agree about what a call site
+    # looks like; they disagreed until this edit, which is how one guard can be
+    # fixed and its sibling left brittle.
+    assert 'nova("outreach"' in source, "the outreach role exists for this tool"
     assert _ROLES["outreach"] not in BANNED_MODEL_IDS
 
 
@@ -64,6 +72,74 @@ def test_the_drafter_agent_has_no_tools_at_all():
     source = inspect.getsource(make_outreach_tool)
     assert "tools=[]" in source, "the drafter agent must be constructed with tools=[]"
     assert "callback_handler=None" in source
+
+
+def test_the_drafter_is_built_with_no_capability_and_its_result_is_coerced(monkeypatch):
+    """What the three source greps above can only approximate, asserted against
+    the constructed object instead.
+
+    `Agent` is imported into `grace.tools.outreach`'s module namespace, so
+    patching it there costs nothing and no Bedrock call is made. That matters
+    beyond convenience: a grep for `"tools=[]"` is satisfied by the literal
+    appearing anywhere in the function, so a module-level alias
+    (`_A = Agent; ... _A(tools=[read_case])`) walks around it while leaving the
+    string in a comment. An assertion about the kwargs the constructor actually
+    received cannot be walked around that way. Keep the greps as well — they
+    cover what this cannot, notably that `store` never appears in the source at
+    all, which is a property of the text rather than of one call.
+
+    The fake returns a non-string on purpose. `Agent.__call__` yields an
+    `AgentResult`, not a `str`, and `send_family_message` puts whatever comes
+    back into a family's message and then into a ledger row whose `detail`
+    contract accepts JSON scalars only. Dropping the `str(...)` is the same
+    shape of defect as a `Channel.send()` return reaching the ledger unwrapped:
+    it fails after the work is done, which is the worst place for it. So the
+    coercion is proven here, not assumed.
+    """
+    from strands.models.bedrock import BedrockModel
+
+    from grace.models import BANNED_MODEL_IDS, _ROLES
+
+    captured: dict = {}
+    tasks: list[str] = []
+
+    class _RecordingAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __call__(self, task):
+            tasks.append(task)
+            # Deliberately not a `str`, mirroring the real `AgentResult`.
+            return self
+
+        def __str__(self):
+            return "Please send your proof of residency by 18 October."
+
+    monkeypatch.setattr("grace.tools.outreach.Agent", _RecordingAgent)
+
+    out = _tool()._tool_func("proof_of_residency", "2026-10-18", "es")
+
+    # Capability absence, read off the constructor call rather than the source.
+    assert captured["tools"] == [], captured["tools"]
+    assert captured["callback_handler"] is None
+
+    # Hard rules 1 and 2: a Nova model, the role the drafter is supposed to
+    # use, and never the one that filed a renewal it had been told not to file.
+    model = captured["model"]
+    assert isinstance(model, BedrockModel), type(model)
+    assert model.get_config()["model_id"] == _ROLES["outreach"]
+    assert model.get_config()["model_id"] not in BANNED_MODEL_IDS
+
+    # The coercion, and it is the return value that is checked — not the fake's
+    # `__str__`, which would pass even if the tool returned the object.
+    assert isinstance(out, str), type(out)
+    assert out == "Please send your proof of residency by 18 October."
+
+    # All three arguments reach the drafter. A tool that quietly dropped the
+    # language would draft in English for every family and nothing would say so.
+    assert len(tasks) == 1, tasks
+    for value in ("proof_of_residency", "2026-10-18", "es"):
+        assert value in tasks[0], (value, tasks[0])
 
 
 def test_every_model_role_is_referenced_by_some_module():
