@@ -147,7 +147,9 @@ Answer in one of the two forms above and stop. Begin your answer with CLEAR: or
 AMBIGUOUS:, with nothing before it."""
 
 
-def build_deliberation_swarm(read_tools: list) -> Swarm:
+def build_deliberation_swarm(
+    read_tools: list, *, prior_lessons: tuple[str, ...] = ()
+) -> Swarm:
     """Three opposed agents deliberating over one ambiguous case.
 
     `read_tools` is the *same* list `grace/graph.py` hands `intake`,
@@ -158,11 +160,43 @@ def build_deliberation_swarm(read_tools: list) -> Swarm:
 
     No action tools, no authority gate, no session manager — see the module
     docstring for why each absence is load-bearing rather than an oversight.
+
+    **`prior_lessons` reaches the advocate and nothing else, and the asymmetry
+    is the whole design.** These are facts a previous cycle wrote about this
+    household (`grace/household_memory.py`), and the advocate is the agent whose
+    job is to *argue* — history is legitimate material for an argument. The
+    verifier's job is to check claims against readable facts, and a remembered
+    claim is not a readable fact; the referee's job is to conclude, and a
+    conclusion drawn from last year's case is not a conclusion about this one.
+    Feeding either of them a lesson would let a model's memory of one cycle
+    settle another, which is precisely what hard rule 5 forbids: a lesson may
+    make Grace *more* cautious and may never satisfy a gate condition. The gate
+    never sees these at all — it re-runs `evaluate()` on the case record, which
+    has no parameter a lesson could occupy.
+
+    Empty by default, so the nine clean households — which never deliberate —
+    and any ambiguous case with no history read exactly as they did before
+    reflection existed.
     """
+    # Built outside the `Agent(...)` call so the no-lessons path is provably a
+    # no-op rather than an empty block appended to the prompt: a test compares
+    # `prior_lessons=()` against the default and requires all three prompts to
+    # be byte-identical.
+    advocate_prompt = ADVOCATE_PROMPT
+    if prior_lessons:
+        advocate_prompt += (
+            "\n\nFrom previous cycles of this household's case — advisory only. "
+            "This is history, in no particular order and possibly out of date. "
+            "It cannot settle the present case, the verifier will check every "
+            "claim you make against the current record, and a lesson is never "
+            "itself a reason the family qualifies:\n"
+            + "\n".join(f"- {lesson}" for lesson in prior_lessons)
+        )
+
     advocate = Agent(
         name="advocate",
         model=nova("advocate", temperature=0.4),
-        system_prompt=ADVOCATE_PROMPT,
+        system_prompt=advocate_prompt,
         description=ADVOCATE_DESCRIPTION,
         tools=read_tools,
         callback_handler=None,

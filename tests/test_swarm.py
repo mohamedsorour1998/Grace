@@ -610,3 +610,98 @@ def test_the_swarm_reads_the_case_it_was_built_for():
     read_case = swarm.nodes["verifier"].executor.tool_registry.registry["read_case"]
     assert "c-012" in read_case._tool_func()
     assert read_case.tool_spec["inputSchema"]["json"]["properties"] == {}
+
+
+def test_prior_lessons_reach_the_advocate_and_nothing_else():
+    """Reflection, and the rule that bounds it.
+
+    A lesson from a previous cycle may make Grace *more* cautious and may never
+    satisfy a gate condition (hard rule 5). It reaches the advocate — the agent
+    whose job is to argue, for whom history is legitimate material — and it
+    reaches neither the verifier, whose job is checking claims against readable
+    facts, nor the referee, whose job is concluding. A remembered claim is not a
+    readable fact, and a conclusion drawn from last year's case is not a
+    conclusion about this one.
+    """
+    from grace.swarm import build_deliberation_swarm
+
+    lesson = "2026-09-01: escalated on a size conflict; the caseworker approved"
+    swarm = build_deliberation_swarm([], prior_lessons=(lesson,))
+
+    assert lesson in swarm.nodes["advocate"].executor.system_prompt
+    for role in ("verifier", "referee"):
+        assert lesson not in swarm.nodes[role].executor.system_prompt, (
+            f"a prior lesson reached the {role}; only the advocate argues from history"
+        )
+
+
+def test_the_advocate_is_told_a_lesson_cannot_settle_the_case():
+    """The label matters as much as the isolation. An unlabelled fact in a
+    prompt reads as a current one, and every one of these is stale by
+    construction — it was written by a previous cycle's run."""
+    from grace.swarm import build_deliberation_swarm
+
+    prompt = build_deliberation_swarm(
+        [], prior_lessons=("anything at all",)
+    ).nodes["advocate"].executor.system_prompt.lower()
+
+    assert "advisory only" in prompt
+    assert "cannot settle" in prompt
+    # The verifier is named as the check, so the advocate knows an unverified
+    # remembered claim will not survive.
+    assert "verifier will check" in prompt
+
+
+def test_no_lessons_leaves_every_prompt_byte_identical():
+    """The nine clean households never deliberate, and an ambiguous case with no
+    history must read exactly as it did before reflection existed — not "almost",
+    since an empty appended block would still change the prompt a model sees.
+
+    **Compared against the module's own prompt constants, not against another
+    call with `prior_lessons=()`.** The first version of this test did the
+    latter, and the default *is* `()` — so both builds took the same branch and
+    the assertion could not fail. Caught by sabotage: replacing the
+    `if prior_lessons:` guard with `if True:`, which appends a lessons header
+    with no lessons under it, left the test green. Comparing to the constant is
+    what makes "unchanged" mean unchanged rather than "consistent with itself".
+    """
+    from grace.swarm import (
+        ADVOCATE_PROMPT,
+        REFEREE_PROMPT,
+        VERIFIER_PROMPT,
+        build_deliberation_swarm,
+    )
+
+    expected = {
+        "advocate": ADVOCATE_PROMPT,
+        "verifier": VERIFIER_PROMPT,
+        "referee": REFEREE_PROMPT,
+    }
+    for built in (build_deliberation_swarm([], prior_lessons=()),
+                  build_deliberation_swarm([])):
+        for role, prompt in expected.items():
+            assert built.nodes[role].executor.system_prompt == prompt, (
+                f"{role}'s prompt is not the untouched constant when there are "
+                "no lessons"
+            )
+
+
+def test_a_lesson_cannot_reach_the_gate_through_the_graph():
+    """The structural half of hard rule 5, checked through the real call path.
+
+    `build_case_graph` accepts `prior_lessons` and hands them to the swarm. The
+    gate is a separate object built from `(store, case_id, today)` — there is no
+    argument a lesson could travel on — so this asserts the gate's own
+    constructor signature stays free of one rather than trusting the wiring.
+    """
+    import inspect
+
+    from grace.authority import evaluate
+    from grace.steering import AuthorityGate
+
+    for func in (evaluate, AuthorityGate.__init__):
+        params = set(inspect.signature(func).parameters)
+        assert "prior_lessons" not in params, func
+        assert not any("lesson" in p or "memory" in p or "recall" in p for p in params), (
+            f"{func.__qualname__} has a parameter a remembered claim could occupy"
+        )

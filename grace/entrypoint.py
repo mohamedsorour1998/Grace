@@ -268,7 +268,12 @@ def _process_case(
         remembered = ()
 
     try:
-        graph = build_case_graph(store, case_id, today, channel)
+        # The recalled facts reach two places, both advisory: the graph's task
+        # text (read by `decide`) and the advocate's prompt inside the
+        # deliberation swarm. Neither is the gate.
+        graph = build_case_graph(
+            store, case_id, today, channel, prior_lessons=remembered
+        )
         task = f"Process the renewal for case {case_id}. Today is {today.isoformat()}."
         if remembered:
             # Labelled as history, and labelled twice. A model reading an

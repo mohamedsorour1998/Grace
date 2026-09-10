@@ -126,7 +126,12 @@ def make_needs_deliberation(store: CaseStore, case_id: str, today: date):
 
 
 def build_case_graph(
-    store: CaseStore, case_id: str, today: date, channel: Channel
+    store: CaseStore,
+    case_id: str,
+    today: date,
+    channel: Channel,
+    *,
+    prior_lessons: tuple[str, ...] = (),
 ) -> Graph:
     """Build the per-case graph. One graph per case keeps household data
     isolated — nothing is shared between cases.
@@ -263,7 +268,10 @@ def build_case_graph(
     # — see grace/swarm.py on why it carries neither action tools nor a gate.
     # Reached only through the conditional edge below, so eleven of twelve
     # fixture cases never pay for it.
-    deliberate = build_deliberation_swarm(read_tools)
+    # `prior_lessons` reaches the advocate only — see `grace/swarm.py`. Keyword-
+    # only and defaulted so `grace/run.py`'s local sweep, which has no memory
+    # configured, needs no change and reads exactly as it did before.
+    deliberate = build_deliberation_swarm(read_tools, prior_lessons=prior_lessons)
 
     # Built once and used for *both* edges out of `documents`, rather than
     # called twice. The two conditions must be exact complements, and building
