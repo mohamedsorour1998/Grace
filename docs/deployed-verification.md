@@ -583,3 +583,89 @@ every case in the last sweep", which stops being true the moment a decision can 
 household Grace escalated and a human answered leaves without Grace having settled anything. That page
 reads the escalation index and genuinely cannot distinguish the two, so the wording now covers both
 rather than inventing a distinction that would cost a second full caseload read for one sentence.
+
+---
+
+## 2026-09-10 — runtime v8: the outreach drafter, Spanish outreach, Memory, and reflection
+
+Four changes, verified by one sweep each on the runtime version that carries them.
+The interesting part is not that they work; it is the two defects found along the
+way, both of which were invisible to every test.
+
+### The defect a role that nothing calls cannot reveal
+
+`grace/models.py` defined an `outreach` role — Nova 2 Lite, for drafting the SMS —
+and until this change **nothing called it**. On the first sweep after the drafter
+shipped (runtime v6), `draft_family_message` returned `status: error` while every
+local invocation succeeded, and `decide` correctly escalated instead of texting.
+The gate held; the drafter was dead in production.
+
+The cause: the role named `us.amazon.nova-2-lite-v1:0`, while the runtime role's
+`NovaOnly` statement grants three inference profiles **by exact ARN** and the Nova
+2 Lite one it names is `global.`. So the call was `implicitDeny` on Bedrock. The
+`judge` role — the *other* role nothing calls — carried the identical wrong prefix.
+
+```text
+simulate-principal-policy  us.amazon.nova-2-lite-v1:0      -> implicitDeny
+simulate-principal-policy  global.amazon.nova-2-lite-v1:0  -> allowed
+```
+
+Both are `global.` now, and a test asserts every role's model is one the deployed
+policy actually grants — so the two lists cannot drift apart again. **A role
+defined but never called cannot reveal a permission it does not have**, which is
+the same shape as the frozen caseload and the unwired Memory before it.
+
+A trap worth recording alongside it: `simulate-principal-policy` **without**
+`--resource-arns` evaluates against `*` and reported `implicitDeny` for three
+Bedrock actions that were in fact granted. Always pass the resource.
+
+### The Spanish message, on the deployed system
+
+`c-010` — the household missing `proof_of_residency` — reads Spanish. The drafter
+is handed the document id, the deadline, and the language, and returns prose;
+`decide` passes exactly that to `send_family_message`, which is still gated.
+
+```text
+Por favor, envíen su documento de prueba de residencia antes del 18 de octubre
+de 2026 a la agencia estatal que maneja su renovación. Agradecemos su atención a
+tiempo para evitar interrupciones en sus beneficios. Gracias por su cooperación.
+```
+
+No name, no phone number, no address — the drafter cannot know any of them.
+That is the README's second sentence, demonstrated rather than asserted.
+
+### AgentCore Memory, and which half of it works
+
+Every terminal path now records what the run concluded. **Confirmed by listing
+events, not by the write returning:** two events per household, carrying the typed
+reason and nothing that identifies anyone.
+
+```text
+c-010: escalated: missing_document: proof_of_residency is not on file …
+c-011: escalated: material_income_change: Income moved 30.0% …
+c-001: acted
+```
+
+**Retrieval has not surfaced records yet.** Extraction into `/facts/` is
+asynchronous, and `recall_facts` returns `()` until it catches up. The read path is
+wired and fails open by design, so an empty result degrades an outreach message
+and can never change a verdict. Stated precisely: the write half is verified, the
+read half is wired and unverified.
+
+### Reflection, bounded
+
+A previous cycle's lesson now reaches the **advocate** — the agent whose job is to
+argue — and neither the verifier nor the referee. A remembered claim is not a
+readable fact and a conclusion drawn from last year's case is not a conclusion
+about this one. `evaluate()` has no parameter a lesson could occupy, asserted
+against the signature rather than trusted from the wiring.
+
+### The invariants, after all of it
+
+```text
+outcomes: 12   9 acted / 3 escalated   escalating exactly c-010, c-011, c-012
+renewal_submitted for exactly c-001..c-009  : True
+no escalating household ever filed          : True
+escalation queue holds exactly the three    : True
+infra drift                                 : none
+```
