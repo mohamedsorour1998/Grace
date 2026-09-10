@@ -3,8 +3,14 @@
 One diagram of the whole system, and then the three claims it exists to support.
 
 Everything below is deployed and running in `us-east-1` unless a note says otherwise. Mermaid renders
-natively on GitHub, so this file is the architecture diagram; `docs/deployed-verification.md` is the
-evidence that it behaves as drawn.
+natively on GitHub, so **this file is the architecture diagram**; `docs/deployed-verification.md` is
+the evidence that it behaves as drawn.
+
+`docs/architecture.png` is a rendered copy for readers who cannot run Mermaid, and it lags this
+source. Where they disagree, **this file is authoritative** — it is the one GitHub renders and the one
+kept in step with the code. Regenerate the PNG with
+`npx -y @mermaid-js/mermaid-cli -i docs/architecture.md -o docs/architecture.png` (needs a Chrome
+Puppeteer can drive).
 
 ---
 
@@ -18,13 +24,24 @@ flowchart TB
         LAM["Lambda <code>grace-invoke-case</code><br/>one household per invocation<br/>total_max_attempts 1"]
     end
 
-    subgraph runtime["AgentCore Runtime — grace_grace-oTyyvo8stE"]
+    subgraph runtime["AgentCore Runtime — grace_grace-oTyyvo8stE<br/><b>Strands Agents SDK</b> — Graph · Swarm · agents-as-tools · SteeringHandler · HookProvider"]
         direction TB
         GATE{{"<b>The authority gate</b><br/><code>authority.py</code> — pure Python<br/>no model, no I/O<br/>act · or · escalate"}}
         INTAKE["intake<br/>Nova 2 Lite"]
         DOCS["documents<br/>Nova 2 Lite"]
         SWARM["<b>eligibility swarm</b> — ambiguous cases only<br/>advocate Nova 2 Lite → verifier Nova Pro → referee Nova Micro<br/><i>three different models on purpose</i>"]
         DECIDE["decide<br/>Nova Pro<br/>the only node with action tools"]
+        DRAFT["draft_family_message<br/><i>agents-as-tools</i><br/>Nova 2 Lite · no tools · no store<br/>writes in the family's language"]
+    end
+
+    subgraph loop["One Strands node's agentic loop — where the gate sits"]
+        direction LR
+        L1["model<br/>Amazon Nova"] --> L2["tool selection"]
+        L2 --> L3{{"SteeringHandler<br/><b>the authority gate</b><br/>Proceed · Guide · Interrupt"}}
+        L3 -->|"permitted"| L4["tool executes<br/><i>SequentialToolExecutor</i>"]
+        L3 -->|"refused"| L5["a human decides"]
+        L4 --> L6["HookProvider<br/>appends to the ledger"]
+        L6 --> L1
     end
 
     subgraph state["Durable state"]
@@ -52,8 +69,12 @@ flowchart TB
     DECIDE --> GATE
     GATE -->|"act — renewal filed"| DDB
     GATE -->|"escalate — a human decides"| DDB
+    DECIDE -.->|"needs words for a family"| DRAFT
+    DRAFT -.-> SMS
     DECIDE -.-> SMS
-    DECIDE <--> MEM
+    DECIDE -->|"writes each outcome"| MEM
+    MEM -.->|"prior cycles, advisory"| SWARM
+    DECIDE -.->|"every state-changing call"| L3
     DDB --> ALARM
 
     CW -->|"sign in"| COG
@@ -67,7 +88,7 @@ flowchart TB
     classDef gate fill:#B4530A,stroke:#7a3806,color:#fff
     classDef store fill:#E4E1D8,stroke:#b8b3a5,color:#1C1F23
     classDef human fill:#2F6F4E,stroke:#1f4a34,color:#fff
-    class GATE,AUTHZ gate
+    class GATE,AUTHZ,L3 gate
     class DDB,MEM store
     class CW,COG,SSR,DEC human
 ```

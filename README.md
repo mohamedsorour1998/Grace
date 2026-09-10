@@ -490,7 +490,7 @@ it. Nothing in this README should be read as saying the submission is complete.
 | Public code repository | Present — [`mohamedsorour1998/Grace`](https://github.com/mohamedsorour1998/Grace) |
 | MIT license, visible in the About section | Present — [LICENSE](LICENSE), detected by GitHub as MIT |
 | README | This file |
-| Architecture diagram | [`docs/architecture.md`](docs/architecture.md) (Mermaid, renders on GitHub) and [`docs/architecture.png`](docs/architecture.png) |
+| Architecture diagram | [`docs/architecture.md`](docs/architecture.md) — Mermaid, renders natively on GitHub, and the authoritative copy. [`docs/architecture.png`](docs/architecture.png) is a rendered convenience copy that lags it. |
 | AWS Builder ID | **mohamedsorour1998@gmail.com** — the Devpost form asks for the email used to create the Builder ID |
 | Live demo link *(optional, scores better)* | Present — **[grace.rosettacloud.app](https://grace.rosettacloud.app)** |
 | **≤5-minute demo video** | **Not recorded. Outstanding.** The script, shot list, and figures are ready in [docs/demo-video-handout.md](docs/demo-video-handout.md) — must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
