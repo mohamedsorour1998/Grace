@@ -22,6 +22,8 @@ drift out of step with the first.
 
 from __future__ import annotations
 
+import ast
+import importlib
 import inspect
 
 from bedrock_agentcore.memory import MemoryClient
@@ -163,12 +165,59 @@ def test_the_namespace_matches_what_the_memory_was_created_with():
 def test_nothing_in_the_gate_can_reach_this_module():
     """Hard rule 5, structurally. Recall may make Grace more cautious and may
     never satisfy a gate condition — so `authority.py` must not import it, and
-    neither may `steering.py`, which is the gate's only adapter."""
+    neither may `steering.py`, which is the gate's only adapter.
+
+    **Checked transitively, not by grepping two files.** A direct-source grep
+    passes a `steering.py` that imports a helper module which imports this one,
+    and the verdict would then depend on recall through one extra hop with every
+    assertion still green. So this walks the real import graph from each gate
+    module and fails on reaching `grace.household_memory` at any depth — the
+    same discovery-from-disk discipline the model-ID and ledger-writer guards
+    use, and for the same reason: a hardcoded list of the paths someone thought
+    of is how a leak gets in.
+    """
     import grace.authority
     import grace.steering
 
+    def _reaches(module, seen: set[str]) -> list[str] | None:
+        """The import chain from `module` to household memory, or `None`."""
+        name = module.__name__
+        if name in seen:
+            return None
+        seen.add(name)
+        try:
+            source = inspect.getsource(module)
+        except (OSError, TypeError):
+            return None
+        tree = ast.parse(source)
+        imported: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported += [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.append(node.module)
+                imported += [f"{node.module}.{alias.name}" for alias in node.names]
+        for target in imported:
+            if target == "grace.household_memory" or target.startswith(
+                "grace.household_memory."
+            ):
+                return [name, "grace.household_memory"]
+            # Only follow Grace's own modules. Walking into `strands` or `boto3`
+            # would be slow and could not reach this module anyway.
+            if not target.startswith("grace.") or target in seen:
+                continue
+            try:
+                child = importlib.import_module(target)
+            except Exception:  # noqa: BLE001 — an unimportable module is not a path
+                continue
+            chain = _reaches(child, seen)
+            if chain is not None:
+                return [name, *chain]
+        return None
+
     for module in (grace.authority, grace.steering):
-        source = inspect.getsource(module)
-        assert "household_memory" not in source, (
-            f"{module.__name__} reaches memory; a verdict must never depend on recall"
+        chain = _reaches(module, set())
+        assert chain is None, (
+            "a verdict must never depend on recall, and this import chain makes "
+            f"it possible: {' -> '.join(chain or [])}"
         )

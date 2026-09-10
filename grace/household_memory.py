@@ -187,6 +187,13 @@ def recall_facts(
 
     An empty tuple means "nothing to add", never "this family has no history" —
     the caller must not present absence of recall as a fact about the family.
+
+    `top_k` defaults to 5 rather than to `RETRIEVAL_NAMESPACES`'s 10, and the two
+    are deliberately not tied: that config governs the *session manager's*
+    retrieval, which nothing in Grace attaches (see the module docstring), while
+    this bound is what lands in a model's context window. Five facts is what a
+    task preamble can carry without crowding out the case record it is supposed
+    to be read against.
     """
     resolved = _memory_id(memory_id)
     if not resolved:
@@ -195,6 +202,14 @@ def recall_facts(
     if scoped is None:
         return ()
     actor, _session = scoped
+    # **This `except` covers less than it looks like it does.** The real
+    # `retrieve_memories` catches its own `ClientError` and returns `[]`, so a
+    # service outage on the read path arrives here as an empty list, not as an
+    # exception — which is why an empty result must never be reported as "this
+    # family has no history". What this `try` genuinely catches is client
+    # construction (no credentials, no region) and argument errors. The write
+    # path is the opposite: `create_event` re-raises, so its `try` is fully
+    # load-bearing.
     try:
         records = _client(client).retrieve_memories(
             memory_id=resolved,
@@ -223,12 +238,18 @@ def _record_text(record: object) -> str:
     member would yield records carrying `content` with no `text`, and a
     mismatch here fails *silently*: `()` is indistinguishable from "no history".
     So two neighbouring spellings are accepted alongside it — a flattened
-    string, and a top-level `text` (the shape this same SDK builds for message
-    summaries). Beyond those it stops guessing and skips the record rather than
-    crashing the sweep, for the same reason every other path here fails open.
+    `content` string, and a top-level `text` (the shape this same SDK builds for
+    message summaries). Beyond those it stops guessing and skips the record
+    rather than crashing the sweep, for the same reason every other path here
+    fails open.
+
+    **Exactly three shapes, and a bare string is deliberately not one of them.**
+    An earlier version also accepted a plain `str` record, which no
+    `MemoryRecordSummary` member can produce — tolerance for a shape the service
+    cannot emit is not insurance, it is an untested branch that makes the real
+    contract harder to read. If a live response ever shows a fourth shape, add
+    it here *and* to the docstring together.
     """
-    if isinstance(record, str):
-        return record.strip()
     if not isinstance(record, dict):
         return ""
     content = record.get("content")
