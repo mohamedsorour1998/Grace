@@ -1,7 +1,7 @@
 # Agents for Humans Finalist: Grace
 
 **App Category:** Good Neighbor
-**Team:** Mohamed Sorour (@sorour)
+**Team:** Mohamed Sorour (`mohamedsorour1998@gmail.com`)
 
 `<replace this text by the COVER IMAGE — suggested: the Grace dashboard headline "9 handled alone / 3 waiting on you" over the three unwinding figures (94M enrolled · 25M+ lost coverage · 69% procedural)>`
 
@@ -23,10 +23,17 @@ message anywhere in the process.
 
 That is not a rare edge case. When pandemic-era continuous coverage ended in March 2023, states
 resumed annual eligibility checks against a record **94 million** enrolees. More than **25 million
-people lost coverage** — and roughly **69% of those losses were procedural**, missing forms and missed
-deadlines rather than anyone becoming ineligible.
+Americans lost coverage** — and roughly **69% of those losses were procedural**, missing forms and
+missed deadlines rather than anyone becoming ineligible.
 
-**About 17 million people lost health insurance they were still entitled to, because of paperwork.**
+**About 17 million Americans lost health insurance they were still entitled to, because of paperwork.**
+
+And here is the part that turned this from a sad statistic into a thing I could build against.
+**42 CFR 435.916(a)(3)(iii) gives that family 90 days.** If coverage is terminated for failing to
+return a renewal form, the agency must reconsider — *"if the individual subsequently submits the
+renewal form within 90 days after the date of termination … without requiring a new application."*
+The loss is reversible for three months, by law, and almost nobody inside that window knows it. Grace
+lives in those 90 days.
 
 I built **Grace** to close that window.
 
@@ -154,6 +161,23 @@ source must say *how it knows* — with the shipped implementation reading the r
 true, silently. What it needs is a per-state data-sharing agreement, which is a legal instrument, not a
 sprint.
 
+**Every number in a rule pack names its authority.** The packs encode a programme's clocks —
+certification length, when the window opens, how late is still savable, what income movement is
+immaterial — and those numbers decide whether a family keeps coverage. They cited nothing, which makes
+an invented number indistinguishable from a researched one. Now each carries the provision that
+establishes it, checked against the regulation text before it was written down, or the literal string
+`policy choice` where the regulation gives a range and the value is mine.
+
+Exactly two of the twelve are federally mandated: the 12-month Medicaid renewal cycle
+(42 CFR 435.916(a)(1)) and that 90-day reconsideration window. The most interesting entry is a
+negative one. SNAP's immaterial-income band is 10% in my pack, and **7 CFR 273.12(a)(1)(i)(A) sets a
+dollar threshold, not a percentage** — "a change of more than $100 in the amount of unearned income".
+A percentage band has no federal basis at all. Writing `42 CFR ...` beside it would have looked like
+diligence and been a lie, so it says `policy choice` and explains itself. And the absence is itself a
+finding worth stating: SNAP has no reconsideration provision equivalent to Medicaid's 90 days, so a
+household that misses recertification generally reapplies. Grace has less room to save one, and the
+pack says so.
+
 ### Milestones
 
 The gate came first — a pure-Python authority module, table-tested exhaustively, before any agent
@@ -162,8 +186,9 @@ EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Then casew
 the deployed sweep genuinely read its caseload from the table. Last, the safety claim executed against
 live infrastructure.
 
-**874 Python tests and 211 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
-holds against real Bedrock calls.
+**941 Python tests and 229 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
+holds against real Bedrock calls. Every guard was sabotaged and watched failing — that is the subject
+of a companion post.
 
 ---
 
