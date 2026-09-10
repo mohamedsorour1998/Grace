@@ -31,12 +31,24 @@ VERIFIER = "us.amazon.nova-pro-v1:0"
 REFEREE = "us.amazon.nova-micro-v1:0"
 # High volume, cheap; `global.` for cross-region throttle resilience.
 CLASSIFIER = "global.amazon.nova-2-lite-v1:0"
-# Short multilingual SMS.
-OUTREACH = "us.amazon.nova-2-lite-v1:0"
+# Short multilingual SMS. **`global.`, not `us.`, and that prefix is a deployed
+# permission rather than a preference.** The runtime role's `NovaOnly` statement
+# grants three inference profiles by exact ARN, and the Nova 2 Lite one it names
+# is `global.` — so a `us.` spelling here is `implicitDeny` on Bedrock.
+#
+# This was measured, not reasoned: the outreach drafter is the first code to use
+# this role, and on its first deployed sweep `draft_family_message` returned
+# `status: error` while every local invocation succeeded. `decide` then correctly
+# escalated instead of texting, so the gate held and no family was contacted with
+# nothing — but the drafter was dead in production and passing in every test.
+# A role defined but never called cannot reveal a permission it does not have.
+OUTREACH = "global.amazon.nova-2-lite-v1:0"
 # Must be genuinely clear to a human under time pressure.
 BRIEFER = "us.amazon.nova-pro-v1:0"
-# Bounded-retry output review.
-JUDGE = "us.amazon.nova-2-lite-v1:0"
+# Bounded-retry output review. `global.` for the same deployed-permission reason
+# as OUTREACH above — and `judge` is the *other* role nothing calls, so it
+# carried the identical wrong prefix and could not have revealed it either.
+JUDGE = "global.amazon.nova-2-lite-v1:0"
 
 # Never assign this to any role. Under test, told "NEVER submit a renewal when a
 # required document is missing", nova-lite-v1:0 read the case, saw

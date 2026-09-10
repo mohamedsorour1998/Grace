@@ -613,3 +613,38 @@ def test_every_role_is_tagged_for_cost_attribution_and_teardown():
     assert len(captured) == len(ALL_PURPOSES)
     for name, tags in captured.items():
         assert {t["Key"]: t["Value"] for t in tags} == naming.TAGS, name
+
+
+def test_every_grace_model_role_is_a_profile_the_runtime_policy_grants():
+    """**Every role's model must be one the deployed role can actually call.**
+
+    `infra/provision_iam.py` deliberately does not import `grace.models` — it
+    must stay importable without Grace's dependencies — and its comment says the
+    duplication is "covered by a test asserting these are real, current Nova
+    ids". It was: nothing asserted the two lists *agreed*.
+
+    They did not. `models.py`'s `outreach` role named
+    `us.amazon.nova-2-lite-v1:0` while `_NOVA_PROFILES` grants the `global.`
+    spelling of the same model, and the ARNs in that statement are exact — so the
+    role was `implicitDeny` on Bedrock. It went unnoticed because `outreach` was
+    the one role no code called; the moment the outreach drafter used it, its
+    first deployed sweep returned `status: error` from the tool while every local
+    invocation and every test passed. **A role defined but never called cannot
+    reveal a permission it does not have**, and a prefix is not cosmetic when the
+    policy names profiles by exact ARN.
+
+    Asserted in the direction that matters: every model a role can select must be
+    granted. The reverse is not required — a granted profile no role uses is
+    unused capability, not a broken call.
+    """
+    from grace.models import _ROLES
+    from infra.provision_iam import _NOVA_PROFILES
+
+    granted = set(_NOVA_PROFILES)
+    for role, model_id in sorted(_ROLES.items()):
+        assert model_id in granted, (
+            f"role {role!r} selects {model_id!r}, which the runtime policy does "
+            f"not grant. Granted: {sorted(granted)}. The prefix is part of the "
+            "ARN — a `us.`/`global.` mismatch is implicitDeny on Bedrock, and it "
+            "surfaces only when something actually calls that role."
+        )
