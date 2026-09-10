@@ -37,6 +37,21 @@ class RequiredDocument:
 
 
 @dataclass(frozen=True)
+class RuleSource:
+    """Where one rule-pack parameter comes from.
+
+    `authority` is a citation or the literal string `policy choice`. Both are
+    honest; an empty one is not. `note` says what the provision actually
+    establishes, because a bare section number invites a reader to assume the
+    regulation mandates the exact value when it often gives a range.
+    """
+
+    parameter: str
+    authority: str
+    note: str = ""
+
+
+@dataclass(frozen=True)
 class RulePack:
     program: str
     state: str
@@ -46,6 +61,11 @@ class RulePack:
     grace_period_days_after_end: int
     required_documents: tuple[RequiredDocument, ...]
     income_change_immaterial_pct: float
+    # Defaulted so no existing construction site breaks. A pack that cites
+    # nothing still loads — `tests/test_rule_pack_sources.py` is what requires
+    # the shipped packs to cite everything, because that is a claim about
+    # Grace's own packs rather than about the file format.
+    sources: tuple[RuleSource, ...] = ()
 
 
 def _require_str(raw: dict[str, Any], key: str) -> str:
@@ -124,6 +144,58 @@ def _require_documents(raw: dict[str, Any]) -> tuple[RequiredDocument, ...]:
     return tuple(documents)
 
 
+def _require_sources(raw: dict[str, Any]) -> tuple[RuleSource, ...]:
+    """Read the citation block, failing closed on anything malformed.
+
+    Parsed with the same discipline as `required_documents`: a malformed block
+    raises `InvalidRulePack` rather than loading a pack whose citations are
+    silently absent. Plan 1 Task 1's contract — one exception type for missing,
+    unreadable, malformed, mislabelled, and out-of-range — so a caller fails
+    closed with a single `except InvalidRulePack`.
+
+    Absence is permitted and an *empty* field is not, which is the same polarity
+    as `authority: "policy choice"` being an acceptable answer while `TBD` is
+    not. A citation that is present but blank looks like diligence from a
+    distance; a missing block is visibly missing.
+
+    Like `_require_str`, this refuses a non-string rather than coercing one.
+    YAML's implicit scalars turn an unquoted `no` into a boolean and an
+    unquoted `42 CFR 435.916` fragment into something unexpected, and
+    `str()`-ing the result would render a parse accident as a citation.
+    """
+    entries = raw.get("sources", [])
+    if not isinstance(entries, list):
+        raise InvalidRulePack(
+            f"'sources' must be a list of source entries, got {type(entries).__name__}"
+        )
+    sources: list[RuleSource] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise InvalidRulePack(f"each source must be a mapping, got {entry!r}")
+        # `note` defaults to empty; `parameter` and `authority` have no default,
+        # so an omitted one arrives as None and is refused below rather than
+        # becoming the string "None".
+        fields: dict[str, str] = {}
+        for name, default in (("parameter", None), ("authority", None), ("note", "")):
+            value = entry.get(name, default)
+            if not isinstance(value, str):
+                raise InvalidRulePack(f"source {name} must be a string, got {value!r}")
+            fields[name] = value
+        if not fields["parameter"].strip() or not fields["authority"].strip():
+            raise InvalidRulePack(
+                "source parameter and authority must be non-empty, got "
+                f"{fields['parameter']!r}/{fields['authority']!r}"
+            )
+        sources.append(RuleSource(**fields))
+    parameters = [s.parameter for s in sources]
+    if len(set(parameters)) != len(parameters):
+        # Two entries for one parameter means one of them is being ignored, and
+        # which one wins would depend on order. A reader auditing the pack would
+        # see a citation that does not govern.
+        raise InvalidRulePack(f"duplicate source parameters: {parameters}")
+    return tuple(sources)
+
+
 def _pack_path(program: str, state: str) -> Path:
     """Resolve a pack path, refusing anything outside PACKS_DIR.
 
@@ -167,6 +239,7 @@ def load_pack(program: str, state: str) -> RulePack:
         grace_period_days_after_end=_require_non_negative_int(raw, "grace_period_days_after_end"),
         required_documents=_require_documents(raw),
         income_change_immaterial_pct=_require_finite_float(raw, "income_change_immaterial_pct"),
+        sources=_require_sources(raw),
     )
 
     # A pack whose own fields disagree with the file it was loaded from is

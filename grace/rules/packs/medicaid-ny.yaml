@@ -10,3 +10,33 @@ required_documents:
     max_age_days: 60
   - id: proof_of_residency
     max_age_days: 365
+
+# Where each number comes from. `policy choice` is an honest answer where the
+# regulation gives a range rather than a value — what is not honest is an
+# uncited number deciding whether a family keeps coverage. Every citation here
+# was checked against the regulation text before it was written down, because a
+# wrong citation is worse than none: it converts an unverified number into one
+# that looks verified.
+#
+# Two of this file's parameters are mandated by federal regulation and quoted
+# exactly — the 12-month renewal cycle and the 90-day reconsideration window.
+# Everything else is an operational choice within what the regulations permit.
+sources:
+  - parameter: "certification_period_months"
+    authority: "42 CFR 435.916(a)(1)"
+    note: "Mandated, not chosen. The eligibility of beneficiaries whose financial eligibility is determined using MAGI-based income 'must be renewed once every 12 months, and no more frequently than once every 12 months'. The pack's 12 is an exact match to the provision."
+  - parameter: "window_opens_days_before_end"
+    authority: "policy choice, informed by 42 CFR 435.916(a)(3)(i)(B)"
+    note: "The regulation sets a floor on the beneficiary's response window, not a date on which the agency must open the renewal: it guarantees 'at least 30 days from the date of the renewal form to respond and provide any necessary information'. 60 days is this deployment's choice — twice the federal minimum, so a household that receives the notice late still has the guaranteed 30."
+  - parameter: "grace_period_days_after_end"
+    authority: "42 CFR 435.916(a)(3)(iii)"
+    note: "Mandated as a federal floor, and this is the provision Grace's entire premise rests on: the period in which a procedural termination is still reversible. The agency must 'reconsider in a timely manner the eligibility of an individual who is terminated for failure to submit the renewal form or necessary information' if that individual submits it 'within 90 days after the date of termination', or a longer period elected by the State, without requiring a new application. A state may elect longer; 90 is the floor."
+  - parameter: "income_change_immaterial_pct"
+    authority: "policy choice"
+    note: "No provision in 42 CFR 435 sets a percentage below which an income change need not be acted on. 435.916(d) requires the agency to act on information about changes, but the materiality threshold is an operational judgement. 5% is this deployment's band, and a change above it escalates to a human rather than being decided by Grace."
+  - parameter: "required_documents.proof_of_income"
+    authority: "policy choice, bounded by 42 CFR 435.945 / 435.952"
+    note: "Those provisions require the agency to use available electronic data and to request documentation only where it cannot verify from data it already holds. No maximum age for a pay stub is fixed federally. The 60-day freshness window is this deployment's."
+  - parameter: "required_documents.proof_of_residency"
+    authority: "policy choice"
+    note: "Residency is verified under 42 CFR 435.403; no federal maximum age for the evidence is set. One year matches the renewal cycle."

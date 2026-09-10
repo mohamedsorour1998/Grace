@@ -12,3 +12,37 @@ required_documents:
     max_age_days: 1095
   - id: proof_of_expenses
     max_age_days: 60
+
+# Where each number comes from. `policy choice` is an honest answer where the
+# regulation gives a range rather than a value — what is not honest is an
+# uncited number deciding whether a family keeps coverage. Every citation here
+# was checked against the regulation text before it was written down, because a
+# wrong citation is worse than none: it converts an unverified number into one
+# that looks verified.
+#
+# Nothing in this file is federally mandated. Both of Grace's mandated numbers
+# are in medicaid-ny.yaml, and the absence here is itself the finding: SNAP
+# gives a household less protection after a missed recertification than
+# Medicaid does, so Grace has less room to save one.
+sources:
+  - parameter: "certification_period_months"
+    authority: "policy choice within 7 CFR 273.10(f)"
+    note: "The regulation caps the value rather than setting it: 'The certification period cannot exceed 12 months' except to accommodate a transitional benefit period and the cases in (f)(1) and (f)(2). (f)(3) directs agencies to assign the longest period feasible, typically at least 6 months. 6 is the low end of that recommended range and well inside the 12-month cap — this deployment's choice, not a mandate."
+  - parameter: "window_opens_days_before_end"
+    authority: "policy choice, informed by 7 CFR 273.14"
+    note: "Recertification requires timely notice and an opportunity to complete the process before the certification period ends, but fixes no number of days for when an agency starts watching. 30 days is this deployment's choice for when Grace begins."
+  - parameter: "grace_period_days_after_end"
+    authority: "policy choice"
+    note: "Note the contrast with Medicaid, because it changes what Grace can promise: SNAP has no reconsideration provision equivalent to 42 CFR 435.916(a)(3)(iii), so a household that misses recertification generally has to reapply rather than being reinstated. The 30 days is this deployment's chase window, not a statutory right."
+  - parameter: "income_change_immaterial_pct"
+    authority: "policy choice"
+    note: "A percentage band has no federal basis at all. 7 CFR 273.12(a)(1)(i)(A) sets a dollar threshold — 'a change of more than $100 in the amount of unearned income' — adjusted to the nearest $25 each fiscal year per (a)(1)(i)(D); and under simplified reporting, (a)(5)(v) requires a report only when gross income exceeds the household's gross income limit (130% of poverty, 273.9(a)(1)). 10% is this deployment's operational threshold for 'worth a human's attention', and it is not a restatement of any rule."
+  - parameter: "required_documents.proof_of_income"
+    authority: "policy choice"
+    note: "No federal maximum age is set for income documentation. 30 days matches the monthly cadence the reporting rules assume."
+  - parameter: "required_documents.proof_of_identity"
+    authority: "policy choice"
+    note: "Identity is verified under 7 CFR 273.2(f)(1)(vii); no federal expiry is set for the evidence. Three years is this deployment's."
+  - parameter: "required_documents.proof_of_expenses"
+    authority: "policy choice"
+    note: "Deductible expenses are verified under 7 CFR 273.2(f)(1)(iv); no federal maximum age is set. 60 days is this deployment's."
