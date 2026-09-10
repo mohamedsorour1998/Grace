@@ -31,9 +31,10 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 
 ## Current state
 
-**Six plans are complete.** Plan 1's 9 tasks, Plan 2's 11, Plan 3's 9, Plan 4 (sign-in + case intake),
-Plan 5 (document provenance) and Plan 6 (the 2026-09-08 audit fixes,
-`docs/superpowers/plans/2026-09-08-grace-audit-fixes.md`) are done. **Python tests pass** plus
+**Seven plans are complete.** Plan 1's 9 tasks, Plan 2's 11, Plan 3's 9, Plan 4 (sign-in + case
+intake), Plan 5 (document provenance), Plan 6 (the 2026-09-08 audit fixes) and Plan 7 (the grand-prize
+plan, `docs/superpowers/plans/2026-09-10-grace-grand-prize.md`, which closed four overclaims and cited
+the regulations) are done. **Python tests pass** plus
 **vitest tests across 10 files** in `web/`, and 23 trajectory evals pass against real Bedrock
 (`.venv/bin/python -m pytest evals/` — `testpaths = ["tests"]` excludes `evals/` from the fast suite).
 `grace sweep` runs end to end locally and reports **9 acted / 3 escalated**. **Re-measure these counts
@@ -42,7 +43,8 @@ claims that do not move.
 
 **One hard submission requirement is still outstanding: the ≤5-minute demo video.** No task in any plan
 produces it. Everything else required — public repo, README, architecture diagram, AWS Builder ID
-(`@sorour`) — exists. Do not describe the submission as complete.
+(`mohamedsorour1998@gmail.com` — the Devpost form asks for the **email** used to create the Builder ID,
+not the handle) — exists. Do not describe the submission as complete.
 
 **The evals needed two runs to reach 23/23, and that is expected for exactly one of them.**
 `test_an_escalating_case_does_something_rather_than_nothing[c-011]` is liveness, not safety — the gate
@@ -1628,6 +1630,46 @@ ID** is likewise not derivable from the repo or the AWS API; it sits in the READ
 `TODO(sorour)` field rather than a guessed value.
 
 
+**Four overclaims were closed on 2026-09-10 and the way each was found is the transferable part.**
+`README.md` listed AgentCore Memory as "Shipped" and named agents-as-tools as one of three multi-agent
+patterns. `build_session_manager` had zero callers; no `@tool` wrapped an `Agent`; and `models.py`
+defined `outreach` and `judge` roles that nothing called. All were found by grepping the **request
+path** for the thing the documentation claimed, rather than by reading the documentation — the same
+"is the thing I deployed the thing I wrote?" question that found the frozen caseload.
+
+**`AgentCoreMemorySessionManager` cannot attach to a Graph.** `create_multi_agent` raises
+`NotImplementedError("MultiAgent is not implemented for this repository")`, verified against the
+installed package. `GraphBuilder.set_session_manager` *does* exist, so this is syntactically inviting
+and would raise on the first sweep. `grace/memory.py`'s docstring reaches the right conclusion by the
+wrong route — it cites a `ValueError` about agents inside a Graph, which is a different guard.
+`grace/household_memory.py` uses the data-plane client (`create_event` / `retrieve_memories`) instead.
+
+**`MemoryClient.create_event` takes `(text, role)` tuples, not `(role, text)`.** Its body does
+`text, role = msg` then `MessageRole(role.upper())`, and its own docstring says so. The reverse order
+raises `ValueError` **before the network**, is swallowed by a fail-open `except`, and returns `False`
+forever with a warning nobody reads. A plan draft had it backwards *and its test pinned the wrong
+order*, so the test defended the defect. The fake now validates through the real SDK method
+(`object.__new__` skips `__init__`, so no boto3 client and no credentials) — **a fake that carries its
+own copy of a contract drifts exactly like a comment.**
+
+**A role defined in `models.py` and called by nothing cannot reveal a permission it does not have.**
+`OUTREACH` carried a `us.` prefix while the deployed runtime policy grants `global.*`, so the drafter
+worked in every local test and was **AccessDenied in production** the moment Task 1 first called it.
+`judge` carried the identical wrong prefix and is still uncalled. A test now asserts every role's model
+id is one the deployed policy actually grants, and
+`test_every_model_role_is_referenced_by_some_module` walks the package from disk and fails on any
+unreferenced role — `judge` exempted by name, with the exemption to be deleted along with the role if
+LLM steering never ships.
+
+**Two rule-pack numbers are federally mandated and the other ten are not, and saying so is the
+point.** `42 CFR 435.916(a)(1)` mandates the 12-month Medicaid renewal cycle; `(a)(3)(iii)` gives a
+household **90 days** to submit a late renewal form after a procedural termination "without requiring a
+new application" — the window Grace exists to work inside. Everything else says `policy choice` with
+its reasoning. The sharpest entry is negative: SNAP's immaterial-income band is a *percentage* and
+`7 CFR 273.12(a)(1)(i)(A)` sets a *dollar* threshold, so a percentage band has no federal basis at
+all. **A wrong citation is worse than none** — it converts an unverified number into one that looks
+verified.
+
 ## The one idea that matters
 
 Grace's defining property is an **escalation boundary**: it acts alone on the routine and
@@ -1915,7 +1957,8 @@ Trajectory evals (`evals/`) assert the gate ordering holds against real model ru
   `gh repo view` reports `licenseInfo.key: "mit"` and `visibility: PUBLIC`.
 - Required at submission: public repo, README, architecture diagram, ≤5-minute demo video
   (problem → who it's for → why it matters → working demo), AWS Builder ID.
-- **AWS Builder ID is `@sorour`.** Recorded in the README.
+- **AWS Builder ID is `mohamedsorour1998@gmail.com`.** Recorded in the README. The Devpost form asks
+  for the email that created the Builder ID rather than a handle, so `@sorour` was the wrong value.
 - A live demo link and AgentCore deployment both strengthen the Technical Implementation
   score. **Both exist**: `https://grace.rosettacloud.app`, also set as the repository's homepage so it
   appears in the About section where a judge looks first.

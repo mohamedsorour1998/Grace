@@ -77,13 +77,13 @@ period, so Grace records `renewal_already_filed` for each and files none of them
 
 > When pandemic-era continuous coverage ended in March 2023, states resumed annual Medicaid eligibility
 > checks. Enrolment had reached a record **94 million**. Over the unwinding that followed, **more than
-> 25 million people lost Medicaid coverage.**
+> 25 million Americans lost Medicaid coverage.**
 >
 > **About 69% of those losses were procedural.** Missing forms. Missed deadlines. One document that
 > never arrived. Not people who stopped qualifying — people who still qualified and lost coverage
 > anyway.
 >
-> That is roughly **17 million people** who lost health insurance they were entitled to, because of
+> That is roughly **17 million Americans** who lost health insurance they were entitled to, because of
 > paperwork.
 >
 > This is for the **caseworker** holding hundreds of those files at once, and for the **family** who
@@ -144,6 +144,13 @@ Open **`/case/c-010`**.
 > ends up told their renewal is fine when it is not.
 
 `<replace this text by a screenshot of the /case/c-010 page showing the typed reason, the documents-sent-to-the-state panel with its provenance line, and the ledger>`
+
+> And look at the message Grace sent this family. They read Spanish, so Grace wrote in Spanish. A
+> separate agent drafts it — no tools, no access to the case, it never learns who the family is — and
+> `decide` sends exactly what it returned. **The agent that writes the words cannot send them, and the
+> agent that can send has no words of its own.**
+
+`<replace this text by a screenshot of the c-010 ledger row showing the Spanish family_message_sent body>`
 
 > This is the part that matters. Grace's defining property is an **escalation boundary** — it acts
 > alone on the routine and *provably* escalates the rest. Three layers.
@@ -213,9 +220,12 @@ Re-measure before recording; do not read a stale number.
 | the twelve seeded households: 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01`. **Say "the twelve seeded households"** — the claim must stay true if anyone submits a case through the intake form. |
 | 9 acted / 3 escalated deployed | the `grace-sweep` Step Functions execution output |
 | the sweep reads its caseload from the table | `ListCases` queries the `CASE_DIRECTORY` partition; the scheduled event carries only `{"today": "2026-10-01"}`. Started with that input, an execution returns 12 outcomes. **Do not say the schedule names the twelve** — it did until 2026-09-07, and that was the defect. |
-| runtime version 5 | `get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE`. v2 could not read `RECORD#v1` rows (a submitted household was invisible to the sweep), v4 added run-scoped classification and no-duplicate filing, v5 stopped an approval re-escalating itself. |
+| runtime version 8 | `get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE`. v2 could not read `RECORD#v1` rows (a submitted household was invisible to the sweep), v4 added run-scoped classification and no-duplicate filing, v5 stopped an approval re-escalating itself, v6 added the outreach drafter, v7 fixed the model prefix the deployed policy actually grants, v8 added reflection. |
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
-| 904 Python tests, 226 vitest across 11 files | `pytest` and `vitest run` — re-measure, these move every plan |
+| 941 Python tests, 229 vitest across 11 files | `pytest` and `vitest run` — re-measure, these move every plan |
+| the outreach is in the family's language | `c-010` reads Spanish and the `family_message_sent` body in its ledger is Spanish. **Say "in the family's own language" and then show it** — this is the one place that claim is checkable rather than asserted. |
+| Memory is written and read back | `list_events` on the household's actor after a sweep: two events per household. **Match the wording to `README.md`'s Memory row exactly** — the write half is verified by reading the events back, the read path is wired and retrieval had not surfaced records at the time of writing. |
+| two rule-pack numbers are federally mandated | `42 CFR 435.916(a)(1)` for the 12-month cycle and `(a)(3)(iii)` for the 90-day reconsideration window. The other ten say `policy choice`. **Do not imply the regulations mandate all of them.** |
 | 23 trajectory evals | `pytest evals/ --co -q` — they cost real Bedrock to run |
 | approving `c-010` files nothing | its decision + outcome rows, and zero `renewal_submitted` rows |
 | Grace files a renewal once per period | a sweep after the nine are filed writes **0** new `renewal_submitted` rows and **9** `renewal_already_filed` rows |
@@ -248,6 +258,13 @@ Re-measure before recording; do not read a stale number.
   deploy, and it now reads its caseload from the table rather than from the schedule."* If you want to
   claim a scheduled run swept a household added afterwards, check that a fire has happened since the
   fix and say the date — do not infer it.
+- Do **not** claim Memory does more than it does. Say exactly what `README.md`'s Memory row says: Grace
+  **records** what each sweep concluded, verified by reading the events back. Retrieval is wired and was
+  not yet surfacing records. "Grace records what it concluded for the next cycle" is true; "Grace
+  remembers and recalls" is not yet.
+- Do **not** imply every rule-pack number comes from a regulation. Two of twelve are mandated and
+  quoted; the rest say `policy choice`, and saying so *is* the point — an uncited number deciding a
+  family's coverage is indistinguishable from an invented one.
 - Do **not** say traces or Transaction Search work. Zero spans exist in the account.
 - Do **not** imply SMS is delivered. The channel is a transcript; the account has no origination number.
 - Do **not** describe the household data as real. All twelve are synthetic; phone numbers use the
