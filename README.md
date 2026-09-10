@@ -2,8 +2,8 @@
 
 **Nobody should lose healthcare over a missed letter.**
 
-During the Medicaid unwinding, **more than 25 million people lost coverage — and about 69% of those
-losses were procedural**, not eligibility. Roughly **17 million people** lost health insurance they
+During the Medicaid unwinding, **more than 25 million Americans lost coverage — and about 69% of those
+losses were procedural**, not eligibility. Roughly **17 million Americans** lost health insurance they
 still qualified for, because of paperwork.
 
 Grace is an AI agent that watches every family's benefit-renewal deadline, files the renewals
@@ -28,12 +28,12 @@ for the **AWS Agents for Humans Hackathon** (Good Neighbor track).
 
 When pandemic-era continuous coverage ended on **31 March 2023**, states resumed annual Medicaid
 eligibility checks. Enrolment had reached a record **94 million**. Over the unwinding that followed,
-**more than 25 million people lost Medicaid coverage.**
+**more than 25 million Americans lost Medicaid coverage.**
 
 **About 69% of those losses were procedural** — missing forms, missed deadlines, one document that never
 arrived. Not people who stopped qualifying. People who still qualified and lost coverage anyway.
 
-> That is roughly **17 million people** who lost health insurance they were entitled to, because of
+> That is roughly **17 million Americans** who lost health insurance they were entitled to, because of
 > paperwork.
 
 The failure is silent by design. Nobody gets an error message. A renewal simply does not happen, and a
@@ -68,9 +68,13 @@ the decision.
 
 ## What makes Grace different
 
-Most agents are a model with tools and a prompt asking it to be careful. Grace has an
-**escalation boundary** — it acts alone on the routine and *provably* escalates the rest,
-enforced in code rather than requested in a prompt.
+Plenty of software can file a form. What Grace does that a form-filler cannot is
+**refuse** — and prove where the refusal comes from.
+
+It has run unattended on AWS every day since deploy, handling nine of twelve households
+alone and escalating three with typed reasons a caseworker can act on. The refusal is
+enforced in code rather than requested in a prompt, and every claim in this README is
+checkable against the ledger, the tests, or a live URL.
 
 Three layers, strongest first:
 
@@ -103,6 +107,25 @@ Grace may act alone only if *all* of these hold:
 5. No two sources disagree.
 
 Anything else becomes a specific question for a human.
+
+**Every number in a rule pack names its authority, and only two of them are mandated.**
+`certification_period_months` for Medicaid is **42 CFR 435.916(a)(1)** — *"must be renewed
+once every 12 months, and no more frequently than once every 12 months"* — and
+`grace_period_days_after_end` is **42 CFR 435.916(a)(3)(iii)**, which requires the agency to
+reconsider a household terminated for failing to return the form if it arrives *"within 90
+days after the date of termination … without requiring a new application"*.
+
+**That second provision is why Grace exists.** It is the window in which a procedural
+termination is still reversible, and Grace's whole job is to act inside it.
+
+The other ten parameters — the 60-day window, the immaterial-income bands, every document
+freshness limit — carry `authority: "policy choice"` and a note saying what the regulation
+does and does not establish. SNAP's is the sharpest example: 7 CFR 273.12(a)(1)(i)(A) sets a
+**dollar** threshold, *"a change of more than $100 in the amount of unearned income"*, so a
+percentage band has no federal basis at all and the pack says so rather than implying one.
+An uncited number that decides whether a family keeps coverage is indistinguishable from an
+invented one, and `load_pack` refuses a malformed `sources` block with the same
+`InvalidRulePack` it raises for every other malformed field.
 
 ---
 
@@ -156,9 +179,13 @@ Deadline math is a **tool, not an agent**. Deterministic work does not need a mo
 All three run **different** models. Two instances of the same model agreeing proves nothing, and
 nothing should referee its own argument.
 
-**Agents-as-tools** — context isolation for the outreach drafter, policy retriever, and
-caseworker briefer, so translation and search chatter never pollute the eligibility
-reasoning.
+**Agents-as-tools** — context isolation for the outreach drafter. When a document is
+missing, `decide` calls `draft_family_message`, which runs its own agent on Nova 2 Lite
+with **no tools at all** and returns the message text. It is bound to nothing — no store,
+no case id — so its arguments are *content* rather than identity: which document, by when,
+in which language. Translation chatter never enters the eligibility reasoning's context,
+and the drafter cannot send anything, because `send_family_message` stays on `decide`
+behind the gate. On the deployed system it writes to `c-010` in Spanish.
 
 ### The ledger
 
@@ -171,11 +198,23 @@ eval would miss a tool that ran but was not logged.
 
 ### Learning, advisory only
 
-An outcome-reflection loop — Grace writing a short lesson when a case closes and feeding recent
-lessons into future deliberations — is **designed and deliberately not built**. Lessons could only
-ever make Grace *more* cautious; they can never satisfy a gate condition. It is deferred because it
-cannot be built honestly before a deployed sweep exists to reflect on, and that sweep only started
-running at the end of this plan. See [out of scope](#what-shipped-and-what-did-not).
+An outcome-reflection loop — Grace writing a short lesson when a case closes, and feeding those
+lessons into future deliberations — **is built**, and it was deferred until now for a reason worth
+stating: it cannot be built honestly before a deployed sweep exists to reflect on. Eight sweeps
+now exist, so it reflects on real outcomes rather than on invented ones.
+
+Every terminal path records what the run concluded to AgentCore Memory, and the next cycle reads
+those facts back. **Where they land is the whole design.** A lesson reaches two places, both
+advisory: the graph's opening task text, and the **advocate's** prompt inside the deliberation
+swarm — the agent whose job is to argue, for whom history is legitimate material. It reaches
+neither the verifier, whose job is checking claims against readable facts, nor the referee, whose
+job is concluding: a remembered claim is not a readable fact, and a conclusion drawn from last
+year's case is not a conclusion about this one.
+
+The gate never sees a lesson at all. `evaluate()` re-runs on the case record and **has no
+parameter a lesson could occupy** — asserted against the function's signature rather than trusted
+from the wiring, so a mistaken edit is a type error instead of a quietly looser verdict. A lesson
+can make Grace more cautious. It cannot make it less.
 
 ---
 
@@ -189,7 +228,7 @@ Amazon Nova throughout — no third-party LLMs in the request path.
 | Verifier, briefer | `us.amazon.nova-pro-v1:0` |
 | Referee | `us.amazon.nova-micro-v1:0` |
 | Document classifier | `global.amazon.nova-2-lite-v1:0` |
-| Outreach drafter, steering judge | `us.amazon.nova-2-lite-v1:0` |
+| Outreach drafter, steering judge | `global.amazon.nova-2-lite-v1:0` |
 
 The three deliberation roles run three *different* models on purpose — two instances of one
 model agreeing proves nothing, and nothing should referee its own argument. Nova Pro is the
@@ -231,7 +270,7 @@ negative results, is in [docs/deployed-verification.md](docs/deployed-verificati
 | Surface | State |
 |---|---|
 | **Runtime** | Shipped. Container on ARM64, IAM auth, deployed via the `agentcore` CLI and CDK. |
-| **Memory** | Shipped. `grace_household_memory`, 365-day expiry, per-household actor scoping. |
+| **Memory** | Shipped and **in use**, with one half verified and one wired. `grace_household_memory`, 365-day expiry, one actor per household. Every sweep records what it concluded — **confirmed by listing the events back, not by the write returning**: two per household, carrying the typed reason and nothing that identifies anyone. Retrieval into `/facts/` is asynchronous and had not surfaced records at the time of writing, so `recall_facts` returns `()` and the read path is wired but unverified. It fails open by design, so an empty recall degrades an outreach message and can never change a verdict. |
 | **Identity** | Shipped, and **narrowly**: a Cognito user pool (`grace-caseworkers` / `us-east-1_HXs3b0APR`) whose ID token is the dashboard's trust anchor. See the sentence below for what that does and does not mean. |
 | **The deploy harness** | Shipped. `infra/provision_all.py` creates every resource idempotently; a guarded teardown exists. |
 | **Gateway** | **Deferred.** The largest remaining chunk and the most common deploy-day failure — outbound auth differs per target type. The `target___tool` prefix bug stays fixed and tested in `grace/steering.py` regardless, so re-adding Gateway later cannot silently bypass the gate. |
@@ -305,6 +344,13 @@ order to know whether their paperwork is complete; a real deployment's identity 
 record that referred the household, keyed by case id. `web/lib/intake.ts` refuses any identity-shaped
 field **and** any field it does not recognise — an allowlist, so the guard cannot be walked around with
 a field name nobody anticipated.
+
+**The outreach is in the family's language, and the deployed system shows it.** `c-010` —
+the household missing `proof_of_residency` — reads Spanish, so the message in its audit trail
+is Spanish, written by the drafter and sent unchanged. That is the one place this README's
+second sentence is checkable rather than asserted, and `tests/test_demo_dates.py` holds the
+property that the household Grace texts is not an English speaker, so a fixture edit cannot
+quietly make the claim undemonstrable again.
 
 **Grace stores no documents, and there is no upload.** A document in Grace is two facts — which kind
 it is, and the date it was sent:
@@ -426,8 +472,9 @@ Recorded as decisions rather than omissions.
 | **AgentCore Gateway** | Largest remaining chunk; outbound auth shape differs per target type, which is the most common deploy-day failure. The gate's `target___tool` prefix handling stays tested regardless. |
 | **An AgentCore Gateway JWT authorizer** | Distinct from the Cognito pool that *did* ship. The runtime stays IAM-authorised; a `customJWTAuthorizer` belongs with Gateway, above. |
 | **Real SMS** | Account is sandboxed: `MaxLimit: 1`, zero origination numbers, and sender-ID registration in the maintainer's country requires a letter of authorization, company registration, and a tax card. |
-| **Reflection loop** | Genuinely the originality differentiator, and genuinely additive. It cannot be built before a deployed sweep exists to reflect on. |
+
 | **Skills / progressive disclosure** | A prompt-size optimization. Grace's prompts are not the bottleneck. |
+| **`strands-agents-evals`** | The trajectory evals are ordinary pytest functions in `evals/` that read the ledger — the ground truth for what executed, which a transcript-based eval would miss. The package was not adopted because it depends on `strands-agents-tools`: 25 packages including `slack-bolt` and `pillow` that Grace never imports. |
 | **Bedrock Guardrails** | Span redaction already covers the export path that matters, and every household is synthetic, so PII anonymization would protect nothing today. |
 | **CloudWatch trace correlation** | Every ledger row carries a `trace_id` key whose value is `NULL`; Runtime injects the OTEL variables without installing an in-process tracer provider, so zero spans exist. The fix requires a package this project refuses. |
 
@@ -444,12 +491,12 @@ it. Nothing in this README should be read as saying the submission is complete.
 | MIT license, visible in the About section | Present — [LICENSE](LICENSE), detected by GitHub as MIT |
 | README | This file |
 | Architecture diagram | [`docs/architecture.md`](docs/architecture.md) (Mermaid, renders on GitHub) and [`docs/architecture.png`](docs/architecture.png) |
-| AWS Builder ID | **@sorour** |
+| AWS Builder ID | **mohamedsorour1998@gmail.com** — the Devpost form asks for the email used to create the Builder ID |
 | Live demo link *(optional, scores better)* | Present — **[grace.rosettacloud.app](https://grace.rosettacloud.app)** |
 | **≤5-minute demo video** | **Not recorded. Outstanding.** The script, shot list, and figures are ready in [docs/demo-video-handout.md](docs/demo-video-handout.md) — must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
 | **builder.aws blog post** *(optional, bonus points)* | **Not published. Outstanding.** Drafted in [docs/builder-blog-post.md](docs/builder-blog-post.md) — must be public on builder.aws.com with "Agents for Humans" in the title |
 
-**AWS Builder ID:** `@sorour`
+**AWS Builder ID:** `mohamedsorour1998@gmail.com`
 
 Both remaining artifacts are drafted rather than done. Each carries
 `<replace this text by a screenshot of …>` markers where a capture belongs, so the writing is finished
