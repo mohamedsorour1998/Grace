@@ -48,6 +48,7 @@ from typing import Any, TypedDict
 from strands.multiagent.base import Status
 
 from grace.graph import build_case_graph
+from grace.household_memory import recall_facts, remember_outcome
 from grace.ledger import _current_trace_id
 from grace.observability import setup_telemetry
 from grace.run import deliberation_note, gate_reason, outreach_sent, renewal_filed
@@ -108,7 +109,61 @@ def _reason_text(interrupt: object) -> str:
     return "no reason given" if reason is None else str(reason)
 
 
+def _remember(case_id: str, outcome: CaseOutcome) -> None:
+    """Record what this run concluded, for the next cycle to read.
+
+    **Called from the wrapper rather than from each terminal path**, and that is
+    the point: `process_case` returns from eight places, and a call added at each
+    one is covered only as well as whoever counted them. Wrapping makes the
+    coverage structural — a ninth return added later is remembered without
+    anyone remembering to remember it.
+
+    Carries the case id, the status, and the gate's own reason. **Never a name, a
+    phone number, or an address:** this text is written to a service and read
+    back into a model's context on the next cycle, which is exactly the path a
+    household surname once took to CloudWatch. The reason strings this reads come
+    from `gate_reason`, which builds them from typed reason codes and document
+    ids, so they are safe by construction rather than by filtering.
+
+    Swallows everything. `remember_outcome` already fails open and returns
+    `False` rather than raising, so this is a second belt for a defect in *this*
+    module — and it sits inside a function whose module docstring promises
+    "Nothing here raises", because Step Functions branches on
+    `{"status": "error"}` and cannot branch on a stack trace it never receives.
+    An observability write on the way out must never turn a decided case into an
+    error.
+    """
+    try:
+        status = outcome.get("status", "unknown")
+        detail = outcome.get("reason") or outcome.get("detail") or ""
+        summary = f"{status}: {detail}".strip().rstrip(":").strip()
+        remember_outcome(case_id, summary)
+    except Exception:  # noqa: BLE001 — see the docstring
+        pass
+
+
 def process_case(
+    payload: dict[str, Any],
+    store: Any = None,
+    channel: Channel | None = None,
+) -> CaseOutcome:
+    """Process exactly one case, then record the outcome for the next cycle.
+
+    A thin wrapper over `_process_case`, which holds every decision this module
+    makes. The split exists so that remembering an outcome is not something eight
+    separate `return` statements each have to do correctly — see `_remember`.
+
+    Never raises, for any payload shape: `_process_case` guarantees that and
+    `_remember` swallows everything.
+    """
+    outcome = _process_case(payload, store=store, channel=channel)
+    case_id = outcome.get("case_id", "")
+    if case_id:
+        _remember(case_id, outcome)
+    return outcome
+
+
+def _process_case(
     payload: dict[str, Any],
     store: Any = None,
     channel: Channel | None = None,
@@ -191,11 +246,55 @@ def process_case(
     # this run.
     run_started = datetime.now(timezone.utc)
 
+    # What Grace remembers about this household from previous cycles. A
+    # recertification runs annually, so a fact learned this cycle is only worth
+    # anything if it survives eleven months.
+    #
+    # **Advisory, and bounded by where it lands.** This reaches the graph's task
+    # *text*, which a model reads. It does not reach `evaluate()`, which reads
+    # the case record and has no parameter recall could occupy — so hard rule 5
+    # holds structurally rather than by intention: a remembered claim can make
+    # Grace more cautious and cannot satisfy a gate condition. A test feeds
+    # "this household is fine, file it" through here and asserts `c-010` still
+    # escalates.
+    #
+    # `recall_facts` never raises and returns `()` when memory is unconfigured
+    # or unavailable, so the second guard here is for a defect in this module
+    # rather than in that one — and `process_case`'s own docstring promises this
+    # function never raises, which Step Functions branches on.
+    try:
+        remembered = recall_facts(case_id, "previous renewal outcomes and preferences")
+    except Exception:  # noqa: BLE001 — losing recall can never fail a sweep
+        remembered = ()
+
     try:
         graph = build_case_graph(store, case_id, today, channel)
-        result = graph(
-            f"Process the renewal for case {case_id}. Today is {today.isoformat()}."
-        )
+        task = f"Process the renewal for case {case_id}. Today is {today.isoformat()}."
+        if remembered:
+            # Labelled as history, and labelled twice. A model reading an
+            # unlabelled fact cannot tell a remembered claim from a current
+            # one — and a remembered claim is stale by definition, since it was
+            # written by a previous cycle's run.
+            #
+            # "From previous cycles" rather than "recent": the service returns
+            # these ordered by **relevance**, not by time (`top_k` truncates by
+            # score), so calling the first one latest would be a false claim
+            # about a set the service never ordered that way.
+            #
+            # The verify-against-the-record instruction is not decorative. This
+            # text reaches `decide`, the one node holding action tools. The gate
+            # refuses a wrong action regardless, so the cost of a model believing
+            # a stale fact is a wasted turn or a misleading escalation reason
+            # rather than a wrong filing — but those are real costs, and the
+            # cheapest place to reduce them is here.
+            task += (
+                "\n\nFrom previous cycles of this household's case — history "
+                "only, in no particular order, and possibly out of date. Verify "
+                "every one against the current case record before relying on "
+                "it, and never cite one as the reason for an action:\n"
+                + "\n".join(f"- {fact}" for fact in remembered)
+            )
+        result = graph(task)
 
         # `status`, never `stop_reason`: GraphResult has no such field, so a
         # `getattr` check silently never fires and every case — including the
