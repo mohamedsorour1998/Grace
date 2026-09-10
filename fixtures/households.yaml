@@ -101,11 +101,16 @@ cases:
       - {id: "proof_of_residency", received: "2026-05-20"}
   # --- must escalate: missing a required document ---
   # medicaid-ny requires proof_of_residency; this household has never filed one.
+  # Spanish on purpose. This is the one household whose only problem is a
+  # missing document, so it is the only one Grace texts — and the README's
+  # second sentence claims Grace writes "in the family's own language". While
+  # this was `en` that claim was true of the code and demonstrated nowhere.
+  # `tests/test_demo_dates.py` holds the property.
   - case_id: "c-010"
     program: "medicaid"
     state: "NY"
     cert_end: "2026-10-18"
-    household: {household_id: "h-010", display_name: "The Fitzgerald Household", language: "en", phone: "+15550000010", monthly_income_cents: 165000, size: 2}
+    household: {household_id: "h-010", display_name: "The Fitzgerald Household", language: "es", phone: "+15550000010", monthly_income_cents: 165000, size: 2}
     documents:
       - {id: "proof_of_income", received: "2026-09-24"}
   # --- must escalate: material income change ---

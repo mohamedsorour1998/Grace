@@ -107,3 +107,35 @@ def test_every_clean_case_degrades_on_the_measured_day():
         f"every id in the table must be checked, or an entry stops being tested "
         f"in silence — missed {sorted(set(expected) - checked)}"
     )
+
+
+def test_the_household_grace_messages_does_not_speak_english():
+    """**The README's second sentence, made checkable.**
+
+    Grace claims to chase the missing document "in the family's own language".
+    Exactly one fixture triggers outreach at the pinned date, and while it was
+    `en` the claim was never demonstrated anywhere — not on the case page, not
+    in the video, not in the ledger. A demo that cannot show its own headline
+    feature is a headline feature nobody has verified.
+
+    Asserted as "the outreach household is non-English" rather than "c-010 is
+    Spanish", because the point is the demonstration, not the case id: if a
+    later fixture edit moves which household needs a document, this still holds
+    the property that matters.
+    """
+    DOCUMENT_CODES = {"missing_document", "stale_document"}
+    messaged = []
+    for case in load_fixture_cases():
+        verdict = evaluate(case, PINNED, load_pack(case.program, case.state))
+        codes = {r.code for r in verdict.reasons}
+        # `send_family_message` is gated on every reason being document-only
+        # (grace/steering.py's DOCUMENT_ONLY_CODES). A case that also fails on
+        # income or a conflict escalates instead of being texted.
+        if codes and codes <= DOCUMENT_CODES:
+            messaged.append(case)
+
+    assert messaged, "no fixture triggers outreach, so the language claim is undemonstrable"
+    assert any(c.household.language != "en" for c in messaged), (
+        "every household Grace texts speaks English, so the multilingual claim "
+        f"is never shown: {[(c.case_id, c.household.language) for c in messaged]}"
+    )
