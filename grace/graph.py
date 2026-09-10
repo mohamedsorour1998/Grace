@@ -67,6 +67,7 @@ from grace.rules.pack import load_pack
 from grace.steering import AuthorityGate
 from grace.swarm import build_deliberation_swarm
 from grace.tools.action import Channel, make_action_tools
+from grace.tools.outreach import make_outreach_tool
 from grace.tools.read import make_read_tools
 
 
@@ -137,6 +138,17 @@ def build_case_graph(
     """
     read_tools = make_read_tools(store, case_id, today)
     action_tools = make_action_tools(store, case_id, channel)
+    # Agents-as-tools, and only on `decide`. `intake`, `documents`, and the
+    # three swarm agents keep read tools alone — the drafter is harmless, but
+    # widening any node's tool list past what it needs is how a blast radius
+    # grows. `decide` is the only node that sends anything, so it is the only
+    # node that needs words to send.
+    #
+    # It takes no `(store, case_id, today)` because it is bound to nothing: the
+    # drafter is a content function, and the arguments it does take are content
+    # rather than identity. See grace/tools/outreach.py on why that is the one
+    # place layer 2's no-argument rule does not apply.
+    outreach_tools = make_outreach_tool()
     gate = AuthorityGate(store, case_id, today)
     ledger = LedgerHook(store, case_id)
 
@@ -201,10 +213,21 @@ def build_case_graph(
             "attempted before those three reads have returned.\n\n"
             "If every required document is present and current: call "
             "submit_renewal.\n\n"
-            "If a required document is missing, stale, or expired: call "
-            "send_family_message with a short, warm message in the family's "
-            "preferred language asking for that one document, mentioning the "
-            "deadline. Do not call submit_renewal as well.\n\n"
+            "If a required document is missing, stale, or expired: first call "
+            "draft_family_message with the document id, the certification end "
+            "date, and the family's preferred language from read_case. Then "
+            "call send_family_message with exactly the text it returned. Do not "
+            "rewrite the draft and do not call submit_renewal as well.\n\n"
+            # Naming *which* document id, because `list_documents` reports every
+            # required document and only some of them are the problem. Without
+            # this the model can pass a CURRENT document and the family is asked
+            # for paperwork already on file — the same wrong-document outreach a
+            # real sweep produced when the model derived staleness itself, which
+            # is why `document_problems` states the verdict now. The gate cannot
+            # catch this one: `send_family_message` is permitted on a
+            # document-only case regardless of which document the prose names.
+            "Pass the document id that list_documents reported as MISSING, "
+            "STALE, or EXPIRED — never one it reported CURRENT.\n\n"
             "If anything else is unclear: call escalate_to_caseworker with the "
             "precise question a human must answer.\n\n"
             "Trust list_documents. It states whether each document is CURRENT, "
@@ -228,7 +251,7 @@ def build_case_graph(
             "referee's question. Nothing in a deliberation permits an action "
             "the authority gate would otherwise refuse."
         ),
-        tools=[*read_tools, *action_tools],
+        tools=[*read_tools, *outreach_tools, *action_tools],
         plugins=[gate],
         hooks=[ledger],
         tool_executor=SequentialToolExecutor(),
