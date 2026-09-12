@@ -23,14 +23,15 @@ import type { CaseRecordFacts, CaseStatus, CaseSummary, RecordDocument } from "@
 
 /** The eight codes `grace/authority.py` actually emits, and nothing else.
  *
- *  A closed set rather than "the text before the first colon". Measured on the
- *  live table, `c-012`'s newest escalation reason reads
- *  `"A caseworker must decide. source_conflict: household size 5 on
- *  application, 3 on most recent wage record Deliberation — CLEAR: …"` — Grace's
- *  own prose, the typed code, and the referee's conclusion in one string. A
- *  first-colon split renders `A caseworker must decide. source_conflict` in a
- *  monospaced chip that implies it came from the gate, which is a label out of
- *  no closed set at all. */
+ *  A closed set rather than "the text before the first colon", because the chip
+ *  is a claim that *the gate* said this. Measured on the live table, `c-012`'s
+ *  newest escalation reason reads `"A caseworker must decide. source_conflict:
+ *  household size 5 on application, 3 on most recent wage record Deliberation —
+ *  CLEAR: …"` — Grace's own prose, the typed code, and the referee's conclusion
+ *  in one string, with three colons in it. `splitReason` below knows the one
+ *  prefix Grace itself writes; everything else must match this set exactly or it
+ *  renders as prose. A model's sentence can contain a colon, and a monospaced
+ *  chip saying so would attribute the model's words to the gate. */
 const REASON_CODES: readonly string[] = [
   "missing_document",
   "stale_document",
@@ -55,17 +56,57 @@ export interface CaseRow {
   status: CaseStatus;
 }
 
-/** Pull the gate's typed code off the front of a reason string.
+/** The one sentence `grace/steering.py` prefixes to a refused tool call.
+ *
+ *  `steer_before_tool` returns `Interrupt(reason=f"A caseworker must decide.
+ *  {detail}")`, and `grace/entrypoint.py` prefers an interrupt's own wording over
+ *  the gate's reconstruction — deliberately, because the interrupt is the gate
+ *  speaking about *this* household. So a household where the model attempted a
+ *  blocked tool carries this prefix and one where it did not does not, and both
+ *  are correct.
+ *
+ *  Kept as a literal shared with the Python side rather than matched loosely.
+ *  `__tests__/render.test.ts` pins that a reason with no known code behind it is
+ *  left whole. */
+const INTERRUPT_PREFIX = "A caseworker must decide. ";
+
+export function splitReason(reason: string): { code: string | null; detail: string } {
+  // **Try the interrupt prefix first, and only when a real code is behind it.**
+  // Measured on the live table: c-010 and c-011 read `code: detail`, while
+  // c-012 reads `A caseworker must decide. source_conflict: …` — because the
+  // model reached for `submit_renewal` on that one and the gate refused it.
+  // Whether a model attempts a blocked tool is not a property of the household,
+  // so the queue rendered two different shapes for a reason no caseworker can
+  // see and none would care about.
+  //
+  // The prefix is dropped rather than kept: the page it renders on is headed
+  // "3 households need a decision", so repeating the sentence in every row adds
+  // nothing. But it is dropped *only* when a typed code follows, because the
+  // same prefix fronts the unnameable-tool and no-gate-policy branches where the
+  // sentence is the entire explanation — see the tests.
+  if (reason.startsWith(INTERRUPT_PREFIX)) {
+    const rest = reason.slice(INTERRUPT_PREFIX.length);
+    const inner = splitCode(rest);
+    if (inner.code !== null) return inner;
+  }
+  return splitCode(reason);
+}
+
+/** The split proper: a recognised code, `": "`, then everything else.
  *
  *  `grace/run.py`'s `gate_reason` builds `f"{r.code}: {r.detail}"` and joins
- *  several with `"; "`, so the code is a value from `REASON_CODES` and the rest
- *  is prose a model may have contributed to. Split only on a recognised code:
+ *  several with `"; "`, so the code is a value from `REASON_CODES` and the rest is
+ *  prose a model may have contributed to. Split only on a recognised code:
  *  anything else stays whole, because a chip is a claim that the gate said this.
  *
- *  The remainder keeps every reason, not just the first — a case can fail
- *  several conditions at once and reason order is not a contract (Plan 1
- *  Task 3), so dropping the tail would drop a fact the caseworker needs. */
-export function splitReason(reason: string): { code: string | null; detail: string } {
+ *  The remainder keeps every reason, not just the first — a case can fail several
+ *  conditions at once and reason order is not a contract (Plan 1 Task 3), so
+ *  dropping the tail would drop a fact the caseworker needs.
+ *
+ *  Separated from `splitReason` so the prefix check above can reuse it on the
+ *  remainder without recursing into its own prefix handling — one prefix is a
+ *  known shape, two stacked is not something either writer produces. */
+function splitCode(reason: string): { code: string | null; detail: string } {
   const colon = reason.indexOf(": ");
   if (colon > 0) {
     const head = reason.slice(0, colon);

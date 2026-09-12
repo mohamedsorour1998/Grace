@@ -176,16 +176,70 @@ describe("the reason line", () => {
   });
 
   it("only treats a real reason code as a code", () => {
-    // Measured on the live table: c-012's newest escalation reason begins
-    // "A caseworker must decide. source_conflict: household size 5 on
-    // application…". Splitting on the first colon would render
-    // "A caseworker must decide. source_conflict" as the typed code — a label
-    // out of no closed set, in a monospaced chip that implies it came from the
-    // gate. Only the eight codes `grace/authority.py` actually emits count.
+    // Splitting on the first colon would render "Something the gate never said"
+    // as the typed code — a label out of no closed set, in a monospaced chip
+    // that implies it came from the gate. Only the eight codes
+    // `grace/authority.py` actually emits count.
+    const prose = "The renewal looks unusual: someone should check it";
+    const { code, detail } = splitReason(prose);
+    expect(code).toBeNull();
+    expect(detail).toBe(prose);
+  });
+
+  it("finds the code behind the gate's own interrupt sentence", () => {
+    // **The inconsistency this closes, measured on the live table.** Three
+    // households escalate and their newest reasons are not the same shape:
+    //
+    //   c-010  missing_document: proof_of_residency is not on file (…)
+    //   c-011  material_income_change: Income moved 30.0%, above the … band
+    //   c-012  A caseworker must decide. source_conflict: household size 5 …
+    //
+    // Both shapes are correct in the data. `c-012`'s carries a prefix because
+    // the model *attempted* `submit_renewal` there, `grace/steering.py`'s
+    // `steer_before_tool` refused it with `Interrupt(reason=f"A caseworker must
+    // decide. {detail}")`, and an interrupt's own wording deliberately wins over
+    // the gate's reconstruction (`grace/entrypoint.py`). Whether a model reaches
+    // for a blocked tool is not a property of the household, so the queue read
+    // two ways for a reason the caseworker cannot see and would not care about.
+    //
+    // So strip that one known prefix — a literal shared with `steering.py`, not
+    // a general "skip anything before a colon", which is what the neighbouring
+    // test forbids. The prefix is dropped rather than kept because the page it
+    // renders on is titled "3 households need a decision"; repeating it in every
+    // row says nothing the heading has not.
     const live = "A caseworker must decide. source_conflict: household size 5 on application, 3 on most recent wage record";
     const { code, detail } = splitReason(live);
+    expect(code).toBe("source_conflict");
+    expect(detail).toBe("household size 5 on application, 3 on most recent wage record");
+  });
+
+  it("does not strip the interrupt prefix when no known code follows it", () => {
+    // The prefix also fronts reasons that carry no typed code at all — the
+    // unnameable-tool and no-gate-policy branches in `steer_before_tool`. There
+    // the sentence *is* the whole explanation, so removing it would leave a row
+    // reading only "'foo' changes state but has no gate policy" with no hint
+    // that a human is being asked. Strip only when it buys a chip.
+    const noCode = "A caseworker must decide. A tool call arrived without a usable name.";
+    const { code, detail } = splitReason(noCode);
     expect(code).toBeNull();
-    expect(detail).toBe(live);
+    expect(detail).toBe(noCode);
+  });
+
+  it("renders every live escalation reason with a typed code", () => {
+    // The consistency claim itself, over all three shapes at once rather than
+    // one example each. A fourth shape appearing on the live table should fail
+    // here rather than being noticed in a screenshot.
+    const live = [
+      "missing_document: proof_of_residency is not on file (Grace has already messaged the family.)",
+      "material_income_change: Income moved 30.0%, above the 5.0% immaterial band Deliberation — AMBIGUOUS: Does the family qualify?",
+      "A caseworker must decide. source_conflict: household size 5 on application, 3 on most recent wage record",
+    ];
+    const codes = live.map(r => splitReason(r).code);
+    expect(codes).toEqual(["missing_document", "material_income_change", "source_conflict"]);
+    // And no rendered measurement still carries the prefix.
+    for (const reason of live) {
+      expect(splitReason(reason).detail).not.toContain("A caseworker must decide");
+    }
   });
 
   it("keeps a multi-condition reason whole rather than showing only the first", () => {
