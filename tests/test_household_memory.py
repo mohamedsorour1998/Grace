@@ -204,6 +204,63 @@ def test_no_memory_id_is_a_degraded_mode_not_an_error():
     assert recall_facts("c-010", "x", client=_FakeMemory(), memory_id="") == ()
 
 
+def test_an_unset_memory_id_is_indistinguishable_from_an_empty_memory():
+    """**The shape of a two-day misdiagnosis, pinned so it cannot repeat.**
+
+    `recall_facts` returning `()` has two completely different causes: the
+    service holds no records for this household, or *this process was never told
+    which memory to read*. Both are correct behaviour and both look identical at
+    the call site — which is how a verification run from a shell with no
+    `GRACE_MEMORY_ID` was read as "extraction is broken" for two days, while the
+    deployed runtime (which sets the variable in `agentcore.json`) was recalling
+    real facts the whole time.
+
+    The lesson is about *diagnosis*, not about the code: when a fail-open path
+    returns its empty value, the first question is whether it was configured at
+    all. Asserting it here means the ambiguity is documented at the place a
+    future reader will look.
+    """
+    import os
+
+    # A fake holding records, so an empty result can only come from the id.
+    stocked = _FakeMemory(records=[{"content": {"text": "a remembered fact"}}])
+
+    # Configured: the records come back.
+    assert recall_facts("c-010", "q", client=stocked, memory_id="m-1") == (
+        "a remembered fact",
+    )
+
+    # Unconfigured, with the environment genuinely absent — the same shape as a
+    # local shell, and the same `()` an empty memory returns.
+    saved = os.environ.pop("GRACE_MEMORY_ID", None)
+    try:
+        assert recall_facts("c-010", "q", client=stocked) == ()
+    finally:
+        if saved is not None:
+            os.environ["GRACE_MEMORY_ID"] = saved
+
+
+def test_the_deployed_runtime_is_told_which_memory_to_read():
+    """The other half of the test above, and the one that makes recall real.
+
+    A wired read path with no configured memory id is the silent no-op this
+    module was written to replace: `recall_facts` returns `()`, nothing logs a
+    reason, and the README's Memory claim quietly stops being true of the
+    running system. `tests/test_entrypoint.py` asserts the variable is present;
+    this asserts it names the memory this module retrieves against, so the two
+    cannot drift into naming different resources.
+    """
+    import json
+    from pathlib import Path
+
+    manifest = json.loads(
+        (Path(__file__).resolve().parent.parent / "agentcore" / "agentcore.json").read_text()
+    )
+    env = {v["name"]: v["value"] for v in manifest["runtimes"][0]["envVars"]}
+    memory_id = env.get("GRACE_MEMORY_ID", "")
+    assert memory_id.startswith("grace_household_memory-"), memory_id
+
+
 def test_the_namespace_matches_what_the_memory_was_created_with():
     """A retrieval namespace that does not match the `namespaceTemplates` set at
     creation retrieves **nothing, silently** — Plan 2 recorded that as a live
