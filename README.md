@@ -118,9 +118,15 @@ days after the date of termination … without requiring a new application"*.
 **That second provision is why Grace exists.** It is the window in which a procedural
 termination is still reversible, and Grace's whole job is to act inside it.
 
-The other ten parameters — the 60-day window, the immaterial-income bands, every document
-freshness limit — carry `authority: "policy choice"` and a note saying what the regulation
-does and does not establish. SNAP's is the sharpest example: 7 CFR 273.12(a)(1)(i)(A) sets a
+SNAP has its own, narrower version: 7 CFR 273.14(e)(2) gives a household **30 days**
+after the certification period ends to complete the process, and requires the agency to
+reopen the case — with benefits prorated, where Medicaid's 90 days need no new application
+at all. So Grace has less room to save a SNAP household than a Medicaid one, and the pack
+says which rather than implying they are the same.
+
+The other ten of thirteen parameters — the 60-day window, the immaterial-income bands, every
+document freshness limit — carry `authority: "policy choice"` and a note saying what the
+regulation does and does not establish. SNAP's is the sharpest example: 7 CFR 273.12(a)(1)(i)(A) sets a
 **dollar** threshold, *"a change of more than $100 in the amount of unearned income"*, so a
 percentage band has no federal basis at all and the pack says so rather than implying one.
 An uncited number that decides whether a family keeps coverage is indistinguishable from an
@@ -474,7 +480,6 @@ Recorded as decisions rather than omissions.
 | **AgentCore Gateway** | Largest remaining chunk; outbound auth shape differs per target type, which is the most common deploy-day failure. The gate's `target___tool` prefix handling stays tested regardless. |
 | **An AgentCore Gateway JWT authorizer** | Distinct from the Cognito pool that *did* ship. The runtime stays IAM-authorised; a `customJWTAuthorizer` belongs with Gateway, above. |
 | **Real SMS** | Account is sandboxed: `MaxLimit: 1`, zero origination numbers, and sender-ID registration in the maintainer's country requires a letter of authorization, company registration, and a tax card. |
-
 | **Skills / progressive disclosure** | A prompt-size optimization. Grace's prompts are not the bottleneck. |
 | **`strands-agents-evals`** | The trajectory evals are ordinary pytest functions in `evals/` that read the ledger — the ground truth for what executed, which a transcript-based eval would miss. The package was not adopted because it depends on `strands-agents-tools`: 25 packages including `slack-bolt` and `pillow` that Grace never imports. |
 | **Bedrock Guardrails** | Span redaction already covers the export path that matters, and every household is synthetic, so PII anonymization would protect nothing today. |

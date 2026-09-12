@@ -1661,14 +1661,23 @@ id is one the deployed policy actually grants, and
 unreferenced role — `judge` exempted by name, with the exemption to be deleted along with the role if
 LLM steering never ships.
 
-**Two rule-pack numbers are federally mandated and the other ten are not, and saying so is the
+**Three rule-pack numbers are federally mandated and the other ten are not, and saying so is the
 point.** `42 CFR 435.916(a)(1)` mandates the 12-month Medicaid renewal cycle; `(a)(3)(iii)` gives a
 household **90 days** to submit a late renewal form after a procedural termination "without requiring a
-new application" — the window Grace exists to work inside. Everything else says `policy choice` with
-its reasoning. The sharpest entry is negative: SNAP's immaterial-income band is a *percentage* and
-`7 CFR 273.12(a)(1)(i)(A)` sets a *dollar* threshold, so a percentage band has no federal basis at
-all. **A wrong citation is worse than none** — it converts an unverified number into one that looks
-verified.
+new application" — the window Grace exists to work inside. And `7 CFR 273.14(e)(2)` gives a SNAP
+household **30 days** from a notice of expiration to file for recertification. Everything else says
+`policy choice` with its reasoning. The sharpest entry is negative: SNAP's immaterial-income band is a
+*percentage* and `7 CFR 273.12(a)(1)(i)(A)` sets a *dollar* threshold, so a percentage band has no
+federal basis at all.
+
+**And the third one was found by a reviewer catching a false negative claim, which is the harder
+defect to see.** The SNAP pack originally said "SNAP has no reconsideration provision equivalent to
+42 CFR 435.916(a)(3)(iii), so a household that misses recertification generally has to reapply" and
+marked its 30-day grace period `policy choice`. Verified against the regulation text: 273.14(e)(2)
+does mandate a 30-day filing window, so the pack was **denying a statutory protection a household
+actually has** — and understating Grace's own legal grounding while doing it. **A wrong citation is
+worse than none, and a wrong claim that something is *uncited* is worse still**: it reads as
+diligence, so nobody re-checks it.
 
 ## The one idea that matters
 

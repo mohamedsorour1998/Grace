@@ -168,15 +168,24 @@ an invented number indistinguishable from a researched one. Now each carries the
 establishes it, checked against the regulation text before it was written down, or the literal string
 `policy choice` where the regulation gives a range and the value is mine.
 
-Exactly two of the twelve are federally mandated: the 12-month Medicaid renewal cycle
-(42 CFR 435.916(a)(1)) and that 90-day reconsideration window. The most interesting entry is a
-negative one. SNAP's immaterial-income band is 10% in my pack, and **7 CFR 273.12(a)(1)(i)(A) sets a
-dollar threshold, not a percentage** — "a change of more than $100 in the amount of unearned income".
-A percentage band has no federal basis at all. Writing `42 CFR ...` beside it would have looked like
-diligence and been a lie, so it says `policy choice` and explains itself. And the absence is itself a
-finding worth stating: SNAP has no reconsideration provision equivalent to Medicaid's 90 days, so a
-household that misses recertification generally reapplies. Grace has less room to save one, and the
-pack says so.
+Three of the thirteen are federally mandated: the 12-month Medicaid renewal cycle
+(42 CFR 435.916(a)(1)), that 90-day reconsideration window, and SNAP's own 30-day equivalent
+(7 CFR 273.14(e)(2)). The most interesting entry is a negative one. SNAP's immaterial-income band is
+10% in my pack, and **7 CFR 273.12(a)(1)(i)(A) sets a dollar threshold, not a percentage** — "a change
+of more than $100 in the amount of unearned income". A percentage band has no federal basis at all.
+Writing `42 CFR ...` beside it would have looked like diligence and been a lie, so it says
+`policy choice` and explains itself.
+
+**And I got one of these wrong in the direction that is hardest to catch.** An earlier version of this
+post, and the pack it describes, said SNAP had *no* reconsideration provision equivalent to Medicaid's
+90 days — that a household missing recertification simply reapplies. That is false:
+7 CFR 273.14(e)(2) gives 30 days after the period ends to complete the process and requires the agency
+to reopen the case. I had checked the reporting rules in 273.12 and the certification periods in
+273.10 and concluded from their silence. **A false negative claim is worse than a false citation**,
+because nothing in the section you cited visibly contradicts it — there is no wrong number to notice,
+only an absence you asserted. The honest contrast is narrower and more useful: Medicaid gives 90 days
+with no new application and no proration, SNAP gives 30 with proration. Grace has *less* room on SNAP,
+not *no* room, and the pack now says which.
 
 ### Milestones
 
@@ -186,7 +195,7 @@ EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Then casew
 the deployed sweep genuinely read its caseload from the table. Last, the safety claim executed against
 live infrastructure.
 
-**941 Python tests and 229 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
+**941 Python tests and 232 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
 holds against real Bedrock calls. Every guard was sabotaged and watched failing — that is the subject
 of a companion post.
 
