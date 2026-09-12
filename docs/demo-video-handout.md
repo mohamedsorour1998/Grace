@@ -224,7 +224,7 @@ Re-measure before recording; do not read a stale number.
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
 | 941 Python tests, 229 vitest across 11 files | `pytest` and `vitest run` — re-measure, these move every plan |
 | the outreach is in the family's language | `c-010` reads Spanish and the `family_message_sent` body in its ledger is Spanish. **Say "in the family's own language" and then show it** — this is the one place that claim is checkable rather than asserted. |
-| Memory is written and read back | `list_events` on the household's actor after a sweep: two events per household. **Match the wording to `README.md`'s Memory row exactly** — the write half is verified by reading the events back, the read path is wired and retrieval had not surfaced records at the time of writing. |
+| Memory is written and read back | `list_events` on the household's actor after a sweep: four per escalated household as of 2026-09-12, one per sweep — **re-measure before recording**. **Match the wording to `README.md`'s Memory row exactly** — the write half is verified by reading the events back, the read path is wired and retrieval had not surfaced records at the time of writing. |
 | two rule-pack numbers are federally mandated | `42 CFR 435.916(a)(1)` for the 12-month cycle and `(a)(3)(iii)` for the 90-day reconsideration window. The other ten say `policy choice`. **Do not imply the regulations mandate all of them.** |
 | 23 trajectory evals | `pytest evals/ --co -q` — they cost real Bedrock to run |
 | approving `c-010` files nothing | its decision + outcome rows, and zero `renewal_submitted` rows |

@@ -669,3 +669,49 @@ no escalating household ever filed          : True
 escalation queue holds exactly the three    : True
 infra drift                                 : none
 ```
+
+### 2026-09-12 — the Memory read half, diagnosed rather than left as "asynchronous"
+
+The README has said since 2026-09-10 that Memory's write half is verified and its read half is
+wired but unverified, attributing the gap to asynchronous extraction. Two days later that
+explanation no longer holds, so it was diagnosed properly.
+
+**What is true.** Four events per escalated household, one per sweep, read back with
+`list_events` rather than trusted from the write's return:
+
+```text
+c-010: 4 event(s)    c-011: 4 event(s)    c-012: 4 event(s)
+
+payload: [{"conversational": {"content": {"text":
+  "escalated: missing_document: proof_of_residency is not on file
+   (Grace has already messaged the family.)"}, "role": "ASSISTANT"}}]
+```
+
+The payload is well-formed, the role is `ASSISTANT`, the text carries the typed reason and no
+household identity.
+
+**What is not.** `recall_facts` returns `()` for all three households, and so does the raw
+`retrieve_memory_records` API — across `/facts/c-010`, `/facts/c-010/`, `/facts`, and
+`/preferences/c-010`. Both strategies are `ACTIVE` with the namespaces Grace retrieves against
+(`household_facts` → `/facts/{actorId}`, SEMANTIC; `household_preferences` →
+`/preferences/{actorId}`, USER_PREFERENCE), so this is not the silent namespace mismatch Plan 2
+recorded.
+
+**One hypothesis tested and eliminated.** A single `ASSISTANT`-only note might not be something a
+SEMANTIC extractor treats as extractable. A throwaway actor was given a `USER` + `ASSISTANT`
+conversational pair — the shape the strategy is designed for — and retrieval returned `()` after
+4.5 minutes as well. Two days for the real events, minutes for the probe, neither extracted. The
+probe's event was then deleted, so only the twelve households remain.
+
+**So the honest statement is the one already in the README**, now with the cause narrowed: the
+write path is verified, the read path is wired and correct against the documented API, and no
+records exist to retrieve for a reason outside this repository. It fails open by design —
+`recall_facts` returning `()` degrades an outreach message and can never change a verdict, and
+`tests/test_household_memory.py` asserts `authority.py` and `steering.py` cannot even import the
+module.
+
+**What this does not weaken.** Reflection reaches the advocate through the same `recall_facts`,
+so with no records the swarm's advocate currently receives no prior lessons — the wiring, the
+placement, and the hard-rule-5 boundary are all real and tested, and the content is empty. Say
+"Grace records what each sweep concluded, and the recall path is wired" — not "Grace remembers
+and recalls".
