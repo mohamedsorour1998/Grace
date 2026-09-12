@@ -55,6 +55,22 @@ MEMORY_NAMESPACE = "/facts/{actorId}"
 # refused.
 _SESSION_PREFIX = "history-"
 
+# The USER turn of every recorded outcome. Fixed text, identical for every
+# household, and deliberately not a per-family utterance.
+#
+# **Why a question is written at all.** AgentCore Memory's extraction strategies
+# read an *exchange*; a single ASSISTANT statement is stored and never becomes a
+# record (measured — see `remember_outcome`). So the write needs a turn to answer.
+#
+# **Why this specific wording is honest.** It is a prompt for the record rather
+# than a claim about a conversation: Grace is not transcribing something a family
+# asked, and the text says nothing a family did or said. It carries no case id, no
+# name, no phone number — nothing that identifies anyone — so it cannot become the
+# path a surname takes into a model's context. A question that varied per
+# household would read like that household actually asked it, which is why
+# `tests/test_household_memory.py` pins it to one constant.
+_RECORD_QUESTION = "What did the last sweep conclude about this renewal?"
+
 
 def _client(client):
     """The data-plane client, or the injected fake.
@@ -139,11 +155,18 @@ def remember_outcome(
             # (`text, role = msg`), not off the parameter name, because the
             # reverse order is not a type error: it resolves the *summary* as a
             # role, raises `ValueError` before the network, and lands in the
-            # `except` below as a silently failed write. ASSISTANT because this
-            # is Grace's own record of what it concluded, not something a family
-            # said — the extraction strategy reads the role, and mislabelling
-            # the speaker would make a later reader think a family reported it.
-            messages=[(summary, "ASSISTANT")],
+            # `except` below as a silently failed write.
+            #
+            # **Two turns, because one does not extract.** A lone ASSISTANT note
+            # is accepted, returns an `eventId`, and reads back from
+            # `list_events` — and no strategy ever extracts a record from it.
+            # Four such events per household sat in the service for two days
+            # while `retrieve_memory_records` returned zero across every
+            # namespace spelling, which looked exactly like a broken read path.
+            # Measured against the live memory: a USER question followed by this
+            # same ASSISTANT text extracted three records in ~125 seconds, on
+            # the same strategies and namespaces. See `_RECORD_QUESTION`.
+            messages=[(_RECORD_QUESTION, "USER"), (summary, "ASSISTANT")],
         )
         return bool(_event_id(event))
     except Exception:  # noqa: BLE001 — see the module docstring: recall is advisory

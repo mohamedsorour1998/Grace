@@ -98,6 +98,57 @@ def test_a_write_names_the_household_by_case_id_only():
     assert len(fake.events) == 1, "a refused case id must write nothing"
 
 
+def test_a_write_carries_a_question_and_an_answer_so_extraction_fires():
+    """**The defect this closes, measured against the live service rather than
+    reasoned about.**
+
+    A lone `ASSISTANT` note is written and accepted — `create_event` returns an
+    `eventId`, `list_events` reads it back, and **nothing is ever extracted from
+    it**. Four events per household sat in the service for two days and
+    `retrieve_memory_records` returned zero across every namespace spelling, so
+    the read half looked broken while the write half was fine and the events
+    were well-formed.
+
+    The cause is the shape. A `USER` question followed by a substantive
+    `ASSISTANT` answer extracted three records in ~125 seconds on the same
+    memory, the same strategies, and the same namespaces:
+
+        "The user's Medicaid renewal could not be filed automatically because a
+         proof of residency document is not on file (as of 2026-09-12)."
+        "The user's Medicaid certification period ends on 2026-10-12."
+        "The user prefers to be contacted in Spanish."
+
+    So the write must be a two-turn exchange. The `USER` turn is a fixed
+    question Grace asks on the family's behalf — it carries no identity and
+    invents nothing a family said, because it is a *prompt for the record*, not
+    a claim about a conversation. `tests/test_household_memory.py` pins both
+    turns and their order, since a single-turn regression is invisible: it
+    writes successfully and simply never becomes a memory.
+    """
+    fake = _FakeMemory()
+    assert remember_outcome("c-010", "escalated: proof_of_residency missing",
+                            client=fake, memory_id="m-1") is True
+    messages = fake.events[0]["messages"]
+    assert len(messages) == 2, f"a single-turn event extracts nothing: {messages}"
+    # `create_event` takes (text, role) tuples — see the writer's own comment.
+    (user_text, user_role), (assistant_text, assistant_role) = messages
+    assert user_role == "USER", messages
+    assert assistant_role == "ASSISTANT", messages
+    assert "proof_of_residency" in assistant_text
+    # The question must not put words in a family's mouth or name anyone.
+    assert "c-010" not in user_text, "the USER turn must carry no case identity"
+    assert user_text.strip(), "an empty question is not a turn"
+
+
+def test_the_question_turn_is_the_same_for_every_household():
+    """It is a fixed prompt, not a per-family utterance. A question that varied
+    by household would read like something that family actually asked."""
+    first, second = _FakeMemory(), _FakeMemory()
+    remember_outcome("c-010", "escalated: A", client=first, memory_id="m-1")
+    remember_outcome("c-011", "escalated: B", client=second, memory_id="m-1")
+    assert first.events[0]["messages"][0] == second.events[0]["messages"][0]
+
+
 def test_a_write_failure_is_reported_not_raised():
     """**The polarity that matters.** A memory outage must not fail a sweep.
     Nothing downstream reads the return value to decide anything — it exists so
