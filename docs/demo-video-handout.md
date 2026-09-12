@@ -196,6 +196,10 @@ Submit the approval. Then show the outcome the page now displays.
 > Memory for per-household facts. The last sweeps succeeded reporting nine acted and three escalated,
 > and one of them fired on its own schedule rather than being triggered by hand.
 >
+> And Grace remembers. Each sweep records what it concluded to AgentCore Memory, and the next cycle
+> recalls it — so a lesson from one cycle reaches the agent arguing the family's case in the next.
+> It reaches only that agent, and it can never satisfy the gate.
+>
 > The repository is also honest about three things that do not work: CloudWatch trace correlation is
 > unavailable because Runtime does not install an in-process tracer, so every ledger row carries a
 > null trace ID; SMS is sandboxed, so the family channel writes a transcript instead; and one
@@ -220,7 +224,7 @@ Re-measure before recording; do not read a stale number.
 | the twelve seeded households: 9 act, 3 escalate | `evaluate()` over `fixtures/households.yaml` at `today=2026-10-01`. **Say "the twelve seeded households"** — the claim must stay true if anyone submits a case through the intake form. |
 | 9 acted / 3 escalated deployed | the `grace-sweep` Step Functions execution output |
 | the sweep reads its caseload from the table | `ListCases` queries the `CASE_DIRECTORY` partition; the scheduled event carries only `{"today": "2026-10-01"}`. Started with that input, an execution returns 12 outcomes. **Do not say the schedule names the twelve** — it did until 2026-09-07, and that was the defect. |
-| runtime version 8 | `get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE`. v2 could not read `RECORD#v1` rows (a submitted household was invisible to the sweep), v4 added run-scoped classification and no-duplicate filing, v5 stopped an approval re-escalating itself, v6 added the outreach drafter, v7 fixed the model prefix the deployed policy actually grants, v8 added reflection. |
+| runtime version 9 | `get-agent-runtime --agent-runtime-id grace_grace-oTyyvo8stE`. v2 could not read `RECORD#v1` rows, v4 added run-scoped classification and no-duplicate filing, v5 stopped an approval re-escalating itself, v8 added the outreach drafter and reflection, **v9 fixed Memory extraction** — a lone `ASSISTANT` note extracts nothing, so a recorded outcome now carries the question it answers. **Re-measure before recording.** |
 | `renewal_submitted` for exactly `c-001`–`c-009` | a full DynamoDB scan; the invariant, not the row count |
 | 945 Python tests, 232 vitest across 11 files | `pytest` and `vitest run` — re-measure, these move every plan |
 | the outreach is in the family's language | `c-010` reads Spanish and the `family_message_sent` body in its ledger is Spanish. **Say "in the family's own language" and then show it** — this is the one place that claim is checkable rather than asserted. |
@@ -258,12 +262,17 @@ Re-measure before recording; do not read a stale number.
   deploy, and it now reads its caseload from the table rather than from the schedule."* If you want to
   claim a scheduled run swept a household added afterwards, check that a fire has happened since the
   fix and say the date — do not infer it.
-- Do **not** claim Memory does more than it does. Say exactly what `README.md`'s Memory row says: Grace
-  **records** what each sweep concluded, verified by reading the events back. Retrieval is wired and was
-  not yet surfacing records. "Grace records what it concluded for the next cycle" is true; "Grace
-  remembers and recalls" is not yet.
-- Do **not** imply every rule-pack number comes from a regulation. Two of twelve are mandated and
-  quoted; the rest say `policy choice`, and saying so *is* the point — an uncited number deciding a
+- **You may now say "Grace remembers and recalls" — this changed on 2026-09-12 and the earlier
+  instruction was the opposite.** Both halves are verified: every sweep records what it concluded, and
+  `recall_facts` returns real extracted facts for all three escalated households, read back through
+  Grace's own code path rather than from the write returning. Extraction takes roughly 75 seconds after
+  a sweep, so **re-measure before recording** rather than trusting this line. What is still not true:
+  Grace does not recall anything for a household it has never swept, and an empty recall is a degraded
+  mode by design — it can never change a verdict.
+- Do **not** imply every rule-pack number comes from a regulation. **Three** of twelve are mandated
+  and quoted — the 12-month Medicaid renewal cycle, the 90-day Medicaid reconsideration window Grace
+  works inside, and SNAP's 30-day recertification filing window; the rest say `policy choice`, and
+  saying so *is* the point — an uncited number deciding a
   family's coverage is indistinguishable from an invented one.
 - Do **not** say traces or Transaction Search work. Zero spans exist in the account.
 - Do **not** imply SMS is delivered. The channel is a transcript; the account has no origination number.
