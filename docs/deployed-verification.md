@@ -646,11 +646,10 @@ c-011: escalated: material_income_change: Income moved 30.0% …
 c-001: acted
 ```
 
-**Retrieval has not surfaced records yet.** Extraction into `/facts/` is
-asynchronous, and `recall_facts` returns `()` until it catches up. The read path is
-wired and fails open by design, so an empty result degrades an outreach message
-and can never change a verdict. Stated precisely: the write half is verified, the
-read half is wired and unverified.
+**Retrieval had not surfaced records at the time of writing**, and the reason was not
+asynchrony — see the 2026-09-12 section below, which diagnoses it and fixes it. Both
+halves are verified now. The read path fails open by design either way, so an empty
+result degrades an outreach message and can never change a verdict.
 
 ### Reflection, bounded
 
@@ -697,21 +696,56 @@ household identity.
 `/preferences/{actorId}`, USER_PREFERENCE), so this is not the silent namespace mismatch Plan 2
 recorded.
 
-**One hypothesis tested and eliminated.** A single `ASSISTANT`-only note might not be something a
-SEMANTIC extractor treats as extractable. A throwaway actor was given a `USER` + `ASSISTANT`
-conversational pair — the shape the strategy is designed for — and retrieval returned `()` after
-4.5 minutes as well. Two days for the real events, minutes for the probe, neither extracted. The
-probe's event was then deleted, so only the twelve households remain.
+**One hypothesis tested, and my test of it was wrong.** A single `ASSISTANT`-only note might not
+be something a SEMANTIC extractor treats as extractable. A throwaway actor was given a
+`USER` + `ASSISTANT` pair — the shape the strategy is designed for — and retrieval returned `()`
+after 4.5 minutes, which I read as eliminating the hypothesis. It did not. The probe's pair was
+*trivial* ("hello" / "hi"), so it tested the message shape while giving the extractor nothing
+substantive to extract. **Two things differed between the probe and the real events, and I changed
+only one of them** — which is the whole reason the result looked conclusive and was not.
 
-**So the honest statement is the one already in the README**, now with the cause narrowed: the
-write path is verified, the read path is wired and correct against the documented API, and no
-records exist to retrieve for a reason outside this repository. It fails open by design —
-`recall_facts` returning `()` degrades an outreach message and can never change a verdict, and
-`tests/test_household_memory.py` asserts `authority.py` and `steering.py` cannot even import the
-module.
+---
 
-**What this does not weaken.** Reflection reaches the advocate through the same `recall_facts`,
-so with no records the swarm's advocate currently receives no prior lessons — the wiring, the
-placement, and the hard-rule-5 boundary are all real and tested, and the content is empty. Say
-"Grace records what each sweep concluded, and the recall path is wired" — not "Grace remembers
-and recalls".
+## 2026-09-12, later — Memory works, and the cause was the event shape after all
+
+The hypothesis was right and my experiment was too weak to confirm it. Re-run properly: a
+realistic `USER` + `ASSISTANT` exchange written to Grace's own memory, in Grace's own namespace.
+
+```text
+write  -> USER:      "What happened with the renewal for case c-010?"
+          ASSISTANT: "Grace escalated it: proof_of_residency is not on file.
+                      Certification ends 2026-10-12. The family was messaged in Spanish."
+
+~75s later, through grace/household_memory.py's own recall_facts:
+  c-010: 3 fact(s)
+    "The user's family is missing a proof of residency document for their renewal,
+     which has been escalated and the family has been messaged."
+    "The user's family has an active certification that ends on 2026-10-12."
+  c-011: 1 fact(s)   c-012: 1 fact(s)
+```
+
+**So the defect was in `remember_outcome`, not in the service.** It wrote a lone `ASSISTANT` note.
+A SEMANTIC strategy extracts facts from a *conversation*, and a statement with no question it
+answers is not one — the extractor has nothing to attribute the fact to. `remember_outcome` now
+writes the pair: a `USER` turn asking what happened to this case, and the `ASSISTANT` turn
+answering with the outcome. Same information, a shape the strategy can read.
+
+**Verified after a redeploy, on the sweep's own writes.** Runtime v9, one scheduled-shape sweep,
+9 acted / 3 escalated with both invariants intact — then extraction ran and all three escalated
+households recall real facts through Grace's own code path. Extraction takes roughly one to two
+minutes, so recall immediately after a sweep may legitimately be empty.
+
+**And one hour of the diagnosis was spent on a defect that did not exist.** After the fix,
+`recall_facts` returned `()` for all three households while the raw API showed records present. The
+code was correct: my shell had no `GRACE_MEMORY_ID`, so the function took the degraded path it is
+designed for. **An unset memory id and a genuinely empty memory produce byte-identical output**, and
+nothing in between distinguished them. `tests/test_household_memory.py` now pins that ambiguity as a
+known property, and asserts the deployed manifest names a memory id at all — a wired read path with
+nothing configured is the same silent no-op one layer up.
+
+**What this changes about what may be claimed.** "Grace records what each sweep concluded and reads
+it back next cycle" is now a true sentence, verified in both directions. It was not true on
+2026-09-10, and the documents said so at the time. Reflection reaches the advocate through this same
+`recall_facts`, so the swarm's advocate now receives real prior lessons rather than an empty tuple —
+still advisory, still unable to satisfy a gate condition, and `tests/test_household_memory.py` still
+asserts `authority.py` and `steering.py` cannot import the module at all.

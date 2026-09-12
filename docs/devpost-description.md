@@ -33,6 +33,9 @@ referee on three *different* Amazon Nova models, because two instances of one mo
 nothing and nothing should referee its own argument. **Agents-as-tools** drafts the family's message in
 a nested agent with no tools and no access to the case, so translation never enters the eligibility
 reasoning. A hook appends every tool call to a DynamoDB ledger — the audit trail and the evidence.
+**AgentCore Memory** carries what each sweep concluded into the next one, because a recertification
+cycle is annual and a fact learned this year is only useful if it survives eleven months; a
+remembered lesson reaches the advocate, the agent whose job is to argue, and never the gate.
 
 The gate is the point. `authority.py` is pure Python, no model and no I/O, wired in as a Strands
 steering handler that runs before every state-changing call. Three layers: privileged tools are
@@ -53,8 +56,7 @@ can reach, and the intake form refuses to collect any.
 
 **What it does not do**, stated because a project that hides this is less trustworthy. SMS is
 sandboxed here, so the family channel writes a transcript. Filing writes a ledger row: a real state
-endpoint needs a data-sharing agreement, not code. Memory records every outcome — verified by reading
-the events back — while retrieval is wired and not yet verified. CloudWatch trace correlation does not
-work, and the repository explains why.
+endpoint needs a data-sharing agreement, not code. CloudWatch trace correlation does not work, and
+the repository explains why.
 
 Live demo: **grace.rosettacloud.app** · Code: **github.com/mohamedsorour1998/Grace** (MIT)

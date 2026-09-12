@@ -195,7 +195,7 @@ EventBridge schedule, and the Cognito-gated dashboard on Amplify SSR. Then casew
 the deployed sweep genuinely read its caseload from the table. Last, the safety claim executed against
 live infrastructure.
 
-**941 Python tests and 232 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
+**945 Python tests and 232 frontend tests**, plus 23 trajectory evals asserting the gate's ordering
 holds against real Bedrock calls. Every guard was sabotaged and watched failing — that is the subject
 of a companion post.
 

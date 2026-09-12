@@ -1661,6 +1661,29 @@ id is one the deployed policy actually grants, and
 unreferenced role — `judge` exempted by name, with the exemption to be deleted along with the role if
 LLM steering never ships.
 
+**A SEMANTIC memory strategy extracts facts from a *conversation*, so a lone `ASSISTANT` note
+extracts nothing.** `remember_outcome` wrote one statement per outcome, the events were well-formed,
+the strategies were `ACTIVE` with the right namespaces — and `retrieve_memories` returned `()` for two
+days. The fix is to write the **pair**: a `USER` turn asking what happened to this case, and the
+`ASSISTANT` turn answering. Same information; a shape the extractor can attribute a fact to.
+Extraction then takes ~1-2 minutes, so recall immediately after a sweep may legitimately be empty.
+
+**And the way I nearly missed it is the transferable part: I changed one variable and read the result
+as conclusive.** The right hypothesis — "an ASSISTANT-only note may not be extractable" — was tested
+with a *trivial* `USER`+`ASSISTANT` pair ("hello"/"hi"), which returned `()` too, so I recorded the
+hypothesis as eliminated and wrote a whole verification section attributing the gap to the service.
+Two things differed between probe and production (message shape **and** content substance) and I
+varied only one. **When an experiment appears to eliminate a hypothesis, list what else differs
+between the probe and the real case before believing it.**
+
+**An unset `GRACE_MEMORY_ID` and a genuinely empty memory produce byte-identical output.** After the
+fix, `recall_facts` returned `()` while the raw API showed records present — the code was right and my
+shell had no id, so it took the degraded path it is designed for. An hour went to a defect that did
+not exist. `tests/test_household_memory.py` pins the ambiguity as a known property and asserts the
+deployed manifest names an id at all, because a wired read path with nothing configured is the same
+silent no-op one layer up. **Before diagnosing "no facts", check that the reader was told where to
+look.**
+
 **Three rule-pack numbers are federally mandated and the other ten are not, and saying so is the
 point.** `42 CFR 435.916(a)(1)` mandates the 12-month Medicaid renewal cycle; `(a)(3)(iii)` gives a
 household **90 days** to submit a late renewal form after a procedural termination "without requiring a

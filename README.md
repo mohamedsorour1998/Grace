@@ -210,9 +210,8 @@ stating: it cannot be built honestly before a deployed sweep exists to reflect o
 now exist, so it reflects on real outcomes rather than on invented ones.
 
 Every terminal path records what the run concluded to AgentCore Memory, and the next cycle reads
-those facts back — the write half confirmed by listing the events, the read half wired and
-returning `()` until extraction surfaces records (see the Memory row below).
-**Where a lesson lands is the whole design.** A lesson reaches two places, both
+those facts back — both halves verified against the live service, not inferred from a write
+returning. **Where a lesson lands is the whole design.** A lesson reaches two places, both
 advisory: the graph's opening task text, and the **advocate's** prompt inside the deliberation
 swarm — the agent whose job is to argue, for whom history is legitimate material. It reaches
 neither the verifier, whose job is checking claims against readable facts, nor the referee, whose
@@ -278,7 +277,7 @@ negative results, is in [docs/deployed-verification.md](docs/deployed-verificati
 | Surface | State |
 |---|---|
 | **Runtime** | Shipped. Container on ARM64, IAM auth, deployed via the `agentcore` CLI and CDK. |
-| **Memory** | Shipped and **in use**, with one half verified and one wired. `grace_household_memory`, 365-day expiry, one actor per household. Every sweep records what it concluded — **confirmed by listing the events back, not by the write returning** — four per escalated household as of 2026-09-12, one per sweep, each carrying the typed reason and nothing that identifies anyone (a count is a measurement with a date, not a constant). Retrieval into `/facts/` is asynchronous and had not surfaced records at the time of writing, so `recall_facts` returns `()` and the read path is wired but unverified. It fails open by design, so an empty recall degrades an outreach message and can never change a verdict. |
+| **Memory** | Shipped and **in use, both halves verified against the live service.** `grace_household_memory`, 365-day expiry, one actor per household. Every sweep records what it concluded — **confirmed by listing the events back, not by the write returning** — one event per sweep per escalated household, each carrying the typed reason and nothing that identifies anyone. `recall_facts` then returns the extracted facts: *"The user's family is missing a proof of residency document for their renewal, which has been escalated…"* for `c-010`, and one apiece for `c-011` and `c-012`. **A lone `ASSISTANT` note extracts nothing** — the strategy needs the `USER` question the note answers, which is why `remember_outcome` writes the pair (see `docs/deployed-verification.md`). It still fails open by design, so an empty recall degrades an outreach message and can never change a verdict. |
 | **Identity** | Shipped, and **narrowly**: a Cognito user pool (`grace-caseworkers` / `us-east-1_HXs3b0APR`) whose ID token is the dashboard's trust anchor. See the sentence below for what that does and does not mean. |
 | **The deploy harness** | Shipped. `infra/provision_all.py` creates every resource idempotently; a guarded teardown exists. |
 | **Gateway** | **Deferred.** The largest remaining chunk and the most common deploy-day failure — outbound auth differs per target type. The `target___tool` prefix bug stays fixed and tested in `grace/steering.py` regardless, so re-adding Gateway later cannot silently bypass the gate. |
