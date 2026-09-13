@@ -108,7 +108,7 @@ Grace may act alone only if *all* of these hold:
 
 Anything else becomes a specific question for a human.
 
-**Every number in a rule pack names its authority, and only two of them are mandated.**
+**Every number in a rule pack names its authority, and only three of thirteen are mandated.**
 `certification_period_months` for Medicaid is **42 CFR 435.916(a)(1)** — *"must be renewed
 once every 12 months, and no more frequently than once every 12 months"* — and
 `grace_period_days_after_end` is **42 CFR 435.916(a)(3)(iii)**, which requires the agency to

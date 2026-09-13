@@ -229,7 +229,7 @@ Re-measure before recording; do not read a stale number.
 | 945 Python tests, 232 vitest across 11 files | `pytest` and `vitest run` — re-measure, these move every plan |
 | the outreach is in the family's language | `c-010` reads Spanish and the `family_message_sent` body in its ledger is Spanish. **Say "in the family's own language" and then show it** — this is the one place that claim is checkable rather than asserted. |
 | Memory is written and read back | Both halves verified. `list_events` on the household's actor shows one event per sweep; `recall_facts` then returns the extracted facts — three for `c-010`, one each for `c-011`/`c-012` at the time of writing. **Re-measure before recording**, and note extraction takes ~1–2 minutes after a sweep, so recall immediately after one may legitimately be empty. **"Grace remembers what each sweep concluded and reads it back next cycle" is now a true sentence** — it was not on 2026-09-10, and the earlier handout said so. |
-| two rule-pack numbers are federally mandated | `42 CFR 435.916(a)(1)` for the 12-month cycle and `(a)(3)(iii)` for the 90-day reconsideration window. The other ten say `policy choice`. **Do not imply the regulations mandate all of them.** |
+| three rule-pack numbers are federally mandated | `42 CFR 435.916(a)(1)` for the 12-month cycle, `(a)(3)(iii)` for the 90-day reconsideration window, and `7 CFR 273.14(e)(2)` for SNAP's 30-day recertification filing window. **Three of thirteen** — the other ten say `policy choice`. Measured by grepping `authority:` across both packs, 2026-09-14. **Do not imply the regulations mandate all of them.** |
 | 23 trajectory evals | `pytest evals/ --co -q` — they cost real Bedrock to run |
 | approving `c-010` files nothing | its decision + outcome rows, and zero `renewal_submitted` rows |
 | Grace files a renewal once per period | a sweep after the nine are filed writes **0** new `renewal_submitted` rows and **9** `renewal_already_filed` rows |
@@ -269,7 +269,7 @@ Re-measure before recording; do not read a stale number.
   a sweep, so **re-measure before recording** rather than trusting this line. What is still not true:
   Grace does not recall anything for a household it has never swept, and an empty recall is a degraded
   mode by design — it can never change a verdict.
-- Do **not** imply every rule-pack number comes from a regulation. **Three** of twelve are mandated
+- Do **not** imply every rule-pack number comes from a regulation. **Three of thirteen** are mandated
   and quoted — the 12-month Medicaid renewal cycle, the 90-day Medicaid reconsideration window Grace
   works inside, and SNAP's 30-day recertification filing window; the rest say `policy choice`, and
   saying so *is* the point — an uncited number deciding a
