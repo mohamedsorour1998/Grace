@@ -724,3 +724,20 @@ def test_the_deployed_manifest_configures_the_memory_id():
     # and hard rule 8's redaction is *empty value, present token*: absence
     # disables redaction entirely and a non-empty value carves holes in it.
     assert env["OTEL_SEMCONV_STABILITY_OPT_IN"].endswith("gen_ai_unredacted_attributes=")
+
+
+def test_a_ledger_that_cannot_be_read_is_never_acted(monkeypatch):
+    """A ledger read that fails (for instance, the page cap in
+    `DynamoDBCaseStore.ledger`) must not end with the case counted as handled.
+    `acted` needs a `renewal_submitted` row the store could actually return."""
+
+    class StoreWhoseLedgerRaises(InMemoryCaseStore):
+        def ledger(self, case_id):
+            raise RuntimeError(f"ledger for {case_id} did not finish within 100 pages")
+
+    monkeypatch.setattr(entrypoint, "build_case_graph", lambda *a, **k: FakeGraph())
+    out = entrypoint.process_case(_payload("c-001"),
+                                  store=StoreWhoseLedgerRaises(load_fixture_cases()),
+                                  channel=TranscriptChannel())
+    assert out["status"] != "acted"
+    assert out.get("filed") is not True
