@@ -25,7 +25,14 @@ Each is a dated record of real runs, and keeps the addresses and counts it measu
 - [evidence/live-data-findings.md](evidence/live-data-findings.md): what the live table
   actually contained when the dashboard was built.
 
+## Lessons: what each defect taught
+
+- [lessons/](lessons/): the lessons from every plan, kept verbatim. The index, and the ten rules
+  that cut across them, are in `CLAUDE.md` under "Lessons".
+
 ## Hackathon: the September 2026 submission
+
+- [hackathon/README.md](hackathon/README.md): what was submitted, and the rules the build followed.
 
 - [hackathon/demo-video-handout.md](hackathon/demo-video-handout.md): the demo video's shot list
   and script.
