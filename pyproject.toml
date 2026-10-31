@@ -23,7 +23,14 @@ dependencies = [
     # Measured marginal cost against the existing venv: 2 packages
     # (bedrock-agentcore, websockets); everything else is already satisfied by
     # strands-agents. Smaller than the [otel] extra's 10, and first-party AWS.
-    "bedrock-agentcore>=1.22",
+    #
+    # Pinned EXACTLY, and to 1.23.0 rather than the newest. 1.23.1+ import
+    # `strands.experimental.bidi`, absent from strands-agents 1.54.0, and declare
+    # `strands-agents>=1.56.0` only under their own `strands-agents` extra, which
+    # this project does not install, so no resolver sees the conflict. The image
+    # installs from this file, not from uv.lock, so a range here would let a
+    # rebuild ship a container that dies at import. tests/test_dependency_pins.py.
+    "bedrock-agentcore==1.23.0",
     "boto3>=1.43",
     "pyyaml>=6.0",
 ]
