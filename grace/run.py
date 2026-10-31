@@ -120,8 +120,9 @@ DEFAULT_TODAY = "2026-10-01"
 APPROVE_DECISIONS = frozenset({"approve", "yes", "file", "proceed"})
 
 # A resumed graph can interrupt again — a caseworker answer the model does
-# not accept, or a case that is genuinely stuck. `set_max_node_executions(12)`
-# on the graph bounds nodes *within* one invocation; it does not bound resumes
+# not accept, or a case that is genuinely stuck. The graph's node-execution cap
+# (`set_max_node_executions` in grace/graph.py) bounds nodes *within* one
+# invocation; it does not bound resumes
 # across invocations, so nothing else stops this loop. Each round is a paid
 # Bedrock call, so exhausting this escalates rather than spinning.
 MAX_RESUME_ROUNDS = 3

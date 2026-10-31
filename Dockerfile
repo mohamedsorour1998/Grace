@@ -23,9 +23,11 @@ RUN uv pip install --system --no-cache .
 # `infra/` is required, not optional: grace/cases/dynamo_store.py and
 # grace/memory.py both import infra.naming. `fixtures/` likewise —
 # grace/cases/store.py reads fixtures/households.yaml at a path relative to the
-# package, and the fixtures are the single source of household truth (the
-# DynamoDB table holds only ledger and escalation rows). Omitting either fails
-# at container start, not at build.
+# package, as the default seed for the in-memory store and the deployed store's
+# fallback for the twelve demo households. The table also holds `RECORD#v1` case
+# records and the case directory, which is where a household added through the
+# dashboard lives. Omitting either directory fails at container start, not at
+# build.
 COPY infra/ ./infra/
 COPY fixtures/ ./fixtures/
 COPY runtime_app.py ./
