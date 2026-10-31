@@ -464,5 +464,5 @@ The **AWS Builder ID** is recorded in the README as a `TODO`, not a value — it
 that cannot be derived from the repository or the AWS API.
 
 Present and verified: public repo (`github.com/mohamedsorour1998/Grace`, MIT), README, architecture
-diagram ([`architecture.md`](architecture.md) as Mermaid plus
-[`architecture.png`](architecture.png)), and a live deployment.
+diagram ([`architecture.md`](../architecture.md) as Mermaid plus
+[`architecture.png`](../architecture.png)), and a live deployment.

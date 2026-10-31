@@ -24,8 +24,8 @@ Built for the **AWS Agents for Humans Hackathon** (Good Neighbor track), deadlin
 - Plan 2 (AgentCore deploy): `docs/superpowers/plans/2026-09-03-grace-agentcore.md` — **complete**
 - Plan 3 (dashboard): `docs/superpowers/plans/2026-09-03-grace-dashboard.md` — **complete**,
   spec `docs/superpowers/specs/2026-09-03-grace-dashboard-design.md`,
-  runbook `docs/dashboard-runbook.md`,
-  evidence `docs/dashboard-verification.md`
+  runbook `docs/runbooks/dashboard.md`,
+  evidence `docs/evidence/dashboard-verification.md`
 
 ---
 
@@ -58,7 +58,7 @@ response to *that* failure and the wrong response to any safety failure. **Never
 **SUCCEEDED in ~61s reporting 9 acted / 3 escalated**, verified from DynamoDB rather than from a log
 line: `renewal_submitted` appears for exactly `c-001`–`c-009` and for none of `c-010`/`c-011`/`c-012`,
 and the `escalation-queue` GSI holds exactly those three households with their typed gate reasons.
-Hard rule 6 holds on deployed infrastructure. `docs/deployed-verification.md` is the pasted evidence.
+Hard rule 6 holds on deployed infrastructure. `docs/evidence/deployed-verification.md` is the pasted evidence.
 
 **The runtime is version 3 as of 2026-09-07, and the sweep reads its caseload from the table.** Both
 changes exist for one reason: a household submitted through `/new` was invisible to the daily sweep,
@@ -156,14 +156,14 @@ the runtime role either way.
    the output. Fixing the source did not clean what was already written, so that was scanned
    separately: three fields across two pre-fix `c-012` rows in DynamoDB held the surname and were
    stripped in place on 2026-09-04 (no key, `status`, `deadline`, or `renewal_submitted` row touched;
-   a 633-row scan now returns clean — `docs/plan3-live-data-findings.md`). **Pre-fix log events still
+   a 633-row scan now returns clean — `docs/evidence/live-data-findings.md`). **Pre-fix log events still
    contain the name** and cannot be unwritten; they age out with retention. So: fixed in the repo,
    fixed in the running system, fixed in durable storage, historical log events still carry it.
 
 - Plan 2 spec: `docs/superpowers/specs/2026-09-03-grace-agentcore-design.md`
 - Plan 2 tasks: `docs/superpowers/plans/2026-09-03-grace-agentcore.md`
-- Deploy runbook (verified CLI flags): `docs/runbook-deploy.md`
-- Deployed evidence: `docs/deployed-verification.md`
+- Deploy runbook (verified CLI flags): `docs/runbooks/deploy.md`
+- Deployed evidence: `docs/evidence/deployed-verification.md`
 
 Plan 2 task state:
 
@@ -180,7 +180,7 @@ Plan 2 task state:
 | 7 — deploy to Runtime | **done** — `Dockerfile`, `runtime_app.py`, `agentcore/`, 556 tests. **Runtime `grace_grace-oTyyvo8stE` is READY and serving**; `c-010` escalated in 9.1s with real DynamoDB rows |
 | 8 — Lambda/Step Functions/EventBridge | **done** — `infra/{lambda_src,provision_lambda,provision_stepfunctions,provision_eventbridge}.py`, 578 tests. **The deployed sweep reports 9 acted / 3 escalated** |
 | 9 — escalation alarm + provisioning | **done** — `infra/{provision_alarm,provision_all,teardown}.py`, 621 tests. **The alarm went OK on a real sweep's Sum=3.0** |
-| 10 — deployed verification + README | **done** — `docs/deployed-verification.md`, honest README scope. **A PII scan of the deployed log groups found a household name in CloudWatch — read the PII finding below before touching `read_case`** |
+| 10 — deployed verification + README | **done** — `docs/evidence/deployed-verification.md`, honest README scope. **A PII scan of the deployed log groups found a household name in CloudWatch — read the PII finding below before touching `read_case`** |
 
 Plan 1 task state, for reference:
 
@@ -709,7 +709,7 @@ in this account, `CDKToolkit` from Feb 2026); `create` takes `--name`/`--project
 a positional and **scaffolds a new project** rather than registering existing code; `add` is
 subcommand-based (`agent`, `harness`, `memory`, `gateway`, …); and Grace needs
 `add agent --type byo --code-location . --entrypoint runtime_app.py` — `--type create` would
-generate a fresh agent and ignore `grace/` entirely. `docs/runbook-deploy.md` is authoritative over
+generate a fresh agent and ignore `grace/` entirely. `docs/runbooks/deploy.md` is authoritative over
 the appendices wherever they disagree.
 
 **The Runtime entrypoint is `BedrockAgentCoreApp`, not a bare handler.** Verified by scaffolding a
@@ -979,7 +979,7 @@ that needs to prove *which* case was read, use `case_id`; never reintroduce a na
 Plan 3 adds a Next.js caseworker dashboard in `web/`, deployed to Amplify with Cognito auth. It also
 un-defers **AgentCore Identity**, which Task 4 shipped — so the honest surface count is **four**, and
 both the "Scope is four AgentCore surfaces" paragraph above and the README now say so. **Plan 3 is
-complete**; `docs/dashboard-verification.md` is the pasted evidence.
+complete**; `docs/evidence/dashboard-verification.md` is the pasted evidence.
 
 **"Identity shipped" means one specific thing, and the narrow version is the only honest one.** What
 shipped is a **Cognito user pool whose ID token is the dashboard's trust anchor** — `verifySession`
@@ -1000,7 +1000,7 @@ Task state:
 | 5 — `lib/decide.ts` + the write route | **done** — `web/lib/decide.ts`, `web/app/api/case/[id]/decide/route.ts`, `grace/entrypoint.py` (flag only), 16 Python tests (**647 total**), **122 vitest**, five gates green. **The draft decoded a streaming response as bytes, which would have reported every approve as a failure after it succeeded; read below** |
 | 6 — pages | **done** — `web/app/{page,queue,case/[id]}/`, `web/components/`, `web/lib/session.ts`, **154 vitest**, Python unchanged at 648, five gates green. **The pages had no session verification at all — a forged cookie returned 200 with every case id. Read below** |
 | 7 — Amplify | **done** — `infra/provision_amplify.py`, **715 Python tests**, app `dbi97xicbjbv8` live at `https://grace.rosettacloud.app` serving real data. **Thirteen defects in the plan's draft; four of my own tests initially survived sabotage. Read below** |
-| 8 — verification + docs | **done** — `docs/dashboard-verification.md`, four-surface README with the AWS Builder ID field, dashboard tier added to `docs/architecture.md`. **715 Python / 157 vitest, four gates green.** The end-to-end approval was executed against the live system: **approving `c-010` filed nothing.** Read below |
+| 8 — verification + docs | **done** — `docs/evidence/dashboard-verification.md`, four-surface README with the AWS Builder ID field, dashboard tier added to `docs/architecture.md`. **715 Python / 157 vitest, four gates green.** The end-to-end approval was executed against the live system: **approving `c-010` filed nothing.** Read below |
 
 **`web/` runs its own toolchain, and `npm run build` is the gate that matters** — it is what Amplify
 runs, so a green `typecheck` and `test` with a failing `build` is not a deployable app. Four commands,
@@ -1208,7 +1208,7 @@ case becomes decidable twice) while *displaying* as a deny — the opposite pola
 allowlist, and for the same reason: never imply a human authorised a filing they did not.
 
 **The live table is 643 rows and the GSI holds 18, not 633/17** — a sweep ran between
-`docs/plan3-live-data-findings.md` and Task 3. Treat both as measurements with a date, not constants.
+`docs/evidence/live-data-findings.md` and Task 3. Treat both as measurements with a date, not constants.
 Also: `d_trace_id` is **not** universally present — 613 of 625 ledger rows carry it as `{"NULL": true}`
 and **12 rows on `c-003` lack the attribute entirely**, so a reader must handle absent *and* `NULL`.
 
@@ -1327,7 +1327,7 @@ renamed afterwards.
 
 **Two of Task 4's plan defects were inverted security claims — a comment asserting the opposite of the
 measured behaviour.** Both were caught by probing the control rather than reading the API's response,
-and both had been recorded in `docs/plan3-live-data-findings.md` as *confirmed* findings while being
+and both had been recorded in `docs/evidence/live-data-findings.md` as *confirmed* findings while being
 backwards:
 
 1. **Omitting `WriteAttributes` does not withhold write access — it grants everything.** The draft
@@ -1498,7 +1498,7 @@ deployed markup. A forged cookie 307s to `/login` with **zero** case ids; the wr
 `no_session`**; `"Escalate."` is refused **400 `unknown_decision`**; an unknown case **404
 `unknown_case`**; and a case Grace handled itself **409 `not_escalated`**. Task 8 then executed the
 approval those refusals guard: **approving `c-010` wrote a `DECISION#` row and filed nothing** — see
-`docs/dashboard-verification.md`.
+`docs/evidence/dashboard-verification.md`.
 
 Five deploy defects, and the pattern is what matters: **a green build proves nothing about a running
 SSR app.** Builds 1–4 all reported SUCCEED or failed for reasons that misdescribed themselves.
@@ -1625,7 +1625,7 @@ scheduled fire is the first to demonstrate both at once, and it is worth re-chec
 rather than asserting it.
 
 **The demo video is the one hard submission requirement nothing in three plans produces.** Neither
-`README.md` nor `docs/dashboard-verification.md` may imply the submission is complete. The **AWS Builder
+`README.md` nor `docs/evidence/dashboard-verification.md` may imply the submission is complete. The **AWS Builder
 ID** is likewise not derivable from the repo or the AWS API; it sits in the README as an explicit
 `TODO(sorour)` field rather than a guessed value.
 
@@ -2002,8 +2002,8 @@ Trajectory evals (`evals/`) assert the gate ordering holds against real model ru
 
 | Artifact | Draft | State |
 |---|---|---|
-| ≤5-minute demo video | `docs/demo-video-handout.md` | **Not recorded.** Shot list, script, timings, and a figure-provenance table are ready. Public on YouTube or Vimeo — the rules say *public*, not unlisted. |
-| builder.aws blog post *(bonus points)* | `docs/builder-blog-post.md` | **Not published.** Must be public on builder.aws.com with **"Agents for Humans" in the title** — the draft's title already satisfies that. |
+| ≤5-minute demo video | `docs/hackathon/demo-video-handout.md` | **Not recorded.** Shot list, script, timings, and a figure-provenance table are ready. Public on YouTube or Vimeo — the rules say *public*, not unlisted. |
+| builder.aws blog post *(bonus points)* | `docs/hackathon/builder-blog-post.md` | **Not published.** Must be public on builder.aws.com with **"Agents for Humans" in the title** — the draft's title already satisfies that. |
 
 Both carry `<replace this text by a screenshot of …>` markers where a capture belongs, so the writing is
 finished and only the recording and screenshots remain. **Neither is produced by any task in any of the

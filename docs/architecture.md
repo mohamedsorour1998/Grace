@@ -3,7 +3,7 @@
 One diagram of the whole system, and then the three claims it exists to support.
 
 Everything below is deployed and running in `us-east-1` unless a note says otherwise. Mermaid renders
-natively on GitHub, so **this file is the architecture diagram**; `docs/deployed-verification.md` is
+natively on GitHub, so **this file is the architecture diagram**; `docs/evidence/deployed-verification.md` is
 the evidence that it behaves as drawn.
 
 `docs/architecture.png` is a rendered copy for readers who cannot run Mermaid, and it lags this
@@ -164,7 +164,7 @@ approved, Grace re-checked, the gate refused again.
 The guarantee is **structural**: `evaluate(case, today, pack=None)` has no parameter an approval could
 occupy, so the flag cannot reach the gate even by mistake. It appends a sentence to the reason a human
 reads, after the verdict is already final. Evidence in
-[`dashboard-verification.md`](dashboard-verification.md#3-the-approval-that-files-nothing--the-whole-safety-argument-executed).
+[`dashboard-verification.md`](evidence/dashboard-verification.md#3-the-approval-that-files-nothing--the-whole-safety-argument-executed).
 
 ---
 

@@ -103,7 +103,7 @@ Plan 2 finished at **622 passed** — Plan 1's 360 unchanged, plus 262 added by 
 
 ## Deploy sequence
 
-Filled in as tasks complete. See `docs/deployed-verification.md` for the evidence that the deployed
+Filled in as tasks complete. See `docs/evidence/deployed-verification.md` for the evidence that the deployed
 system behaves correctly.
 
 ### Seed the case directory before exposing intake
@@ -426,7 +426,7 @@ reformatting a timestamp inside a `States.Format` intrinsic — more risk than t
 `2026-09-03T03:04:55Z`. Task 10's verification scan found a household name in
 `/aws/vendedlogs/states/grace-sweep-Logs` (`Mensah`, 16 times in 302 events) and the fix —
 `read_case` no longer returning `display_name` — landed in the repository afterwards. See
-`docs/deployed-verification.md` §5 for the path and the reasoning.
+`docs/evidence/deployed-verification.md` §5 for the path and the reasoning.
 
 So **the next deploy is not optional**, and it is the one step of this runbook still to run:
 
@@ -436,7 +436,7 @@ export DOCKER_HOST="$(podman machine inspect \
 agentcore deploy -y --verbose
 ```
 
-Then re-run the scan from `docs/deployed-verification.md` §5 against events written *after* the
+Then re-run the scan from `docs/evidence/deployed-verification.md` §5 against events written *after* the
 redeploy and confirm zero hits. Pre-fix events cannot be unwritten; they age out with the log group's
 retention. Until the redeploy, "no household identity reaches CloudWatch" is true of the repository
 and not of the running system — do not state it unqualified.

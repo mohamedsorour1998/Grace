@@ -18,7 +18,7 @@ you record, re-measure it rather than reading this file aloud.
 ```bash
 # 1. The dashboard needs a live session. Sign in first, in the browser you will record.
 open https://grace.rosettacloud.app
-#    caseworker-01  /  (the seeded password — see docs/dashboard-runbook.md)
+#    caseworker-01  /  (the seeded password — see docs/runbooks/dashboard.md)
 
 # 2. Confirm the demo's headline claim is still true, so you are not narrating a stale number.
 .venv/bin/python - <<'PY'

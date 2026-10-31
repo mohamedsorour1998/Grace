@@ -436,7 +436,7 @@ c-012 status still: PENDING_CASEWORKER | deadline: 2026-10-12
 ```
 
 The full account, including the query that produces it, is in
-[docs/plan3-live-data-findings.md](plan3-live-data-findings.md).
+[docs/evidence/live-data-findings.md](live-data-findings.md).
 
 **What remains true:** log events written *before* the fix still contain the name and cannot be
 unwritten. They age out with the log group's retention. So the accurate statement is that the leak

@@ -17,8 +17,8 @@ for the **AWS Agents for Humans Hackathon** (Good Neighbor track).
 > **9 filed autonomously, 3 escalated to a human**, confirmed from DynamoDB rather than from a log
 > line. A caseworker dashboard at **[grace.rosettacloud.app](https://grace.rosettacloud.app)** shows the
 > queue and lets a human decide — and approving the household with a missing document still files
-> nothing. See [deployed verification](docs/deployed-verification.md) and
-> [dashboard verification](docs/dashboard-verification.md) for the evidence, including the parts that
+> nothing. See [deployed verification](docs/evidence/deployed-verification.md) and
+> [dashboard verification](docs/evidence/dashboard-verification.md) for the evidence, including the parts that
 > did not work. **The demo video is not yet recorded**; see
 > [still outstanding](#still-outstanding-for-submission).
 
@@ -270,14 +270,14 @@ EventBridge (grace-daily-sweep)
 DynamoDB rather than from the agent's own log line: `renewal_submitted` exists for exactly `c-001`
 through `c-009` and for none of the three escalating households. The `escalation-queue` GSI holds
 exactly `c-010`, `c-011`, and `c-012`, each with the gate's typed reason. Full output, including two
-negative results, is in [docs/deployed-verification.md](docs/deployed-verification.md).
+negative results, is in [docs/evidence/deployed-verification.md](docs/evidence/deployed-verification.md).
 
 ### Four AgentCore surfaces, not five
 
 | Surface | State |
 |---|---|
 | **Runtime** | Shipped. Container on ARM64, IAM auth, deployed via the `agentcore` CLI and CDK. |
-| **Memory** | Shipped and **in use, both halves verified against the live service.** `grace_household_memory`, 365-day expiry, one actor per household. Every sweep records what it concluded — **confirmed by listing the events back, not by the write returning** — one event per sweep per escalated household, each carrying the typed reason and nothing that identifies anyone. `recall_facts` then returns the extracted facts: *"The user's family is missing a proof of residency document for their renewal, which has been escalated…"* for `c-010`, and one apiece for `c-011` and `c-012`. **A lone `ASSISTANT` note extracts nothing** — the strategy needs the `USER` question the note answers, which is why `remember_outcome` writes the pair (see `docs/deployed-verification.md`). It still fails open by design, so an empty recall degrades an outreach message and can never change a verdict. |
+| **Memory** | Shipped and **in use, both halves verified against the live service.** `grace_household_memory`, 365-day expiry, one actor per household. Every sweep records what it concluded — **confirmed by listing the events back, not by the write returning** — one event per sweep per escalated household, each carrying the typed reason and nothing that identifies anyone. `recall_facts` then returns the extracted facts: *"The user's family is missing a proof of residency document for their renewal, which has been escalated…"* for `c-010`, and one apiece for `c-011` and `c-012`. **A lone `ASSISTANT` note extracts nothing** — the strategy needs the `USER` question the note answers, which is why `remember_outcome` writes the pair (see `docs/evidence/deployed-verification.md`). It still fails open by design, so an empty recall degrades an outreach message and can never change a verdict. |
 | **Identity** | Shipped, and **narrowly**: a Cognito user pool (`grace-caseworkers` / `us-east-1_HXs3b0APR`) whose ID token is the dashboard's trust anchor. See the sentence below for what that does and does not mean. |
 | **The deploy harness** | Shipped. `infra/provision_all.py` creates every resource idempotently; a guarded teardown exists. |
 | **Gateway** | **Deferred.** The largest remaining chunk and the most common deploy-day failure — outbound auth differs per target type. The `target___tool` prefix bug stays fixed and tested in `grace/steering.py` regardless, so re-adding Gateway later cannot silently bypass the gate. |
@@ -314,7 +314,7 @@ because they would trade a verified safety property for a nicer screenshot. So a
 query on `grace.gate_decision = "escalate"` returns nothing. The DynamoDB escalation queue is the
 evidence instead, which is the stronger artifact anyway: a trace can be dropped by sampling, a ledger
 row cannot. The reasoning is recorded in full in
-[docs/deployed-verification.md](docs/deployed-verification.md#4-transaction-search-returns-nothing-and-why).
+[docs/evidence/deployed-verification.md](docs/evidence/deployed-verification.md#4-transaction-search-returns-nothing-and-why).
 
 ---
 
@@ -492,15 +492,15 @@ it. Nothing in this README should be read as saying the submission is complete.
 | Required artifact | State |
 |---|---|
 | Project built with the required tools | Present — Strands Agents SDK, Amazon Bedrock (Nova only), AgentCore Runtime + Memory, deployed on AWS |
-| Text description of features and functionality | This README, plus [docs/dashboard-verification.md](docs/dashboard-verification.md) and [docs/deployed-verification.md](docs/deployed-verification.md) for the evidence |
+| Text description of features and functionality | This README, plus [docs/evidence/dashboard-verification.md](docs/evidence/dashboard-verification.md) and [docs/evidence/deployed-verification.md](docs/evidence/deployed-verification.md) for the evidence |
 | Public code repository | Present — [`mohamedsorour1998/Grace`](https://github.com/mohamedsorour1998/Grace) |
 | MIT license, visible in the About section | Present — [LICENSE](LICENSE), detected by GitHub as MIT |
 | README | This file |
 | Architecture diagram | [`docs/architecture.md`](docs/architecture.md) — Mermaid, renders natively on GitHub, and the authoritative copy. [`docs/architecture.png`](docs/architecture.png) is a rendered convenience copy that lags it. |
 | AWS Builder ID | **mohamedsorour1998@gmail.com** — the Devpost form asks for the email used to create the Builder ID |
 | Live demo link *(optional, scores better)* | Present — **[grace.rosettacloud.app](https://grace.rosettacloud.app)** |
-| **≤5-minute demo video** | **Not recorded. Outstanding.** The script, shot list, and figures are ready in [docs/demo-video-handout.md](docs/demo-video-handout.md) — must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
-| **builder.aws blog post** *(optional, bonus points)* | **Not published. Outstanding.** Drafted in [docs/builder-blog-post.md](docs/builder-blog-post.md) — must be public on builder.aws.com with "Agents for Humans" in the title |
+| **≤5-minute demo video** | **Not recorded. Outstanding.** The script, shot list, and figures are ready in [docs/hackathon/demo-video-handout.md](docs/hackathon/demo-video-handout.md) — must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
+| **builder.aws blog post** *(optional, bonus points)* | **Not published. Outstanding.** Drafted in [docs/hackathon/builder-blog-post.md](docs/hackathon/builder-blog-post.md) — must be public on builder.aws.com with "Agents for Humans" in the title |
 
 **AWS Builder ID:** `mohamedsorour1998@gmail.com`
 
