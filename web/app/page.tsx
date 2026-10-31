@@ -1,4 +1,4 @@
-import { listCases } from "@/lib/cases";
+import { readCaseload } from "@/lib/cases";
 import { requireSession } from "@/lib/session";
 import { CaseTable, statusLabel, summarise } from "@/components/case-table";
 import type { CaseSummary } from "@/lib/types";
@@ -17,9 +17,10 @@ export const dynamic = "force-dynamic";
 
 /** One block per household, in case order, coloured by verdict.
  *
- *  The caseload is a fixed twelve (`CASE_IDS` in `lib/cases.ts` — there is no
- *  index over "every case" and the SSR role holds no `dynamodb:Scan`), so the
- *  whole sweep fits on one line at a glance. That is what makes this worth
+ *  The caseload is the twelve seeded ids plus whatever the `CASE_DIRECTORY`
+ *  partition names (`listCaseIds` in `lib/cases.ts` — there is no index over
+ *  "every case" and the SSR role holds no `dynamodb:Scan`), so the whole sweep
+ *  fits on one line at a glance. That is what makes this worth
  *  drawing rather than decorative: the claim under the heading is a count, and
  *  this is the same claim as a shape, with each block linking to the case it
  *  stands for. */
@@ -56,13 +57,13 @@ export default async function Home() {
   // exists, and a forged one was measured serving this entire page. See
   // `lib/session.ts`.
   await requireSession();
-  const cases = await listCases();
+  const { cases, listed } = await readCaseload();
   const sweep = summarise(cases);
   return (
     <section className="space-y-10">
       <header className="space-y-5">
         <p className="font-mono text-[0.6875rem] uppercase tracking-[0.12em] text-muted">
-          Today&apos;s sweep · {sweep.total} of 12 households read
+          Today&apos;s sweep · {sweep.total} of {listed} households read
         </p>
         {/* The one large type size in the application, on the one claim the
             whole system makes. */}

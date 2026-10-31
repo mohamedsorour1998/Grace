@@ -301,21 +301,33 @@ export async function listCaseIds(
   return [...ids].sort();
 }
 
-/** Every case the ledger knows about, for the sweep summary. */
-export async function listCases(client: DynamoDBClient = defaultClient()): Promise<CaseSummary[]> {
+/** The caseload as read, and how many households the directory listed.
+ *
+ *  `listed` is the denominator `/` prints ("12 of 13 households read"). It used
+ *  to be a constant 12 in the markup, which a household added through `/new`
+ *  made false; and `cases` alone cannot supply it, because a case whose read
+ *  fails is dropped from `cases` rather than reported. */
+export async function readCaseload(
+  client: DynamoDBClient = defaultClient(),
+): Promise<{ cases: CaseSummary[]; listed: number }> {
   // Read each case rather than merging `listQueue` with a per-case pass. One
   // source means `filed`, `program`, and `deadline` are measured the same way
-  // for all twelve, and the 9-acted/3-escalated split on `/` is derived from
+  // for every case, and the 9-acted/3-escalated split on `/` is derived from
   // the ledger — which is what hard rule 6 is actually about. Concurrent
-  // because twelve sequential round trips is twelve times the page latency for
-  // no benefit; the reads are independent.
-  const details = await Promise.all(
-    (await listCaseIds(client)).map(id => readCase(id, client)),
-  );
-  return details
+  // because sequential round trips multiply the page latency for no benefit;
+  // the reads are independent.
+  const ids = await listCaseIds(client);
+  const details = await Promise.all(ids.map(id => readCase(id, client)));
+  const cases = details
     .filter((d): d is CaseDetail => d !== null)
     .map(d => d.summary)
     .sort((a, b) => a.caseId.localeCompare(b.caseId));
+  return { cases, listed: ids.length };
+}
+
+/** Every case the ledger knows about, for the sweep summary. */
+export async function listCases(client: DynamoDBClient = defaultClient()): Promise<CaseSummary[]> {
+  return (await readCaseload(client)).cases;
 }
 
 /** One household: its ledger, its decisions, and what Grace concluded. */
