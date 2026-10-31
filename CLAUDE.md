@@ -1966,6 +1966,9 @@ See Appendix E of the plan for the full detail.
 
 Run `.venv/bin/python -m pytest` before claiming anything works.
 
+Tests that call real AWS services carry `@pytest.mark.live`. `pytest -m "not live"` is what CI
+runs, with no credentials; `--strict-markers` makes a misspelt marker a collection error.
+
 `grace/authority.py` is table-tested exhaustively — one case per gate condition, plus a
 multi-problem case, plus the fail-closed path. This is where a bug means a family loses
 coverage, so it is tested first and hardest.

@@ -281,6 +281,7 @@ def clean_case_run():
     return store, result
 
 
+@pytest.mark.live
 def test_every_ledger_entry_carries_a_trace_id(clean_case_run):
     """The key is present on every row a *real* run produces.
 
@@ -302,6 +303,7 @@ def test_every_ledger_entry_carries_a_trace_id(clean_case_run):
         ), (entry.kind, value)
 
 
+@pytest.mark.live
 def test_decides_tool_metrics_agree_with_its_ledger_tool_calls(clean_case_run):
     """The correlation this task exists to prove, scoped to the one node that
     has a `LedgerHook`.

@@ -61,7 +61,11 @@ packages = ["grace"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q"
+addopts = "-q --strict-markers"
+# CI runs `pytest -m "not live"` with no AWS credentials. `--strict-markers`
+# makes a misspelt marker a collection error rather than a test that silently
+# stops being deselected.
+markers = ["live: calls real AWS services (Bedrock, DynamoDB); deselected in CI with -m 'not live'"]
 
 [tool.ruff]
 line-length = 100
