@@ -220,6 +220,15 @@ def unowned_keys(existing: dict[str, str] | None) -> set[str]:
     }
 
 
+# The install step and the build cache, as the committed `amplify.yml` has them.
+# `--cache .npm --prefer-offline` with `.npm` cached is the shape AWS documents for
+# Next.js; caching `node_modules` instead buys nothing, because `npm ci` deletes
+# it. `tests/test_infra_amplify.py` asserts the committed file and `build_spec()`
+# parse to the same YAML, so the two cannot drift again.
+INSTALL_COMMAND = "npm ci --cache .npm --prefer-offline"
+CACHE_PATHS = (".next/cache/**/*", ".npm/**/*")
+
+
 def build_spec_commands() -> list[str]:
     """Every command the build runs, in order — so a test can assert both that
     the tests are among them and that they come *before* the build.
@@ -251,9 +260,9 @@ def build_spec_commands() -> list[str]:
         # Node before anything that uses Node. `nvm use` in preBuild is
         # documented to run *after* live package updates and to override them.
         f"nvm use {NODE_VERSION}",
-        "npm ci",
-        # Truncate before appending. Amplify caches `node_modules` between
-        # builds and `>>` appends, so a surviving file would leave two values
+        INSTALL_COMMAND,
+        # Truncate before appending. `>>` appends, so a file surviving from an
+        # earlier build (a cached or reused directory) would leave two values
         # for one variable — and dotenv keeps the first, so a rotated Cognito
         # client id would be ignored on every rebuild while the console showed
         # the new one.
@@ -293,8 +302,10 @@ def build_spec() -> str:
     `required-server-files.json`.
     """
     commands = build_spec_commands()
-    install_ends = commands.index("npm ci") + 1
+    install_ends = commands.index(INSTALL_COMMAND) + 1
     pre, rest = commands[:install_ends], commands[install_ends:]
+
+    cache = "\n".join(f"{' ' * 10}- {path}" for path in CACHE_PATHS)
 
     def block(items: list[str]) -> str:
         return "\n".join(f"{' ' * 12}- {_quote(c)}" for c in items)
@@ -316,7 +327,7 @@ applications:
           - '**/*'
       cache:
         paths:
-          - node_modules/**/*
+{cache}
 """
 
 
