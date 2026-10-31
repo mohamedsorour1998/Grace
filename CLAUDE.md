@@ -1985,8 +1985,8 @@ Trajectory evals (`evals/`) assert the gate ordering holds against real model ru
 
 ## Hackathon constraints
 
-- **Newly created work only.** No code from `OpenClaw`, `RosettaCloud`, `astrolabe`,
-  `TheAgentOrg`, or `AWS-Resource-Optimizer-Agent`. Patterns and hard-won API knowledge are
+- **Newly created work only.** No code from `OpenClaw`, `astrolabe`, `TheAgentOrg`,
+  `AWS-Resource-Optimizer-Agent`, or the author's other projects. Patterns and hard-won API knowledge are
   reused as *knowledge*; that reuse is disclosed in the README. Do not copy files in.
 - **MIT license** at repo root, visible in the GitHub About section. **Verified** —
   `gh repo view` reports `licenseInfo.key: "mit"` and `visibility: PUBLIC`.

@@ -394,7 +394,7 @@ class FakeRuntimeControl:
 
 def _other_projects(count: int) -> list[dict]:
     """The real neighbours: this account holds `theagentorg_*`,
-    `rosettaclaw_*`, and `rosettacloud_*` runtimes."""
+    `another_project_*`, and `other_project_*` runtimes."""
     return [
         {"agentRuntimeName": f"theagentorg_agent_{n}", "status": "READY",
          "agentRuntimeArn": f"arn:aws:bedrock-agentcore:us-east-1:1:runtime/other-{n}"}
@@ -442,7 +442,7 @@ def test_the_runtime_lookup_raises_when_no_grace_runtime_exists():
 
 def test_the_runtime_lookup_never_matches_another_projects_runtime():
     """`startswith` on a bare prefix is how a lookup picks up a neighbour. This
-    account really does hold `rosettacloud_education_memory` next to
+    account really does hold `other_project_memory` next to
     `..._v2`, which is the same collision one resource type over."""
     control = FakeRuntimeControl([
         {"agentRuntimeName": "graceful_other_thing", "status": "READY",
@@ -473,8 +473,8 @@ def test_provision_all_does_not_create_the_agentcore_runtime():
 NEIGHBOURS = (
     "theagentorg-shared-agentcore-runtime-role",
     "theagentorg_sre",
-    "rosettacloud-education-agent",
-    "rosettaclaw_paper",
+    "other-project-agent",
+    "another_project_paper",
     "bughunt-main",
     # The near-misses that a prefix check must still refuse: a `grace` that is
     # not `grace-`, and a name that merely contains it.
@@ -530,7 +530,7 @@ def _all_named_resources(clients: dict[str, FakeClient]) -> list[str]:
 
 def test_teardown_only_ever_names_grace_resources():
     """The single most important assertion in this file. This account holds
-    `theagentorg-*`, `rosettacloud-*`, `rosettaclaw_*`, and `bughunt-main`; a
+    `theagentorg-*`, `other-project-*`, `another_project_*`, and `bughunt-main`; a
     teardown that matched anything looser deletes another project's work, and
     that is the one failure here no re-run recovers from."""
     clients = _teardown_clients()

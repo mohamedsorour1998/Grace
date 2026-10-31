@@ -62,7 +62,7 @@ def runtime_arn(control_client=None) -> str:
         for runtime in response.get("agentRuntimes", []):
             name = str(runtime.get("agentRuntimeName", ""))
             # `startswith(_RUNTIME_PREFIX)` and not `startswith("grace")`: this
-            # account really does hold `rosettacloud_education_memory` beside
+            # account really does hold `other_project_memory` beside
             # `..._v2`, and a bare prefix would equally match a
             # `graceful_something` belonging to someone else.
             if not name.startswith(_RUNTIME_PREFIX):

@@ -74,7 +74,7 @@ under `tsc@7.0.2`.
 ### Cognito and Amplify
 
 ```text
-existing user pools : astrolabe-paper-auth, rosettaclaw-live-auth
+existing user pools : astrolabe-paper-auth, another-project-auth
 existing amplify apps: (none)
 CreateApp platform  : ['WEB', 'WEB_DYNAMIC', 'WEB_COMPUTE']
 CreateDeployment    : available

@@ -89,8 +89,8 @@ def _find_existing(client) -> str | None:
     `startswith(naming.MEMORY)` also matches `grace_household_memory_v2-...`, and
     handing back an unrelated resource's id would point Grace's whole recall path
     at it. Not hypothetical — this account already holds
-    `rosettacloud_education_memory-...` alongside
-    `rosettacloud_education_memory_v2-...`, which is precisely that collision.
+    `other_project_memory-...` alongside
+    `other_project_memory_v2-...`, which is precisely that collision.
     """
     token: str | None = None
     while True:
