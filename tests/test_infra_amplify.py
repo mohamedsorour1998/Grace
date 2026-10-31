@@ -1201,7 +1201,7 @@ def test_no_household_identity_appears_anywhere_in_this_module():
     source = inspect.getsource(provision_amplify)
     names = (
         "Mensah|Rivera|Okonkwo|Fitzgerald|Yamamoto|Nakamura|Delacroix|"
-        "Abubakar|Silva|Petrov|Haddad|Nguyen"
+        "Abubakar|Silva|Petrov|Haddad|Nguyen|Torres|Abebe|Kowalski"
     ).split("|")
     for name in names:
         assert name not in source, name
