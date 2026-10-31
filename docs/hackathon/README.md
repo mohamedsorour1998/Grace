@@ -25,9 +25,9 @@ time of writing. The first part was moved from `CLAUDE.md` on 2026-10-31, the ch
 
 ### Hackathon constraints
 
-- **Newly created work only.** No code from `OpenClaw`, `astrolabe`, `TheAgentOrg`,
-  `AWS-Resource-Optimizer-Agent`, or the author's other projects. Patterns and hard-won API knowledge are
-  reused as *knowledge*; that reuse is disclosed in the README. Do not copy files in.
+- **Newly created work only.** No code from any of the author's earlier projects. Patterns and
+  hard-won API knowledge are reused as *knowledge*; that reuse is disclosed in the README. Do not copy
+  files in.
 - **MIT license** at repo root, visible in the GitHub About section. **Verified** —
   `gh repo view` reports `licenseInfo.key: "mit"` and `visibility: PUBLIC`.
 - Required at submission: public repo, README, architecture diagram, ≤5-minute demo video

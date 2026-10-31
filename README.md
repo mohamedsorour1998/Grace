@@ -177,8 +177,10 @@ All three Strands multi-agent patterns, each where it is actually the right tool
 **Graph** — the deterministic spine.
 
 ```text
-intake → documents → eligibility(Swarm) → decide ─┬─(gate passes)→ act
-                                                  └─(else)───────→ escalate
+intake → documents → deliberate(Swarm) → decide
+          └── the swarm runs only when the gate reports an income, size, or
+              source-conflict question; decide alone holds the action tools,
+              and the gate decides whether each call proceeds or escalates
 ```
 
 Deadline math is a **tool, not an agent**. Deterministic work does not need a model.
@@ -204,7 +206,8 @@ behind the gate. On the deployed system it writes to `c-010` in Spanish.
 
 ### The ledger
 
-Hooks append every node transition and tool call to a per-case ledger. In a benefits context
+A hook on `decide` appends every tool call and its result to a per-case ledger, and the action
+tools append what Grace did — a renewal filed, a message sent, an escalation. In a benefits context
 an audit trail is a requirement, not a feature — and it is also how you can see the autonomy
 claim is real: nine cases handled alone, three escalated, each with a reason.
 
@@ -375,9 +378,11 @@ renders the twelve seeded households and the headline **"9 handled alone, 3 wait
 `c-010 c-011 c-012`, and `/case/c-010` shows the gate's own reason,
 `missing_document: proof_of_residency`.
 
-The sign-in page is Cognito's classic hosted UI, styled with the dashboard's own palette
-(`infra/provision_cognito.py`'s `HOSTED_UI_CSS`, values taken from `web/app/globals.css`) so that
-signing in does not look like a different product than the app it guards. A test pins the two together,
+The sign-in page is Cognito's managed login (version 2) on Grace's own domain, branded with the
+dashboard's own palette, logo, and background (`infra/provision_cognito.py`, values taken from
+`web/app/globals.css`); the pool's prefix domain is kept as a fallback and runs the classic hosted
+UI with the same palette (`HOSTED_UI_CSS`). Either way, signing in does not look like a different
+product than the app it guards. A test pins the two together,
 because a colour changed in one place and not the other is invisible until someone views both pages.
 
 ### How a household gets into Grace

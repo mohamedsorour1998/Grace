@@ -295,7 +295,9 @@ the iteration cap trips first and detection never fires.
 
 ### Ledger
 
-Hooks append every node transition and tool call to a per-case ledger in DynamoDB. In a
+A `LedgerHook` on `decide` appends every tool call and its result, and the action tools append
+what Grace did (`renewal_submitted`, `renewal_already_filed`, `family_message_sent`,
+`escalated`), to a per-case ledger in DynamoDB. The swarm's own reads are not recorded. In a
 benefits context an audit trail is a requirement, not a feature — and this ledger is also
 the demo: nine cases handled alone, three escalated, each with a reason.
 
@@ -309,9 +311,10 @@ The ledger records *what Grace decided and did*, durably, in DynamoDB. Traces re
 it took and in what order*, sampled, in CloudWatch. A trace can be dropped by sampling; a
 ledger entry cannot. **Never move an eval assertion from the ledger to a span.**
 
-Every ledger entry carries the active OTEL trace ID (32 lowercase hex) so a DynamoDB row joins
-to its CloudWatch trace. The interesting test is that the two agree: a tool in
-`GraphResult.execution_order` with no ledger entry means a tool ran without being logged.
+Every ledger entry has a `trace_id` field for the active OTEL trace ID (32 lowercase hex), so that
+a DynamoDB row can join to its CloudWatch trace; on the deployed runtime the value is `NULL`
+(below). The interesting test is that the two agree: a tool in `GraphResult.execution_order`
+with no ledger entry means a tool ran without being logged.
 
 The original design also attached `grace.*` attributes via `trace_attributes=` and named a
 Transaction Search query on `grace.gate_decision` as the demo's evidence. Neither exists:
