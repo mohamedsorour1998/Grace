@@ -10,8 +10,9 @@ Grace is an AI agent that watches every family's benefit-renewal deadline, files
 that are unambiguous, chases the one missing document in the family's own language — and wakes
 a human caseworker only when eligibility is genuinely in doubt.
 
-Built with the [Strands Agents SDK](https://strandsagents.com) and Amazon Bedrock AgentCore
-for the **AWS Agents for Humans Hackathon** (Good Neighbor track).
+Built with the [Strands Agents SDK](https://strandsagents.com) and Amazon Bedrock AgentCore.
+Open source under the MIT licence; it began as an entry to the AWS Agents for Humans Hackathon
+([history](#history)).
 
 > **Status: deployed and running on AWS.** A scheduled sweep of the twelve seeded synthetic households reports
 > **9 filed autonomously, 3 escalated to a human**, confirmed from DynamoDB rather than from a log
@@ -19,8 +20,7 @@ for the **AWS Agents for Humans Hackathon** (Good Neighbor track).
 > queue and lets a human decide — and approving the household with a missing document still files
 > nothing. See [deployed verification](docs/evidence/deployed-verification.md) and
 > [dashboard verification](docs/evidence/dashboard-verification.md) for the evidence, including the parts that
-> did not work. **The demo video is not yet recorded**; see
-> [still outstanding](#still-outstanding-for-submission).
+> did not work.
 
 ---
 
@@ -133,6 +133,15 @@ An uncited number that decides whether a family keeps coverage is indistinguisha
 invented one, and `load_pack` refuses a malformed `sources` block with the same
 `InvalidRulePack` it raises for every other malformed field.
 
+## The twelve-household demonstration
+
+`fixtures/households.yaml` holds twelve synthetic households, and the split is the claim: **nine
+are clean and Grace files them alone; three must escalate, each for a different reason** —
+`c-010` is missing a document, `c-011` reports a material income change, and `c-012` has two
+sources that disagree. If a clean case escalates the gate is too strict; if one of those three
+acts it is too loose. Every date is evaluated against a pinned `today` of 2026-10-01, so the
+demonstration does not drift as the calendar moves.
+
 ---
 
 ## How it works
@@ -158,7 +167,7 @@ supports and the evidence for each. Rendered as
 The agent is a capability inside the system, not the backend. Step Functions owns retries and
 workflow durability so the agent doesn't have to, and the dashboard never talks to the runtime
 directly. AgentCore Gateway would sit alongside Memory here for rule packs and document
-retrieval; it is [deferred](#what-shipped-and-what-did-not), and rule packs are read from
+retrieval; it is [deferred](#known-limitations), and rule packs are read from
 version-controlled YAML in the meantime.
 
 ### The agent
@@ -318,6 +327,41 @@ row cannot. The reasoning is recorded in full in
 
 ---
 
+## Quick start
+
+Python 3.12 and [uv](https://docs.astral.sh/uv/). The tests need no AWS account:
+
+```bash
+uv sync --extra dev
+.venv/bin/python -m pytest -m "not live"      # tests marked `live` call real AWS services
+```
+
+A local end-to-end sweep of the twelve households calls Amazon Bedrock, so it needs AWS
+credentials with Nova enabled in `us-east-1`:
+
+```bash
+.venv/bin/python -m grace.run sweep --auto escalate
+```
+
+The dashboard has its own toolchain (Node 22), and all four of its gates must pass:
+
+```bash
+cd web && npm ci && npm run typecheck && npm run lint && npm run test && npm run build
+```
+
+## Deploy
+
+- [docs/runbooks/deploy.md](docs/runbooks/deploy.md) — the agent on AgentCore Runtime and the
+  daily sweep (EventBridge, Step Functions, Lambda), with the CLI flags verified against the
+  installed tools.
+- [docs/runbooks/dashboard.md](docs/runbooks/dashboard.md) — the dashboard on Amplify, with
+  Cognito sign-in.
+
+`infra/provision_all.py` creates every AWS resource idempotently, and `infra/verify_deployed.py`
+is a read-only check that the deployed resources still match `infra/`.
+
+---
+
 ## The caseworker dashboard
 
 **[grace.rosettacloud.app](https://grace.rosettacloud.app)** — Next.js on Amplify SSR
@@ -346,7 +390,7 @@ escalates it with a reason.
 **The form collects no household identity — no name, no phone number, no address — and that absence is
 the design.** An intake form is exactly where identity feels natural to collect, and `read_case`
 returning `display_name` is precisely how a household surname reached CloudWatch (see
-[what did not work](#what-shipped-and-what-did-not)). Grace does not need to know who a family is in
+[what did not work](#known-limitations)). Grace does not need to know who a family is in
 order to know whether their paperwork is complete; a real deployment's identity stays in the system of
 record that referred the household, keyed by case id. `web/lib/intake.ts` refuses any identity-shaped
 field **and** any field it does not recognise — an allowlist, so the guard cannot be walked around with
@@ -470,46 +514,6 @@ being compiled into the image. The seeder never overwrites: `create_case` puts e
 `attribute_not_exists(sk)`, and `--verify` reads every row back and compares it to the fixture field by
 field rather than trusting that the write returned.
 
-## What shipped, and what did not
-
-Recorded as decisions rather than omissions.
-
-| Deferred | Why |
-|---|---|
-| **AgentCore Gateway** | Largest remaining chunk; outbound auth shape differs per target type, which is the most common deploy-day failure. The gate's `target___tool` prefix handling stays tested regardless. |
-| **An AgentCore Gateway JWT authorizer** | Distinct from the Cognito pool that *did* ship. The runtime stays IAM-authorised; a `customJWTAuthorizer` belongs with Gateway, above. |
-| **Real SMS** | Account is sandboxed: `MaxLimit: 1`, zero origination numbers, and sender-ID registration in the maintainer's country requires a letter of authorization, company registration, and a tax card. |
-| **Skills / progressive disclosure** | A prompt-size optimization. Grace's prompts are not the bottleneck. |
-| **`strands-agents-evals`** | The trajectory evals are ordinary pytest functions in `evals/` that read the ledger — the ground truth for what executed, which a transcript-based eval would miss. The package was not adopted because it depends on `strands-agents-tools`: 25 packages including `slack-bolt` and `pillow` that Grace never imports. |
-| **Bedrock Guardrails** | Span redaction already covers the export path that matters, and every household is synthetic, so PII anonymization would protect nothing today. |
-| **CloudWatch trace correlation** | Every ledger row carries a `trace_id` key whose value is `NULL`; Runtime injects the OTEL variables without installing an in-process tracer provider, so zero spans exist. The fix requires a package this project refuses. |
-
-### Still outstanding for submission
-
-**The ≤5-minute demo video does not exist.** It is a hard requirement and no part of the build produces
-it. Nothing in this README should be read as saying the submission is complete.
-
-| Required artifact | State |
-|---|---|
-| Project built with the required tools | Present — Strands Agents SDK, Amazon Bedrock (Nova only), AgentCore Runtime + Memory, deployed on AWS |
-| Text description of features and functionality | This README, plus [docs/evidence/dashboard-verification.md](docs/evidence/dashboard-verification.md) and [docs/evidence/deployed-verification.md](docs/evidence/deployed-verification.md) for the evidence |
-| Public code repository | Present — [`mohamedsorour1998/Grace`](https://github.com/mohamedsorour1998/Grace) |
-| MIT license, visible in the About section | Present — [LICENSE](LICENSE), detected by GitHub as MIT |
-| README | This file |
-| Architecture diagram | [`docs/architecture.md`](docs/architecture.md) — Mermaid, renders natively on GitHub, and the authoritative copy. [`docs/architecture.png`](docs/architecture.png) is a rendered convenience copy that lags it. |
-| AWS Builder ID | **mohamedsorour1998@gmail.com** — the Devpost form asks for the email used to create the Builder ID |
-| Live demo link *(optional, scores better)* | Present — **[grace.rosettacloud.app](https://grace.rosettacloud.app)** |
-| **≤5-minute demo video** | **Not recorded. Outstanding.** The script, shot list, and figures are ready in [docs/hackathon/demo-video-handout.md](docs/hackathon/demo-video-handout.md) — must cover the problem, who it is for, why it matters, and a demonstration; uploaded publicly to YouTube or Vimeo |
-| **builder.aws blog post** *(optional, bonus points)* | **Not published. Outstanding.** Drafted in [docs/hackathon/builder-blog-post.md](docs/hackathon/builder-blog-post.md) — must be public on builder.aws.com with "Agents for Humans" in the title |
-
-**AWS Builder ID:** `mohamedsorour1998@gmail.com`
-
-Both remaining artifacts are drafted rather than done. Each carries
-`<replace this text by a screenshot of …>` markers where a capture belongs, so the writing is finished
-and only the recording and the screenshots remain.
-
----
-
 ## Repository layout
 
 ```text
@@ -536,8 +540,44 @@ web/                  # Next.js caseworker dashboard (Amplify SSR)
 ├── lib/cognito.ts     #   ID-token verification: signature, iss, aud, exp, token_use, role
 ├── lib/decide.ts      #   records the decision, then re-invokes so the gate re-runs
 └── app/               #   sweep · queue · one case's audit trail
-docs/                 # design specs, plans, deploy runbook, verification evidence
+scripts/              # content_check.sh — keeps named words out of public text
+docs/                 # runbooks, evidence, lessons, the hackathon record, and dated designs and plans
 ```
+
+## Documentation
+
+[docs/README.md](docs/README.md) indexes everything: runbooks, deployed evidence, the lessons each
+defect taught, and every design and plan as a dated snapshot.
+
+---
+
+## Known limitations
+
+The deferrals are decisions rather than omissions:
+
+| Deferred | Why |
+|---|---|
+| **AgentCore Gateway** | Largest remaining chunk; outbound auth shape differs per target type, which is the most common deploy-day failure. The gate's `target___tool` prefix handling stays tested regardless. |
+| **An AgentCore Gateway JWT authorizer** | Distinct from the Cognito pool that *did* ship. The runtime stays IAM-authorised; a `customJWTAuthorizer` belongs with Gateway, above. |
+| **Real SMS** | Account is sandboxed: `MaxLimit: 1`, zero origination numbers, and sender-ID registration in the maintainer's country requires a letter of authorization, company registration, and a tax card. |
+| **Skills / progressive disclosure** | A prompt-size optimization. Grace's prompts are not the bottleneck. |
+| **`strands-agents-evals`** | The trajectory evals are ordinary pytest functions in `evals/` that read the ledger — the ground truth for what executed, which a transcript-based eval would miss. The package was not adopted because it depends on `strands-agents-tools`: 25 packages including `slack-bolt` and `pillow` that Grace never imports. |
+| **Bedrock Guardrails** | Span redaction already covers the export path that matters, and every household is synthetic, so PII anonymization would protect nothing today. |
+| **CloudWatch trace correlation** | Every ledger row carries a `trace_id` key whose value is `NULL`; Runtime injects the OTEL variables without installing an in-process tracer provider, so zero spans exist. The fix requires a package this project refuses. |
+
+And two gaps that are not decisions, recorded so nobody mistakes them for features:
+
+- **A household that ever escalated keeps the `escalated` status on the dashboard**, even after a
+  later run files its renewal, because `web/lib/cases.ts` checks for a pending escalation before it
+  checks for a filing.
+- **The escalation alarm notifies no one.** `grace-escalations-below-expected` changes state in
+  CloudWatch, but it has no `AlarmActions`, so someone has to look.
+
+## Security and contributing
+
+Report a vulnerability privately — see [SECURITY.md](SECURITY.md). To work on Grace, start with
+[CONTRIBUTING.md](CONTRIBUTING.md); the rules every change must keep are in `CLAUDE.md` under
+"Hard rules".
 
 ---
 
@@ -560,3 +600,12 @@ dependencies under their own licenses.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+## History
+
+Grace was built for the AWS Agents for Humans Hackathon (Good Neighbor track) and submitted on
+2026-09-14. The repository as it stood at the deadline is tagged
+[`v0.1.0`](https://github.com/mohamedsorour1998/Grace/releases/tag/v0.1.0); the submission
+material is in [docs/hackathon/](docs/hackathon/README.md).
