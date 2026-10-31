@@ -103,3 +103,71 @@ def test_an_empty_denylist_refuses(tmp_path):
     repo = _repo(tmp_path, {"a.md": "ZebraCorp\n"})
     out = _run(repo, _list(tmp_path, "allow:([a-z0-9-]+\\.)*zebracorp\\.example\n\n"))
     assert out.returncode == 2
+
+
+# --- Ways the check could report clean while checking nothing (review, 2026-11-01) ---
+
+
+def test_a_malformed_allow_pattern_refuses(tmp_path):
+    # An unbalanced `(` used to make sed fail on every file, and the `|| true`
+    # meant for grep's no-match status swallowed it: exit 0 with the word present.
+    repo = _repo(tmp_path, {"a.md": "ZebraCorp\n"})
+    out = _run(repo, _list(tmp_path, "deny:zebracorp\nallow:(unclosed\n"))
+    assert out.returncode == 2
+    assert "unclosed" not in out.stdout + out.stderr  # never echo the list into a log
+
+
+def test_an_allow_pattern_may_contain_a_hash(tmp_path):
+    repo = _repo(tmp_path, {"a.md": "see zebracorp#anchor here\nZebraCorp\n"})
+    out = _run(repo, _list(tmp_path, "deny:zebracorp\nallow:zebracorp#anchor\n"))
+    assert out.returncode == 1
+    assert out.stdout.split() == ["a.md:2"]
+
+
+def test_a_deny_line_with_trailing_space_or_crlf_still_matches(tmp_path):
+    # A list pasted into a CI secret easily gains a trailing space or `\r`.
+    repo = _repo(tmp_path, {"a.md": "memory = 'zebracorp_x'\n"})
+    for text in ("deny:zebracorp \n", "deny:zebracorp\r\n", "deny: zebracorp\n"):
+        out = _run(repo, _list(tmp_path, text))
+        assert out.returncode == 1, repr(text)
+        assert "a.md:1" in out.stdout
+
+
+def test_a_last_line_without_a_newline_is_read(tmp_path):
+    repo = _repo(tmp_path, {"a.md": "ZebraCorp\n"})
+    out = _run(repo, _list(tmp_path, "allow:nothing\ndeny:zebracorp"))
+    assert out.returncode == 1
+
+
+def test_a_file_named_dash_does_not_hide_later_files(tmp_path):
+    # Inner commands used to read the loop's own stdin, so a tracked file named
+    # `-` swallowed the rest of the file list.
+    repo = _repo(tmp_path, {"-": "clean\n", "z.md": "ZebraCorp\n"})
+    out = _run(repo, _list(tmp_path, "deny:zebracorp\n"))
+    assert out.returncode == 1
+    assert "z.md:1" in out.stdout
+
+
+def test_a_file_whose_name_starts_with_a_dash_is_scanned(tmp_path):
+    repo = _repo(tmp_path, {"-x.md": "ZebraCorp\n"})
+    out = _run(repo, _list(tmp_path, "deny:zebracorp\n"))
+    assert out.returncode == 1
+    assert "-x.md:1" in out.stdout
+
+
+def test_running_from_a_subdirectory_scans_the_whole_repository(tmp_path):
+    repo = _repo(tmp_path, {"a.md": "ZebraCorp\n", "sub/b.md": "clean\n",
+                            "docs/superpowers/old.md": "ZebraCorp\n"})
+    denylist = _list(tmp_path, "deny:zebracorp\n")
+    out = subprocess.run(["bash", str(SCRIPT), str(denylist)], cwd=repo / "sub",
+                         capture_output=True, text=True)
+    assert out.returncode == 1
+    assert out.stdout.split() == ["a.md:1"]  # history still exempt
+
+
+def test_a_relative_denylist_path_works_from_a_subdirectory(tmp_path):
+    repo = _repo(tmp_path, {"a.md": "ZebraCorp\n", "sub/b.md": "clean\n"})
+    (repo / "sub" / "list").write_text("deny:zebracorp\n")
+    out = subprocess.run(["bash", str(SCRIPT), "list"], cwd=repo / "sub",
+                         capture_output=True, text=True)
+    assert out.returncode == 1
