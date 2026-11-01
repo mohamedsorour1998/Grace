@@ -778,7 +778,7 @@ def ensure_custom_domain(client, pool_id: str, certificate_arn: str) -> str:
 
     if existing.get("UserPoolId"):
         # **Refuse rather than converge if it belongs to somewhere else.** This
-        # account holds `astrolabe-paper-auth` and `another-project-auth`, and
+        # account holds `other-project-auth` and `another-project-auth`, and
         # `UpdateUserPoolDomain` against another project's pool would repoint
         # that project's sign-in at Grace's certificate.
         if existing["UserPoolId"] != pool_id:

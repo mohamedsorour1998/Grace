@@ -4,6 +4,8 @@ Grace was built for the **AWS Agents for Humans Hackathon** (Good Neighbor track
 2026-09-14; the deadline was 2026-09-14 17:00 PT. The repository as it stood on GitHub at the
 deadline is tagged [`v0.1.0`](https://github.com/mohamedsorour1998/Grace/releases/tag/v0.1.0).
 
+The demo video is on YouTube: [Agents for Humans: Grace](https://www.youtube.com/watch?v=QBmEfiyfAeQ).
+
 The build followed the competition's rules: newly created work only, with design patterns
 carried over from the author's earlier projects as knowledge and disclosed in the README's
 "Prior work and disclosure" section; MIT licence; and a public repository.

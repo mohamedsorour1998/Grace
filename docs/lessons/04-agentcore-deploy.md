@@ -135,7 +135,7 @@ profiles.
 **A Container-build runtime needs ECR pull, or it cannot start.** `ecr:GetAuthorizationToken` is
 account-level and must be `Resource: "*"`; the layer-pull actions can be scoped to the account's
 registry. Runtime also creates its own log group under `/aws/bedrock-agentcore/`, so the role needs
-`CreateLogGroup` on that path. **`theagentorg-shared-agentcore-runtime-role` in this account is a
+`CreateLogGroup` on that path. **Another project's shared AgentCore runtime role in this account is a
 known-working reference** for what Runtime actually requires — check it before inventing
 permissions, and add only what is missing.
 

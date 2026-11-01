@@ -538,7 +538,7 @@ def test_provision_reads_every_page_before_deciding_to_create():
     client = FakeMemoryControl(
         existing=[
             {"id": "other_project_memory-evO1o3F0jN", "status": "ACTIVE"},
-            {"id": "theagentorg_planner_mem-FM9Dgv31gr", "status": "ACTIVE"},
+            {"id": "third_project_planner_mem-FM9Dgv31gr", "status": "ACTIVE"},
             {"id": GRACE_ID, "status": "ACTIVE"},
         ]
     )

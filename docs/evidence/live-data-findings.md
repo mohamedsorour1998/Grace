@@ -149,7 +149,7 @@ PY
 
 Throwaway pools were created and deleted on 2026-09-04 to check Task 4's draft before writing it. All
 were confirmed gone afterwards — `list_user_pools` shows only the two unrelated projects
-(`astrolabe-paper-auth`, `another-project-auth`). **Seven assumptions held and two were wrong**, and
+(two pools belonging to other projects, names withheld). **Seven assumptions held and two were wrong**, and
 one of the two had been recorded here as a *confirmed* finding when it was in fact backwards; see the
 `WriteAttributes` section below.
 
