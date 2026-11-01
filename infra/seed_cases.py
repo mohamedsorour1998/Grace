@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 import boto3
@@ -60,6 +60,47 @@ def _comparable(case: Case) -> Case:
             case.household, household_id="", display_name="", phone=""
         ),
     )
+
+
+def _differing_fields(stored: Case, expected: Case) -> list[str]:
+    """The names of the fields that differ, never their values: a value can be
+    free text that quotes a household (hard rule 9)."""
+    names = [f.name for f in fields(Case) if f.name != "household" and getattr(stored, f.name) != getattr(expected, f.name)]
+    names += [
+        f"household.{f.name}"
+        for f in fields(type(expected.household))
+        if getattr(stored.household, f.name) != getattr(expected.household, f.name)
+    ]
+    return names
+
+
+def validate(cases: list[Case]) -> list[str]:
+    """Every reason not to write this file, found before the first write.
+
+    "The loader accepted it" is not enough: a document id YAML read as a number
+    loads, writes, and then cannot be read back — a row the deployed runtime's
+    role cannot delete, reported as "already present" on every later run. So
+    each case is round-tripped through the same `to_item`/`from_item` the store
+    uses, and must come back equal; and a case id may appear once.
+    """
+    from grace.cases import record  # local: keeps this module's import graph flat
+
+    problems: list[str] = []
+    seen: set[str] = set()
+    for case in cases:
+        if case.case_id in seen:
+            problems.append(f"{case.case_id}: appears more than once")
+            continue
+        seen.add(case.case_id)
+        try:
+            back = record.from_item(record.to_item(case))
+        except Exception as exc:  # noqa: BLE001 — refused, with the type only
+            problems.append(f"{case.case_id}: would not read back from the table ({type(exc).__name__})")
+            continue
+        differ = _differing_fields(back, _comparable(case))
+        if differ:
+            problems.append(f"{case.case_id}: would read back changed in {', '.join(differ)}")
+    return problems
 
 
 def seed(store: DynamoDBCaseStore, cases: list[Case]) -> tuple[list[str], list[str]]:
@@ -95,12 +136,13 @@ def verify(store: DynamoDBCaseStore, cases: list[Case]) -> list[str]:
             continue
         try:
             stored = record.from_item(item)
-        except record.InvalidCaseRecord as exc:
-            wrong.append(f"{case.case_id}: record does not parse: {exc}")
+        except record.InvalidCaseRecord:
+            wrong.append(f"{case.case_id}: record does not parse")
             continue
         expected = _comparable(case)
         if stored != expected:
-            wrong.append(f"{case.case_id}: stored {stored!r} != fixture {expected!r}")
+            # Field names only: the records themselves can carry free text.
+            wrong.append(f"{case.case_id}: stored record differs in {', '.join(_differing_fields(stored, expected))}")
     return wrong
 
 
@@ -150,6 +192,9 @@ def main(argv: list[str] | None = None) -> int:
         return _refuse(args.file, "not valid YAML" + (f" (line {mark.line + 1})" if mark else ""))
     except (KeyError, TypeError, ValueError) as exc:
         return _refuse(args.file, f"not in the households shape ({type(exc).__name__})")
+    problems = validate(cases)
+    if problems:
+        return _refuse(args.file, "; ".join(problems))
     store = _build_store(args.table)
 
     if not args.verify:

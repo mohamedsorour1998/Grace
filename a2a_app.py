@@ -24,10 +24,14 @@ from __future__ import annotations
 
 import logging
 
+# Imported here, not only inside build_a2a_app, so every SDK logger exists
+# before `withhold_sdk_request_content` attaches its filter to them below.
+import a2a.server.apps  # noqa: F401
+import a2a.server.request_handlers  # noqa: F401
 from bedrock_agentcore.runtime import build_a2a_app, serve_a2a
 from bedrock_agentcore.runtime.a2a import A2A_CONTRACT_PORT
 
-from grace.a2a import CaseExecutor, build_agent_card
+from grace.a2a import CaseExecutor, build_agent_card, withhold_sdk_request_content
 from grace.observability import REDACTION_TOKEN, redaction_is_configured, setup_telemetry
 from infra import naming
 
@@ -48,6 +52,9 @@ naming.require_supported_region()
 # No-op on Runtime, which owns the tracer provider; local runs still export.
 setup_telemetry()
 
+# Hard rule 9: the SDK's own log lines quote request content. See grace/a2a.py.
+withhold_sdk_request_content()
+
 # The same address `serve_a2a` advertises, so a test of `build_app` sees the
 # card a real run serves.
 CARD_URL = f"http://localhost:{A2A_CONTRACT_PORT}/"
@@ -55,7 +62,9 @@ CARD_URL = f"http://localhost:{A2A_CONTRACT_PORT}/"
 
 def build_app(executor: CaseExecutor | None = None):
     """The ASGI app `main` serves, and the one the tests drive."""
-    return build_a2a_app(executor or CaseExecutor(), build_agent_card(CARD_URL))
+    app = build_a2a_app(executor or CaseExecutor(), build_agent_card(CARD_URL))
+    withhold_sdk_request_content()  # again, for any logger building the app created
+    return app
 
 
 def main() -> None:

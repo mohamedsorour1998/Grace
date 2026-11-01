@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -87,3 +88,15 @@ def test_the_runtime_policy_defaults_are_unchanged():
     assert provision_iam.runtime_policy("123456789012") == provision_iam.runtime_policy(
         "123456789012", region=naming.REGION, table=naming.TABLE
     )
+
+
+def test_the_runtime_manifest_names_the_table():
+    """The deployed runtime reads `GRACE_TABLE_NAME` from its own environment,
+    which `agentcore/agentcore.json` sets — not from the shell that provisioned
+    the table, IAM, and Step Functions. Without it a deployer's runtime falls
+    back to `grace-cases`, is denied on every read, and errors every household.
+    Run with the same `GRACE_TABLE_NAME` you deploy with, and this fails until
+    the manifest agrees."""
+    path = Path(__file__).resolve().parents[1] / "agentcore" / "agentcore.json"
+    env = {v["name"]: v["value"] for v in json.loads(path.read_text())["runtimes"][0]["envVars"]}
+    assert env.get("GRACE_TABLE_NAME") == naming.TABLE

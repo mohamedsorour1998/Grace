@@ -39,6 +39,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    # The suite imports grace.a2a, so the documented `uv sync --extra dev`
+    # must bring the A2A SDK too.
+    "grace[a2a]",
 ]
 # The A2A server (a2a_app.py, Dockerfile.a2a): the one dependency added after the
 # hackathon. bedrock-agentcore's own `a2a` extra, at the same exact version as the

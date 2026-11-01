@@ -521,6 +521,8 @@ a2a = [
     { name = "bedrock-agentcore", extra = ["a2a"] },
 ]
 dev = [
+    { name = "a2a-sdk", extra = ["http-server"] },
+    { name = "bedrock-agentcore", extra = ["a2a"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -531,6 +533,7 @@ requires-dist = [
     { name = "bedrock-agentcore", specifier = "==1.23.0" },
     { name = "bedrock-agentcore", extras = ["a2a"], marker = "extra == 'a2a'", specifier = "==1.23.0" },
     { name = "boto3", specifier = ">=1.43" },
+    { name = "grace", extras = ["a2a"], marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "pyyaml", specifier = ">=6.0" },

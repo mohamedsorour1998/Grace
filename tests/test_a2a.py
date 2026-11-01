@@ -207,3 +207,32 @@ def test_the_card_names_grace_and_one_skill():
     assert [s.id for s in card.skills] == ["check-case"]
     example = json.loads(card.skills[0].examples[0])
     assert set(example) == {"case_id", "today"}
+
+
+# --- Pathological JSON (review, 2026-11-01) ------------------------------------
+
+
+def test_deeply_nested_json_is_refused_not_raised():
+    with pytest.raises(RequestError):
+        parse_request(message(text="[" * 100_000 + "]" * 100_000))
+
+
+def test_an_integer_too_long_to_parse_is_refused_not_raised():
+    # json.loads raises a plain ValueError past 4300 digits, not JSONDecodeError.
+    with pytest.raises(RequestError):
+        parse_request(message(text="1" * 5000))
+
+
+async def test_the_executor_answers_even_if_parsing_breaks(monkeypatch):
+    import grace.a2a as module
+
+    def broken(_message):
+        raise MemoryError("parser ran out of room")
+
+    monkeypatch.setattr(module, "parse_request", broken)
+    called: list[dict] = []
+    reply = await run(CaseExecutor(process=lambda p: called.append(p) or {}), message(data=GOOD))
+    data = reply_data(reply)
+    assert data["status"] == "error" and '"case_id"' in data["reason"]
+    assert "room" not in data["reason"]
+    assert called == []

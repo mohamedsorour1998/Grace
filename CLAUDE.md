@@ -294,7 +294,14 @@ AgentCore Gateway is deferred (`README.md` says why); `docs/architecture.md` has
 an A2A caller is not a caseworker, so `caseworker_approved` is refused like any unknown key —
 runs `process_case` on a worker thread so `/ping` stays live, and answers with one agent message.
 It makes the same two import-time refusals as `runtime_app.py`: redaction first, then region. CI
-builds, smoke-tests, and scans its arm64 image; it is not deployed to Runtime.
+builds, smoke-tests, and scans its arm64 image; it is not deployed to Runtime. The SDK's own log
+lines quote request content, so `withhold_sdk_request_content()` rewrites every `a2a.*` record.
+
+**Before the A2A image is ever deployed, decide who chooses `today`.** The caller does, today: a
+backdated `today` makes a stale document read as current and lets the gate pass a renewal it
+should escalate. The HTTP path has the same input, but only Step Functions calls it, with a
+pinned date; an A2A endpoint is meant for other agents. Bound it to the server's clock, or take it
+from the server, before exposing the endpoint — along with its inbound authorization.
 
 ### Agent structure — three multi-agent patterns, each where it fits
 

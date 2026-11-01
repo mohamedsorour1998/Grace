@@ -130,3 +130,19 @@ def test_the_a2a_image_matches_the_http_image():
     # removed from the final image rather than carried for nothing.
     uv_lines = [i for i, l in enumerate(a2a) if l.startswith("RUN ") and "uv " in l]
     assert "pip uninstall -y uv" in a2a[uv_lines[-1]]  # removed in the last step that uses it
+
+
+async def test_sdk_logs_never_quote_a_malformed_request(caplog):
+    # Hard rule 9. Measured 2026-11-01: the A2A SDK logs every request body at
+    # DEBUG and a validation failure's input at WARNING/ERROR, so a caller that
+    # put a name or a phone number in a malformed part had it written to the log.
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    malformed = {"kind": "data", "data": "The Example Household +15550001"}
+    async with _client() as client:
+        reply = await client.post("/", json=_send(malformed))
+    assert reply.status_code == 200
+    assert "withheld" in caplog.text  # the SDK did log, so the check below is not vacuous
+    assert "Example" not in caplog.text
+    assert "+1555" not in caplog.text

@@ -257,3 +257,47 @@ def test_the_output_names_case_ids_only(tmp_path, monkeypatch, capsys):
     text = out.out + out.err
     assert "c-901" in text
     assert "Example" not in text and "+1555" not in text and "15550009901" not in text
+
+
+# --- What "validated before writing" has to mean (review, 2026-11-01) ---------
+
+_DUPLICATE = _ONE + _ONE.split("cases:\n", 1)[1]
+
+# A document id YAML reads as an int: the loader accepts it, the write succeeds,
+# and the store then refuses the row it wrote — a row the runtime role cannot
+# delete, re-reported as "already present" on every later run.
+_UNREADABLE = _ONE.replace('{id: "proof_of_income"', "{id: 12345")
+
+
+def test_a_duplicate_case_id_writes_nothing(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "households.yaml"
+    path.write_text(_DUPLICATE)
+    fake = _patched(monkeypatch)
+    assert seed_cases.main(["--file", str(path), "--table", "grace-cases-test"]) == 1
+    assert fake.items == {}
+    err = capsys.readouterr().err
+    assert "c-901" in err and "more than once" in err
+
+
+def test_a_record_the_store_cannot_read_back_writes_nothing(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "households.yaml"
+    path.write_text(_UNREADABLE)
+    fake = _patched(monkeypatch)
+    assert seed_cases.main(["--file", str(path), "--table", "grace-cases-test"]) == 1
+    assert fake.items == {}
+    err = capsys.readouterr().err
+    assert "c-901" in err
+    assert "12345" not in err
+
+
+def test_a_verify_failure_names_fields_not_values(monkeypatch, capsys):
+    # Hard rule 9: the old message printed both whole records, including
+    # source_conflicts free text, which can quote a household.
+    fake = _patched(monkeypatch)
+    assert seed_cases.main(["--table", "grace-cases-test"]) == 0
+    fake.items[(naming.case_pk("c-012"), naming.RECORD_SK)]["size"] = {"N": "99"}
+    capsys.readouterr()
+    assert seed_cases.main(["--verify", "--table", "grace-cases-test"]) == 1
+    err = capsys.readouterr().err
+    assert "c-012" in err and "size" in err
+    assert "Case(" not in err and "Household" not in err

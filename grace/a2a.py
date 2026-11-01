@@ -88,8 +88,11 @@ def parse_request(message: Message | None) -> dict[str, str]:
             raise RequestError("The message carries no data part and no text")
         try:
             data = json.loads(text)
-        except json.JSONDecodeError:
-            raise RequestError("The text is not JSON") from None
+        except (ValueError, RecursionError):
+            # Not JSONDecodeError alone: past 4300 digits an integer raises a
+            # plain ValueError, and deep nesting raises RecursionError. Catching
+            # only the error seen first is how `check_window` failed open once.
+            raise RequestError("The text is not JSON Grace can read") from None
     if not isinstance(data, dict):
         raise RequestError("The request is not a JSON object")
     if set(data) != set(ALLOWED_KEYS):
@@ -107,6 +110,46 @@ def parse_request(message: Message | None) -> dict[str, str]:
     except ValueError:
         raise RequestError("today must be a real calendar date") from None
     return {"case_id": case_id, "today": today}
+
+
+class WithholdRequestContent(logging.Filter):
+    """Replace an A2A SDK log record's content with a fixed sentence.
+
+    Hard rule 9. The SDK logs every request body at DEBUG and a validation
+    failure's input at WARNING/ERROR (measured 2026-11-01), so whatever a caller
+    put in a request — a name, a phone number — would be written to the log.
+    The record keeps its level, its logger name, and its exception type, which
+    is enough to know something happened; its message, arguments, and traceback
+    (whose exception text can quote the request too) are dropped.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc_type = record.exc_info[0].__name__ if record.exc_info and record.exc_info[0] else None
+        record.msg = (
+            f"{record.levelname} from the A2A SDK; detail withheld because it can quote the request"
+            + (f" ({exc_type})" if exc_type else "")
+        )
+        record.args = None
+        record.exc_info = None
+        record.exc_text = None
+        record.stack_info = None
+        return True
+
+
+def withhold_sdk_request_content() -> int:
+    """Attach `WithholdRequestContent` to every `a2a` logger that exists now.
+
+    On the loggers themselves rather than on a handler, so it holds for any
+    handler attached later (a test's capture handler, a runtime's log shipper).
+    A logger filter applies only to records that logger creates, so it goes on
+    each one; call this after the SDK modules are imported. Returns how many
+    loggers carry it, so a caller can tell it found some."""
+    names = ["a2a", *(n for n in list(logging.root.manager.loggerDict) if n.startswith("a2a."))]
+    for name in names:
+        target = logging.getLogger(name)
+        if not any(isinstance(f, WithholdRequestContent) for f in target.filters):
+            target.addFilter(WithholdRequestContent())
+    return len(names)
 
 
 class CaseExecutor(AgentExecutor):
@@ -134,6 +177,13 @@ class CaseExecutor(AgentExecutor):
             await event_queue.enqueue_event(
                 _reply({"status": "error", "case_id": "", "reason": str(exc)}, context)
             )
+            return
+        except Exception as exc:  # noqa: BLE001 — never raise out of execute
+            # Whatever broke, the caller still gets the shape it should send; the
+            # exception's own text is not echoed (it may quote the request).
+            logger.error("A2A request could not be parsed (%s)", type(exc).__name__)
+            reason = str(RequestError("The request could not be read"))
+            await event_queue.enqueue_event(_reply({"status": "error", "case_id": "", "reason": reason}, context))
             return
         outcome = await self._run(payload)
         self._observe(outcome)
