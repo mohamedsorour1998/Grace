@@ -61,11 +61,16 @@ a2a = [
 # The a2a extra pulls these in transitively, and their newest releases were
 # younger than two weeks when it was added (2026-11-01). Each is held to its
 # newest release on or before 2026-10-17. Raise a cap only to a release at least
-# two weeks old. The A2A image installs from uv.lock, so these reach it too.
+# two weeks old -- EXCEPT a release that fixes a HIGH or CRITICAL finding of the
+# CI image scan, which is taken at once and recorded here:
+#   pyasn1 0.6.5 (2026-10-27): fixes four HIGH decoding CVEs in 0.6.4. Verified
+#   upstream: same maintainer as 0.6.3/0.6.4, five commits, all removing
+#   quadratic-time decoding. Drop this exception once it is two weeks old.
+# The A2A image installs from uv.lock, so these reach it too.
 constraint-dependencies = [
     "fastapi<=0.143.3",
     "google-api-core<=2.42.0",
-    "pyasn1<=0.6.4",
+    "pyasn1<=0.6.5",
 ]
 
 [project.scripts]

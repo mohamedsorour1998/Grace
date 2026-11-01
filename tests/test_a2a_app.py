@@ -125,3 +125,8 @@ def test_the_a2a_image_matches_the_http_image():
     # already carries the constrained versions.
     install = next(l for l in a2a if "--require-hashes" in l)
     assert "--no-config" in install
+    # uv builds the image and is not needed to run it. Measured in CI's third
+    # run: the scan flagged uv's own bundled CA certificates (CRITICAL), so it is
+    # removed from the final image rather than carried for nothing.
+    uv_lines = [i for i, l in enumerate(a2a) if l.startswith("RUN ") and "uv " in l]
+    assert "pip uninstall -y uv" in a2a[uv_lines[-1]]  # removed in the last step that uses it

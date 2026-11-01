@@ -179,8 +179,16 @@ and the range that extra accepts. Measured 2026-11-01, it adds **8** packages to
 (64 → 72): `a2a-sdk`, `annotated-doc`, `fastapi`, `google-api-core`, `google-auth`, `proto-plus`,
 `pyasn1`, `pyasn1-modules`. Three of those had releases younger than two weeks, so
 `[tool.uv] constraint-dependencies` holds `fastapi<=0.143.3`, `google-api-core<=2.42.0` and
-`pyasn1<=0.6.4` (each the newest release on or before 2026-10-17), and the A2A image installs from
-`uv.lock` so the holds reach the container.
+`pyasn1<=0.6.5` (each the newest release on or before 2026-10-17, except as below), and the A2A
+image installs from `uv.lock` so the holds reach the container.
+
+**A release that fixes a HIGH or CRITICAL finding of the CI image scan skips the two-week hold**,
+and each such exception is recorded in `pyproject.toml`. The first scan (2026-11-01) found six:
+`pyasn1` 0.6.4 (four HIGH, fixed in 0.6.5, five days old but verified as a narrow upstream fix),
+`certifi` 2026.7.22 (CRITICAL, fixed in 2026.10.18, which had just turned two weeks old), and
+`uv` 0.12.5's own CA bundle (CRITICAL) — removed from the A2A image after the build rather than
+upgraded, because uv builds the image and is never needed to run it. Never answer a finding with
+an ignore file.
 
 ### Verify the SDK, do not trust its docs
 
