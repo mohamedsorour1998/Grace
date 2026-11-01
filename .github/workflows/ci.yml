@@ -1,0 +1,121 @@
+# Grace's CI. Four jobs, each a required check on `main`:
+#
+#   python         the test suite with NO AWS credentials (`-m "not live"`)
+#   web            the dashboard's four gates; `build` is what Amplify runs
+#   a2a-image      the arm64 A2A image: build, smoke-run, and a CVE scan
+#   content-check  public text against the owner's word list (a secret)
+#
+# `tests/test_ci_workflow.py` asserts the properties below that fail silently if
+# edited away. Every action is pinned to the commit of a release at least two
+# weeks old, so a moved tag cannot change what runs here; the tag is the comment.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # No credentials exist here; this stops boto3 waiting on the instance
+      # metadata service before it gives up looking for them.
+      AWS_EC2_METADATA_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
+        with:
+          version: "0.12.5"
+      - name: Install from the lock
+        run: uv sync --python 3.12 --extra dev --extra a2a --locked
+      - name: Tests (live ones need AWS and are deselected)
+        run: uv run --no-sync pytest -m "not live"
+      - name: Evals still import (they run against real Bedrock, not here)
+        run: uv run --no-sync pytest evals/ --collect-only -q
+
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      # Builds with no environment variables: every page that reads
+      # configuration is force-dynamic, so nothing is read at build time.
+      - run: npm run build
+
+  a2a-image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    env:
+      # The scanner is a pinned release, checked against a hash recorded here
+      # (not one downloaded beside it, which would only catch corruption).
+      TRIVY_VERSION: "0.76.0"
+      TRIVY_SHA256: "aab21e677a7b7071fc79f1711480840754c18a1b9d9cefa7ccd06af63a0e8f4c"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the A2A image (linux/arm64, natively)
+        run: docker build -f Dockerfile.a2a -t grace-a2a:ci .
+      - name: Smoke-run it (no AWS needed for ping, the card, or a malformed request)
+        run: |
+          docker run -d --name a2a -p 9000:9000 -e GRACE_STORE=memory -e AWS_REGION=us-east-1 grace-a2a:ci
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://localhost:9000/ping
+          curl -fsS http://localhost:9000/.well-known/agent-card.json | jq -e '.name == "Grace"'
+          body='{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","messageId":"m-1","kind":"message","parts":[{"kind":"text","text":"not json"}]}}}'
+          code=$(curl -s -o reply.json -w '%{http_code}' -X POST http://localhost:9000/ \
+            -H 'content-type: application/json' -d "$body")
+          test "$code" = "200"
+          grep -q 'case_id' reply.json
+      - name: Container logs
+        if: failure()
+        run: docker logs a2a || true
+      - name: Install Trivy (pinned and hash-checked)
+        run: |
+          curl -fsSL -o trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tgz" | sha256sum -c -
+          tar -xzf trivy.tgz trivy
+      - name: Scan the image (a finding is fixed by upgrading, never ignored)
+        run: ./trivy image --severity HIGH,CRITICAL --exit-code 1 --ignore-unfixed --no-progress grace-a2a:ci
+
+  content-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Public text against the owner's word list
+        env:
+          # A missing or empty secret makes the script exit 2, so this job fails
+          # rather than passing blind. (Pull requests from forks see no secrets.)
+          CONTENT_DENYLIST: ${{ secrets.CONTENT_DENYLIST }}
+        run: |
+          printf '%s\n' "$CONTENT_DENYLIST" > "$RUNNER_TEMP/denylist"
+          scripts/content_check.sh "$RUNNER_TEMP/denylist"
