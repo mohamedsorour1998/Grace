@@ -111,7 +111,7 @@ def trust_policy(purpose: str, account_id: str) -> dict:
     }
 
 
-def runtime_policy(account_id: str) -> dict:
+def runtime_policy(account_id: str, region: str | None = None, table: str | None = None) -> dict:
     """What the deployed runtime may do.
 
     Read the `Deny` first: `GetWorkloadAccessTokenForUserId` performs no
@@ -126,7 +126,10 @@ def runtime_policy(account_id: str) -> dict:
     together, so copying it in later is the realistic way the unsafe path comes
     back — and the Deny is what makes that copy harmless.
     """
-    region = naming.REGION
+    # Parameters so a deploy into another account or region gets its own ARNs;
+    # the defaults keep every existing caller's policy byte-for-byte the same.
+    region = naming.REGION if region is None else region
+    table = naming.TABLE if table is None else table
     directory = (
         f"arn:aws:bedrock-agentcore:{region}:{account_id}:"
         "workload-identity-directory/default"
@@ -204,8 +207,8 @@ def runtime_policy(account_id: str) -> dict:
                     "dynamodb:Query",
                 ],
                 "Resource": [
-                    f"arn:aws:dynamodb:{region}:{account_id}:table/{naming.TABLE}",
-                    f"arn:aws:dynamodb:{region}:{account_id}:table/{naming.TABLE}/index/*",
+                    f"arn:aws:dynamodb:{region}:{account_id}:table/{table}",
+                    f"arn:aws:dynamodb:{region}:{account_id}:table/{table}/index/*",
                 ],
             },
             {

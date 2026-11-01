@@ -37,6 +37,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 from grace.entrypoint import process_case
 from grace.observability import REDACTION_TOKEN, redaction_is_configured, setup_telemetry
+from infra import naming
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,6 +50,11 @@ if not redaction_is_configured():
         f"{REDACTION_TOKEN!r}). Refusing to start, because without it the full "
         "household record exports to CloudWatch."
     )
+
+# Second, and only after redaction: the more dangerous misconfiguration is
+# reported first. A region outside Grace's inference profiles would otherwise
+# fail inside the first case's first model call.
+naming.require_supported_region()
 
 app = BedrockAgentCoreApp()
 

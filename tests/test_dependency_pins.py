@@ -51,3 +51,11 @@ def test_bedrock_agentcore_is_pinned_exactly():
     assert len(pins) == 1
     (spec,) = pins[0].specifier
     assert spec.operator == "==", pins[0]
+
+
+def test_the_dev_extra_brings_the_a2a_extra():
+    """The documented setup is `uv sync --extra dev`, and the suite imports
+    `grace.a2a` (its own tests, and the package walk that guards model ids).
+    Without this, that setup stops at collection with an ImportError."""
+    extras = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]
+    assert "grace[a2a]" in extras["dev"]

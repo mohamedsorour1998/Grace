@@ -140,6 +140,9 @@ These are not stylistic preferences. Breaking one is a bug.
 .venv/bin/python -m grace.run sweep --auto escalate   # local end-to-end
 ```
 
+Local A2A server on :9000, no AWS needed for `/ping`, the card, or a malformed request:
+`OTEL_SEMCONV_STABILITY_OPT_IN='gen_ai_latest_experimental,gen_ai_unredacted_attributes=' GRACE_STORE=memory .venv/bin/python -m a2a_app`.
+
 Python 3.12 via `uv`. AWS: account `<AWS_ACCOUNT_ID>`, `us-east-1`, Bedrock Nova enabled.
 
 ### Dependencies — deliberately minimal
@@ -168,6 +171,24 @@ install, so no resolver sees the conflict. Measured 2026-10-31: the lock had res
 seven test modules could not import `grace.memory`. The image installs from `pyproject.toml`, not
 from `uv.lock`, so a range would let a rebuild ship a container that dies at import.
 `tests/test_dependency_pins.py` guards both halves.
+
+**The `a2a` extra is the one dependency added after the hackathon**, for the A2A server alone
+(`a2a_app.py`, `Dockerfile.a2a`); the HTTP runtime's image does not install it. It is
+`bedrock-agentcore[a2a]==1.23.0` plus `a2a-sdk[http-server]==0.3.26`, the last 0.3.x (2026-04-09)
+and the range that extra accepts. Measured 2026-11-01, it adds **8** packages to the dev venv
+(64 → 72): `a2a-sdk`, `annotated-doc`, `fastapi`, `google-api-core`, `google-auth`, `proto-plus`,
+`pyasn1`, `pyasn1-modules`. Three of those had releases younger than two weeks, so
+`[tool.uv] constraint-dependencies` holds `fastapi<=0.143.3`, `google-api-core<=2.42.0` and
+`pyasn1<=0.6.5` (each the newest release on or before 2026-10-17, except as below), and the A2A
+image installs from `uv.lock` so the holds reach the container.
+
+**A release that fixes a HIGH or CRITICAL finding of the CI image scan skips the two-week hold**,
+and each such exception is recorded in `pyproject.toml`. The first scan (2026-11-01) found six:
+`pyasn1` 0.6.4 (four HIGH, fixed in 0.6.5, five days old but verified as a narrow upstream fix),
+`certifi` 2026.7.22 (CRITICAL, fixed in 2026.10.18, which had just turned two weeks old), and
+`uv` 0.12.5's own CA bundle (CRITICAL) — removed from the A2A image after the build rather than
+upgraded, because uv builds the image and is never needed to run it. Never answer a finding with
+an ignore file.
 
 ### Verify the SDK, do not trust its docs
 
@@ -267,6 +288,20 @@ Next.js dashboard (Amplify) → route handler → invoke_agent_runtime   (never 
 ```
 
 AgentCore Gateway is deferred (`README.md` says why); `docs/architecture.md` has the full picture.
+
+**A second entrypoint, `a2a_app.py`, serves the same case run over A2A** on port 9000
+(`Dockerfile.a2a`, built from `uv.lock`). `grace/a2a.py` accepts exactly `case_id` and `today` —
+an A2A caller is not a caseworker, so `caseworker_approved` is refused like any unknown key —
+runs `process_case` on a worker thread so `/ping` stays live, and answers with one agent message.
+It makes the same two import-time refusals as `runtime_app.py`: redaction first, then region. CI
+builds, smoke-tests, and scans its arm64 image; it is not deployed to Runtime. The SDK's own log
+lines quote request content, so `withhold_sdk_request_content()` rewrites every `a2a.*` record.
+
+**Before the A2A image is ever deployed, decide who chooses `today`.** The caller does, today: a
+backdated `today` makes a stale document read as current and lets the gate pass a renewal it
+should escalate. The HTTP path has the same input, but only Step Functions calls it, with a
+pinned date; an A2A endpoint is meant for other agents. Bound it to the server's clock, or take it
+from the server, before exposing the endpoint — along with its inbound authorization.
 
 ### Agent structure — three multi-agent patterns, each where it fits
 

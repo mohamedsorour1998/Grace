@@ -1,0 +1,88 @@
+# Grace's A2A server image (a2a_app.py, port 9000). Kept in step with
+# `Dockerfile`, the HTTP runtime's image: tests/test_a2a_app.py asserts the two
+# share every FROM, ENV and USER line, because those carry the redaction token,
+# the bind-host signal, the store, and the non-root user.
+#
+# From public.ecr.aws, not Docker Hub: the CLI's own template uses the ECR
+# mirror to avoid Docker Hub rate limits in CodeBuild. Python 3.12 to match the
+# local toolchain — `agentcore add agent` records runtimeVersion PYTHON_3_14 by
+# default, but the image is what actually runs.
+FROM public.ecr.aws/docker/library/python:3.12-slim
+
+# Pinned, unlike the HTTP image: this image installs from uv.lock, and the
+# lockfile format is uv's.
+RUN pip install --no-cache-dir uv==0.12.5
+
+WORKDIR /app
+
+ENV UV_SYSTEM_PYTHON=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_NO_PROGRESS=1 \
+    PYTHONUNBUFFERED=1
+
+# Dependencies from uv.lock, with hashes, before source, so a code change does
+# not reinstall the world. Installing from the lock rather than resolving
+# pyproject.toml is what makes the exact pins AND the [tool.uv] constraints
+# (packages younger than two weeks are held back) reach this container; a fresh
+# resolve would take whatever was published this morning. Then the project
+# itself, with --no-deps, because everything it needs is already installed.
+# --no-config on the hashed install: otherwise uv reads pyproject's
+# [tool.uv] constraint-dependencies, which are ranges, and hash mode refuses
+# any requirement that is not `==`. The exported file already carries them.
+# README.md and grace/ precede that step because the build backend reads both.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv export --frozen --no-dev --extra a2a --no-emit-project -o /tmp/requirements.txt \
+ && uv pip install --system --no-cache --no-config --require-hashes -r /tmp/requirements.txt \
+ && rm /tmp/requirements.txt
+COPY grace/ ./grace/
+# uv is a build tool: removed once the last install is done, so the running
+# image does not carry it (or its own bundled CA certificates, which the CVE
+# scan flagged CRITICAL on 2026-11-01).
+RUN uv pip install --system --no-cache --no-deps . \
+ && pip uninstall -y uv
+
+# `infra/` is required, not optional: grace/cases/dynamo_store.py and
+# grace/memory.py both import infra.naming. `fixtures/` likewise —
+# grace/cases/store.py reads fixtures/households.yaml at a path relative to the
+# package, as the default seed for the in-memory store and the deployed store's
+# fallback for the twelve demo households. The table also holds `RECORD#v1` case
+# records and the case directory, which is where a household added through the
+# dashboard lives. Omitting either directory fails at container start, not at
+# build.
+COPY infra/ ./infra/
+COPY fixtures/ ./fixtures/
+COPY a2a_app.py ./
+
+# Hard rule 8. The trailing `=` is load-bearing: the value lists what to leave
+# UNREDACTED, so an empty value means "redact everything". Without the token,
+# redaction is off entirely and the full household record exports to CloudWatch;
+# with a non-empty value it exports too, while still reading as "configured".
+# `a2a_app` refuses to start unless this redacts everything, so a bad edit
+# here fails loudly at container start rather than leaking silently.
+ENV OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_unredacted_attributes=
+# Groups Grace's agents under one name in the CloudWatch GenAI dashboard; the
+# default `strands-agents` is indistinguishable from any other Strands app.
+ENV OTEL_SERVICE_NAME=grace
+ENV GRACE_STORE=dynamodb
+# `BedrockAgentCoreApp.run()` auto-detects its bind host: `0.0.0.0` when it
+# believes it is containerized, `127.0.0.1` otherwise. It decides by looking for
+# `/.dockerenv` OR this variable — and **Podman does not create `/.dockerenv`**.
+# Measured: without this the container starts, logs normally, reports healthy to
+# `podman ps`, and binds only the loopback interface, so every request from
+# outside the container times out with no error in the log. Setting the
+# variable the SDK itself checks makes the bind host explicit instead of
+# depending on which engine built the image. Binding all interfaces is correct
+# *inside* the container — that is how Runtime reaches the process — and this is
+# not set for local runs, which keeps the SDK's loopback default there.
+ENV DOCKER_CONTAINER=1
+
+RUN useradd -m -u 1000 bedrock_agentcore
+USER bedrock_agentcore
+
+# AgentCore Runtime service contract: 8080 HTTP, 8000 MCP, 9000 A2A.
+EXPOSE 9000
+
+# NOT `opentelemetry-instrument` — that is the CLI template's default and
+# requires aws-opentelemetry-distro, which CLAUDE.md forbids because Runtime
+# instruments itself.
+CMD ["python", "-m", "a2a_app"]

@@ -24,6 +24,10 @@
           "value": "dynamodb"
         },
         {
+          "name": "GRACE_TABLE_NAME",
+          "value": "grace-cases"
+        },
+        {
           "name": "OTEL_SERVICE_NAME",
           "value": "grace"
         },

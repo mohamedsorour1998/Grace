@@ -538,6 +538,7 @@ grace/
 └── run.py            # local sweep CLI
 infra/                # provisioning: DynamoDB, IAM, Lambda, Step Functions, alarm, Cognito, Amplify
 runtime_app.py        # BedrockAgentCoreApp wrapper, refuses to start unredacted
+a2a_app.py            # the same case run over A2A on :9000 (Dockerfile.a2a)
 evals/                # trajectory evals proving gate ordering holds
 web/                  # Next.js caseworker dashboard (Amplify SSR)
 ├── lib/authorize.ts   #   pure decision gate — is this case decidable, by this session?

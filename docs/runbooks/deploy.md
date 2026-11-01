@@ -103,6 +103,13 @@ Plan 2 finished at **622 passed** — Plan 1's 360 unchanged, plus 262 added by 
 
 ## Deploy sequence
 
+**Deploying under your own table name or region.** Set `GRACE_TABLE_NAME` and `AWS_REGION`
+(`us-east-1` or `us-west-2`; anything else refuses to start) in the shell that runs the `infra/`
+provisioners, **and** set the same `GRACE_TABLE_NAME` in `agentcore/agentcore.json`'s `envVars`:
+the runtime reads its own environment, not the provisioning shell's, and would otherwise fall
+back to `grace-cases` and be denied on every read. `tests/test_deploy_config.py` fails until the
+two agree. Load your households with `python -m infra.seed_cases --file your-households.yaml`.
+
 Filled in as tasks complete. See `docs/evidence/deployed-verification.md` for the evidence that the deployed
 system behaves correctly.
 
