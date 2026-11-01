@@ -140,6 +140,9 @@ These are not stylistic preferences. Breaking one is a bug.
 .venv/bin/python -m grace.run sweep --auto escalate   # local end-to-end
 ```
 
+Local A2A server on :9000, no AWS needed for `/ping`, the card, or a malformed request:
+`OTEL_SEMCONV_STABILITY_OPT_IN='gen_ai_latest_experimental,gen_ai_unredacted_attributes=' GRACE_STORE=memory .venv/bin/python -m a2a_app`.
+
 Python 3.12 via `uv`. AWS: account `<AWS_ACCOUNT_ID>`, `us-east-1`, Bedrock Nova enabled.
 
 ### Dependencies — deliberately minimal
@@ -277,6 +280,13 @@ Next.js dashboard (Amplify) → route handler → invoke_agent_runtime   (never 
 ```
 
 AgentCore Gateway is deferred (`README.md` says why); `docs/architecture.md` has the full picture.
+
+**A second entrypoint, `a2a_app.py`, serves the same case run over A2A** on port 9000
+(`Dockerfile.a2a`, built from `uv.lock`). `grace/a2a.py` accepts exactly `case_id` and `today` —
+an A2A caller is not a caseworker, so `caseworker_approved` is refused like any unknown key —
+runs `process_case` on a worker thread so `/ping` stays live, and answers with one agent message.
+It makes the same two import-time refusals as `runtime_app.py`: redaction first, then region. CI
+builds, smoke-tests, and scans its arm64 image; it is not deployed to Runtime.
 
 ### Agent structure — three multi-agent patterns, each where it fits
 

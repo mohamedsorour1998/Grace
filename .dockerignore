@@ -27,6 +27,9 @@ docs/
 evals/
 tests/
 agentcore/
+# The dashboard (with its node_modules) and repository tooling.
+web/
+scripts/
 .claude/
 .bedrock_agentcore.yaml
 
