@@ -26,10 +26,13 @@ ENV UV_SYSTEM_PYTHON=1 \
 # (packages younger than two weeks are held back) reach this container; a fresh
 # resolve would take whatever was published this morning. Then the project
 # itself, with --no-deps, because everything it needs is already installed.
+# --no-config on the hashed install: otherwise uv reads pyproject's
+# [tool.uv] constraint-dependencies, which are ranges, and hash mode refuses
+# any requirement that is not `==`. The exported file already carries them.
 # README.md and grace/ precede that step because the build backend reads both.
 COPY pyproject.toml uv.lock README.md ./
 RUN uv export --frozen --no-dev --extra a2a --no-emit-project -o /tmp/requirements.txt \
- && uv pip install --system --no-cache --require-hashes -r /tmp/requirements.txt \
+ && uv pip install --system --no-cache --no-config --require-hashes -r /tmp/requirements.txt \
  && rm /tmp/requirements.txt
 COPY grace/ ./grace/
 RUN uv pip install --system --no-cache --no-deps .

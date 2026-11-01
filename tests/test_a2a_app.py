@@ -119,3 +119,9 @@ def test_the_a2a_image_matches_the_http_image():
     # Installed from the lock, with hashes, so the pins and the uv constraints in
     # pyproject.toml are what the container actually gets.
     assert "uv export --frozen" in text and "--extra a2a" in text and "--require-hashes" in text
+    # Measured in CI's first run: without --no-config, `uv pip install` reads the
+    # project's [tool.uv] constraint-dependencies, and hash mode rejects any
+    # requirement that is not `==` — so the image never built. The exported file
+    # already carries the constrained versions.
+    install = next(l for l in a2a if "--require-hashes" in l)
+    assert "--no-config" in install
