@@ -85,7 +85,19 @@ jobs:
       - name: Smoke-run it (no AWS needed for ping, the card, or a malformed request)
         run: |
           docker run -d --name a2a -p 9000:9000 -e GRACE_STORE=memory -e AWS_REGION=us-east-1 grace-a2a:ci
-          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://localhost:9000/ping
+          # Wait up to 60s for the server. Docker's port proxy accepts a
+          # connection and resets it while the app is still importing, which
+          # `curl --retry-connrefused` does not retry (run 2). A container that
+          # has exited fails at once with its logs, so a crash cannot pass for
+          # a slow start.
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:9000/ping; then echo; break; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' a2a)" != "true" ]; then
+              docker logs a2a; exit 1
+            fi
+            if [ "$i" = 60 ]; then echo "no /ping after 60s"; exit 1; fi
+            sleep 1
+          done
           curl -fsS http://localhost:9000/.well-known/agent-card.json | jq -e '.name == "Grace"'
           body='{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user","messageId":"m-1","kind":"message","parts":[{"kind":"text","text":"not json"}]}}}'
           code=$(curl -s -o reply.json -w '%{http_code}' -X POST http://localhost:9000/ \
