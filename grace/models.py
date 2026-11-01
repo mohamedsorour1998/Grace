@@ -14,9 +14,13 @@ referee its own argument.
 
 from __future__ import annotations
 
+import os
+
 from strands.models.bedrock import BedrockModel
 
-REGION = "us-east-1"
+# Follows the deploy's region. The entrypoints refuse any region outside
+# `infra.naming.SUPPORTED_REGIONS`, where these inference profiles exist.
+REGION = os.getenv("AWS_REGION", "us-east-1")
 
 # Argues the family qualifies. Nova 2 Lite reasons well enough to make the case
 # and is cheap enough to run on every ambiguous household.

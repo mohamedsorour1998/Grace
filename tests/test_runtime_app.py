@@ -124,6 +124,26 @@ def test_the_module_refuses_to_import_without_the_redaction_token(monkeypatch):
     assert "gen_ai_unredacted_attributes=" in str(excinfo.value)
 
 
+
+def test_the_module_refuses_to_import_in_an_unsupported_region(monkeypatch):
+    """Grace's model ids are US and global inference profiles, so a deploy in any
+    other region would fail inside the first case's first model call. Refusing
+    at import makes that a container that never starts, with a message naming
+    the two regions that work. Same `exec` technique as the redaction guard.
+
+    The redaction token is left as `conftest.py` set it, so the region check is
+    the only thing that can refuse here."""
+    from pathlib import Path
+
+    import pytest
+
+    from infra import naming
+
+    monkeypatch.setattr(naming, "REGION", "eu-central-1")
+    source = Path(runtime_app.__file__).read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="us-east-1.*us-west-2"):
+        exec(compile(source, runtime_app.__file__, "exec"), {"__name__": "_probe"})
+
 def test_the_container_dockerfile_sets_the_redaction_token():
     """The guard refuses to start without the token, so the image must supply
     it — otherwise a deploy that passes every test here dies at container

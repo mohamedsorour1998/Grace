@@ -13,7 +13,46 @@ from datetime import datetime, timezone
 REGION = os.getenv("AWS_REGION", "us-east-1")
 ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID")
 
-TABLE = "grace-cases"
+# Grace's model ids are US (`us.`) and global (`global.`) inference profiles, so
+# these are the regions a deploy can actually call them from. Anything else
+# would fail at the first model call of the first case, long after deploy.
+SUPPORTED_REGIONS = ("us-east-1", "us-west-2")
+
+
+def require_supported_region(region: str | None = None) -> str:
+    """Return `region` (default: `REGION`) if Grace can run there; else raise.
+
+    Called at import by both entrypoints, after the redaction check, so a deploy
+    to the wrong region is a container that refuses to start, not a sweep that
+    escalates every household on an AccessDenied. A blank region refuses too.
+    """
+    region = REGION if region is None else region
+    if region not in SUPPORTED_REGIONS:
+        raise ValueError(
+            f"Grace runs only in {SUPPORTED_REGIONS[0]} and {SUPPORTED_REGIONS[1]} "
+            f"(its Nova inference profiles), not {region!r}. Set AWS_REGION."
+        )
+    return region
+
+
+def _table_name() -> str:
+    """The case table, from `GRACE_TABLE_NAME`.
+
+    Absent means the default; set-but-blank refuses, the same polarity as
+    `GRACE_STORE`: `os.getenv(name, default)` defaults only on absence, so a
+    blank value would otherwise reach DynamoDB as a table named "" — and the
+    dashboard already reads this same variable, so one name serves both.
+    """
+    raw = os.environ.get("GRACE_TABLE_NAME")
+    if raw is None:
+        return "grace-cases"
+    name = raw.strip()
+    if not name:
+        raise ValueError("GRACE_TABLE_NAME is set but blank; unset it for the default 'grace-cases'.")
+    return name
+
+
+TABLE = _table_name()
 ESCALATION_GSI = "escalation-queue"
 RUNTIME = "grace"
 MEMORY = "grace_household_memory"
