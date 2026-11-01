@@ -911,3 +911,26 @@ def test_a_stored_record_carries_no_household_identity():
         checked += 1
     assert checked == 12
     assert "+1555" not in written
+
+
+def test_an_endless_ledger_raises_instead_of_hanging():
+    """The ledger read gets the same cap as the directory read above.
+
+    Truncating is not an option here either: a Query drops the *newest* rows,
+    which is where `renewal_submitted` lives, so a filed renewal would read as
+    unfiled. The fake fails loudly at 1000 calls so that an unbounded loop
+    fails this test instead of hanging the whole run.
+    """
+
+    class NeverEnds(FakeTable):
+        def query(self, **kwargs):
+            self.query_calls += 1
+            if self.query_calls >= 1000:
+                raise AssertionError("query called 1000 times: the loop is unbounded")
+            return {"Items": [], "LastEvaluatedKey": {"pk": {"S": naming.case_pk("c-001")}}}
+
+    client = NeverEnds()
+    store = DynamoDBCaseStore([], table_name="grace-cases-test", client=client)
+    with pytest.raises(RuntimeError, match=r"ledger for c-001 did not finish within 100 pages"):
+        store.ledger("c-001")
+    assert client.query_calls == 100

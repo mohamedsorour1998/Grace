@@ -11,7 +11,7 @@ it records what actually happened.
 ### The repo
 
 44 commits — all of Plan 2 — were pushed to `github.com/mohamedsorour1998/Grace` before Plan 3 began.
-`git log origin/main..HEAD` returns 0 and the repo answers HTTP 200, so `docs/deployed-verification.md`
+`git log origin/main..HEAD` returns 0 and the repo answers HTTP 200, so `docs/evidence/deployed-verification.md`
 is publicly visible. This matters twice: a public repo is a submission requirement, and Amplify's
 git-based deploy needs a reachable remote.
 
@@ -41,7 +41,7 @@ record rows of their own, is also what would let someone submit `c-001` through 
 replace that household's facts while the dashboard showed nothing wrong. Once seeded, `create_case`'s
 `attribute_not_exists(sk)` refuses the id. `--verify` is the half that counts: "the put returned" and
 "the row decodes to the case I meant" are different claims. Full reasoning in
-[docs/runbook-deploy.md](runbook-deploy.md).
+[docs/runbooks/deploy.md](deploy.md).
 
 **Row counts on this page are measurements with a date, never constants.** The 17 above was true on
 2026-09-03; every sweep since has added one row per escalated household. The invariants are what hold:
@@ -74,7 +74,7 @@ under `tsc@7.0.2`.
 ### Cognito and Amplify
 
 ```text
-existing user pools : astrolabe-paper-auth, rosettaclaw-live-auth
+existing user pools : <another project's pool>, <another project's pool>
 existing amplify apps: (none)
 CreateApp platform  : ['WEB', 'WEB_DYNAMIC', 'WEB_COMPUTE']
 CreateDeployment    : available
@@ -340,7 +340,7 @@ Error: Cannot find package '@/lib/env' imported from …/__tests__/cases.test.ts
 
 ### Ten defects in the plan's draft
 
-Five were already recorded in `docs/plan3-live-data-findings.md`; implementing it found five more.
+Five were already recorded in `docs/evidence/live-data-findings.md`; implementing it found five more.
 Ordered by consequence, worst first.
 
 | # | Defect | Consequence |
@@ -422,7 +422,7 @@ Re-measured during this task: **643 rows** (not 633) and the GSI holds **18** (n
 between, so both numbers are measurements with a date. A table-wide scan of all 643 rows for every
 fixture surname and for `+1555` returns **clean**, confirming the 2026-09-04 strip held.
 
-Also corrected in `docs/plan3-live-data-findings.md`: `d_trace_id` is `NULL` on **613 of 625** ledger
+Also corrected in `docs/evidence/live-data-findings.md`: `d_trace_id` is `NULL` on **613 of 625** ledger
 rows, and **12 rows on `c-003` lack the attribute entirely** — so a reader must tolerate absent as well
 as `NULL`, which the findings doc's "essentially every row" could have been read as ruling out.
 

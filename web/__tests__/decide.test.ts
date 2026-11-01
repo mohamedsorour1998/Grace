@@ -187,7 +187,7 @@ describe("recordDecision", () => {
       const dynamo = new FakeDynamo();
       await recordDecision(permit(), "c-010",
         { dynamo: dynamo as never, runtime: new FakeRuntime() as never });
-      const NAMES = /Mensah|Rivera|Okonkwo|Fitzgerald|Yamamoto|Nguyen|Haddad|Silva|Kowalski|Abebe|Castillo|Petrov|\+1555|Household/i;
+      const NAMES = /Mensah|Rivera|Okonkwo|Fitzgerald|Yamamoto|Nguyen|Haddad|Silva|Kowalski|Abebe|Castillo|Petrov|Delacroix|Torres|\+1555|Household/i;
       expect(dynamo.puts).toHaveLength(2);
       for (const [n] of dynamo.puts.entries()) {
         expect(JSON.stringify(put(dynamo, n))).not.toMatch(NAMES);
@@ -202,7 +202,7 @@ describe("recordDecision", () => {
       const dynamo = new FakeDynamo();
       await recordDecision(permit({ note: "Spoke to the Yamamoto household." }),
         "c-011", { dynamo: dynamo as never, runtime: new FakeRuntime() as never });
-      const NAMES = /Mensah|Rivera|Okonkwo|Fitzgerald|Yamamoto|Nguyen|Haddad|Silva|Kowalski|Abebe|Castillo|Petrov|\+1555|Household/i;
+      const NAMES = /Mensah|Rivera|Okonkwo|Fitzgerald|Yamamoto|Nguyen|Haddad|Silva|Kowalski|Abebe|Castillo|Petrov|Delacroix|Torres|\+1555|Household/i;
       expect(JSON.stringify(put(dynamo, 0))).toMatch(NAMES);
     }));
 

@@ -156,11 +156,11 @@ export function hostedUiUrl(redirectUri: string): string {
     scope: "openid",
     redirect_uri: redirectUri,
   });
-  // `/login` is the **classic hosted UI** path. Verified live: Grace's domain
-  // reports `ManagedLoginVersion: 1`, which serves exactly this page. Managed
-  // login (version 2) uses a different URL shape and needs a branding style, so
-  // do not "upgrade" the domain without rewriting this builder and re-testing
-  // the redirect end to end.
+  // `/login` is the hosted sign-in path, verified live against both of Grace's
+  // domains: the custom domain runs managed login version 2
+  // (`MANAGED_LOGIN_VERSION` in `infra/provision_cognito.py`, with a branding
+  // style), and the prefix fallback runs the classic hosted UI. Re-test the
+  // redirect end to end before changing either domain's login version.
   return `${domain}/login?${params.toString()}`;
 }
 

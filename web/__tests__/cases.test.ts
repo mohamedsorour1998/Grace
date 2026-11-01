@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readEnv } from "@/lib/env";
 import type { EnvSource } from "@/lib/env";
-import { SEEDED_CASE_IDS, listCases, listQueue, readCase, readFacts } from "@/lib/cases";
+import { SEEDED_CASE_IDS, listCases, listQueue, readCase, readCaseload, readFacts } from "@/lib/cases";
 import type { CaseDetail } from "@/lib/types";
 
 const ENV = {
@@ -811,6 +811,31 @@ describe("listCases", () => {
     expect(cases.filter(c => c.filed)).toHaveLength(9);
     // No Scan: the SSR role holds none, so a Scan here is AccessDenied live.
     for (const input of fake.sent) expect(input.KeyConditionExpression).toBeDefined();
+  });
+
+  it("readCaseload counts every listed household, including one that could not be read", async () => {
+    // `/` printed "of 12 households read" as a constant. A household added
+    // through `/new` makes the directory list 13 ids, and one whose read fails
+    // drops out of `cases` silently, so the denominator must be what was
+    // listed, not what was read and not a number in the markup.
+    const filed = (id: string): Page => ({ Items: [{ pk: S(`CASE#${id}`), sk: S(`LEDGER#${AT}#000008`),
+      case_id: S(id), at: S(AT), kind: S("renewal_submitted"), d_program: S("medicaid"),
+      d_cert_end: S("2026-10-15"), d_trace_id: { NULL: true } as AttrValue }] });
+    const fake = {
+      async send(command: { input: Record<string, unknown> }) {
+        const values = command.input.ExpressionAttributeValues as Record<string, { S: string }>;
+        const pk = values[":pk"]!.S;
+        if (pk === "CASE_DIRECTORY") {
+          return { Items: [{ pk: S("CASE_DIRECTORY"), sk: S("CASE#c-900"), case_id: S("c-900") }] };
+        }
+        if (pk === "CASE#c-900") throw new Error("throttled");
+        return filed(pk.slice("CASE#".length));
+      },
+    };
+    const { cases, listed } = await readCaseload(fake as never);
+    expect(listed).toBe(13);
+    expect(cases).toHaveLength(12);
+    expect(cases.map(c => c.caseId)).not.toContain("c-900");
   });
 
   it("omits a case with no rows rather than inventing an empty one", async () => {

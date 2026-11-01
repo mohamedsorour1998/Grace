@@ -522,7 +522,7 @@ describe("the pages", () => {
       // Before the read, or an unauthenticated request still hits DynamoDB and
       // an error message can differ between an existing and a missing case.
       const gate = src.search(/await\s+requireSession\(\)/);
-      const read = src.search(/await\s+(listCases|listQueue|readCase)\(/);
+      const read = src.search(/await\s+(listCases|readCaseload|listQueue|readCase)\(/);
       expect(read, `${page} must read the table`).toBeGreaterThan(-1);
       expect(gate, `${page} must verify before it reads`).toBeLessThan(read);
       checked += 1;
@@ -811,17 +811,49 @@ describe("the pages", () => {
     expect(form).toContain('"use client"');
   });
 
-  it("reads the queue's rows from listQueue and the sweep's from listCases", async () => {
+  it("the home page names the listed count, not a constant", async () => {
+    // Twelve households read out of thirteen listed: the line must say so,
+    // where it used to print a hardcoded 12. Session and data are mocked so the
+    // page itself renders; `requireSession` is tested on its own above.
+    const twelve: CaseSummary[] = Array.from({ length: 12 }, (_, n) => ({
+      ...escalated,
+      caseId: `c-${String(n + 1).padStart(3, "0")}`,
+      status: "acted" as CaseStatus,
+      reason: null,
+      filed: true,
+      awaitingDecision: false,
+    }));
+    vi.resetModules();
+    vi.doMock("@/lib/session", () => ({ requireSession: async () => ({ sub: "opaque-sub" }) }));
+    vi.doMock("@/lib/cases", async (original) => ({
+      ...(await original<typeof import("@/lib/cases")>()),
+      readCaseload: async () => ({ cases: twelve, listed: 13 }),
+    }));
+    try {
+      const { renderToStaticMarkup } = await import("react-dom/server");
+      const { default: Home } = await import("@/app/page");
+      const html = renderToStaticMarkup(await Home());
+      expect(html).toContain("12 of 13 households read");
+    } finally {
+      vi.doUnmock("@/lib/cases");
+      vi.doUnmock("@/lib/session");
+      vi.resetModules();
+    }
+  });
+
+  it("reads the queue's rows from listQueue and the sweep's from readCaseload", async () => {
     // Not interchangeable. `listQueue` reads the GSI, which projects escalation
     // rows only and so cannot see a `renewal_submitted` row — its `filed` is
     // false by construction. The 9/3 split on `/` is a hard-rule-6 claim, so it
-    // must come from `listCases`, which reads the ledger for all twelve.
+    // must come from `readCaseload` (what `listCases` is built on), which reads
+    // the ledger for every listed case.
     const fs = await import("node:fs");
     const home = fs.readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
     const queue = fs.readFileSync(new URL("../app/queue/page.tsx", import.meta.url), "utf8");
-    expect(home).toContain("listCases");
+    expect(home).toContain("readCaseload");
     expect(home).not.toContain("listQueue");
     expect(queue).toContain("listQueue");
     expect(queue).not.toContain("listCases");
+    expect(queue).not.toContain("readCaseload");
   });
 });

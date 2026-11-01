@@ -181,7 +181,7 @@ def test_the_node_version_is_pinned_before_anything_uses_node():
     property; presence is not."""
     commands = provision_amplify.build_spec_commands()
     node_at = commands.index(f"nvm use {provision_amplify.NODE_VERSION}")
-    for consumer in ("npm ci", "npm run build"):
+    for consumer in (provision_amplify.INSTALL_COMMAND, "npm run build"):
         assert node_at < commands.index(consumer), consumer
 
 
@@ -239,8 +239,8 @@ def test_the_runtime_env_file_is_written_before_the_build():
 
 
 def test_the_runtime_env_file_is_truncated_before_it_is_appended_to():
-    """Amplify caches `node_modules` between builds and a `>>` redirect appends.
-    A stale `.env.production` surviving into a later build would leave *two*
+    """A `>>` redirect appends. A stale `.env.production` surviving into a later
+    build (a cached or reused directory) would leave *two*
     values for one variable — and `dotenv` keeps the first, so a rotated Cognito
     client id would be silently ignored on every rebuild while the console showed
     the new one."""
@@ -1201,7 +1201,7 @@ def test_no_household_identity_appears_anywhere_in_this_module():
     source = inspect.getsource(provision_amplify)
     names = (
         "Mensah|Rivera|Okonkwo|Fitzgerald|Yamamoto|Nakamura|Delacroix|"
-        "Abubakar|Silva|Petrov|Haddad|Nguyen"
+        "Abubakar|Silva|Petrov|Haddad|Nguyen|Torres|Abebe|Kowalski"
     ).split("|")
     for name in names:
         assert name not in source, name
@@ -1213,3 +1213,15 @@ def test_the_policy_documents_are_json_serialisable():
     tuple in there raises at provisioning time."""
     json.dumps(provision_amplify.compute_policy("339712964409"))
     json.dumps(provision_amplify.compute_trust_policy("339712964409"))
+
+
+def test_the_committed_amplify_yml_is_the_generated_build_spec():
+    """Amplify runs the committed `amplify.yml`; `build_spec()` is what the tests
+    above assert against. Two copies of one build spec drift — they had: the
+    committed file installed with `npm ci --cache .npm --prefer-offline` and
+    cached `.next/cache` and `.npm`, the generator said `npm ci` and cached
+    `node_modules`, which `npm ci` deletes. Compared as parsed YAML so the
+    committed file keeps its comments."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    committed = yaml.safe_load((root / "amplify.yml").read_text())
+    assert committed == yaml.safe_load(provision_amplify.build_spec())

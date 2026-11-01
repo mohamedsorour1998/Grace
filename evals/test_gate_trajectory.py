@@ -173,7 +173,6 @@ class _Run:
         self.case_id = case_id
         self.store = store
         self.channel = channel
-        self.ledger: list[LedgerEntry] = list(store.ledger(case_id))
 
     @property
     def trajectory(self) -> list[str]:

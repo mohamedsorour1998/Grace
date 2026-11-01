@@ -15,7 +15,7 @@ from infra import provision_cognito
 def test_the_pool_is_named_for_grace():
     """So `list-user-pools` output can be filtered, and so teardown cannot
     match another project's pool. This account already holds
-    `astrolabe-paper-auth` and `rosettaclaw-live-auth`."""
+    `other-project-auth` and `another-project-auth`."""
     assert provision_cognito.POOL_NAME.startswith("grace")
 
 
@@ -159,7 +159,7 @@ def test_the_hosted_ui_uses_the_dashboards_own_palette():
 def test_the_custom_domain_is_graces_own_and_nobody_elses():
     """Every resource this project creates is `grace-*` or this hostname.
 
-    The account holds `astrolabe-paper-auth` and `rosettaclaw-live-auth`, and a
+    The account holds `other-project-auth` and `another-project-auth`, and a
     domain constant is the one name in this file that is not prefixed `grace`.
     Pinning it means a change to some other project's hostname cannot arrive as
     a one-line edit."""
@@ -746,7 +746,7 @@ def test_the_domain_converges_and_re_reads_its_alias_target():
 def test_a_domain_belonging_to_another_pool_is_refused():
     """**The one that protects the other two projects in this account.**
 
-    `astrolabe-paper-auth` and `rosettaclaw-live-auth` live here. An
+    `other-project-auth` and `another-project-auth` live here. An
     `UpdateUserPoolDomain` against a domain attached to one of them would
     repoint that project's sign-in at Grace's certificate — a change nothing in
     Grace's own verification would notice, because Grace's own sign-in would

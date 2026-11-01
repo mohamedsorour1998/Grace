@@ -1,8 +1,8 @@
 """Delete what `provision_all` created. Grace resources only.
 
 Every deletion passes through `is_grace_resource` first, and that is a **guard,
-not a convention**: this account holds `theagentorg-*`, `rosettacloud-*`,
-`rosettaclaw_*`, and `bughunt-main`, and a teardown that matched anything looser
+not a convention**: this account holds `third-project-*`, `other-project-*`,
+`another_project_*`, and `fourth-project-main`, and a teardown that matched anything looser
 would delete another project's work. Unlike every other failure in this codebase,
 that one is not recoverable by re-running a script.
 

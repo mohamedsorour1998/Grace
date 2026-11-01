@@ -1,6 +1,6 @@
 # Devpost submission form — every field, ready to paste
 
-Companion to `docs/devpost-description.md` (which holds the standalone text description). This file
+Companion to `docs/hackathon/devpost-description.md` (which holds the standalone text description). This file
 covers the **Project details** step's remaining fields: the Project Story in Devpost's own seven
 headings, the Built-with tags, the links, and what the media slots need.
 
@@ -269,7 +269,7 @@ Every one of these is a real screenshot of the deployed app. Do not mock one up.
 ## Video demo link
 
 **Blocking, and nothing in the repository produces it.** The script, shot list, timings, and
-figure-provenance table are ready in `docs/demo-video-handout.md`. Requirements: ≤5:00, covers problem
+figure-provenance table are ready in `docs/hackathon/demo-video-handout.md`. Requirements: ≤5:00, covers problem
 → who it's for → why it matters → working demo, uploaded **public** (not unlisted) to YouTube or
 Vimeo.
 
@@ -281,4 +281,4 @@ transcript). The handout has a full "Things not to claim" section.
 
 - **AWS Builder ID: `mohamedsorour1998@gmail.com`** — the form asks for the *email* that created the
   Builder ID, not a handle. `@sorour` is the wrong value.
-- Seeded caseworker credentials for judges — see `docs/dashboard-runbook.md`.
+- Seeded caseworker credentials for judges — see `docs/runbooks/dashboard.md`.

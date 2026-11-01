@@ -33,8 +33,7 @@
 # **The four gates run before `build`, deliberately.** A deploy that skips them can
 # ship a broken authorization gate, and this application files benefit renewals —
 # Task 6 found that the pages had no session verification at all. `npm run test`
-# needs no AWS credentials: every test uses fakes, and `__live__/`, which does read
-# DynamoDB, is excluded by `vitest.config.mts`.
+# needs no AWS credentials: every test uses fakes.
 
 version: 1
 applications:

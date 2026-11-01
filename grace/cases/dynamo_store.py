@@ -365,7 +365,11 @@ class DynamoDBCaseStore:
         """
         entries: list[LedgerEntry] = []
         start_key: dict[str, Any] | None = None
-        while True:
+        # Capped like `_directory_ids`, and for the same reason it raises rather
+        # than returning what it has: a service repeating a `LastEvaluatedKey`
+        # would otherwise hang the sweep, and a truncated read is the confident
+        # wrong answer described above.
+        for _ in range(_MAX_PAGES):
             request: dict[str, Any] = {
                 "TableName": self._table,
                 "KeyConditionExpression": "pk = :pk AND begins_with(sk, :prefix)",
@@ -397,6 +401,10 @@ class DynamoDBCaseStore:
             start_key = response.get("LastEvaluatedKey")
             if not start_key:
                 return entries
+        raise RuntimeError(
+            f"the ledger for {case_id} did not finish within {_MAX_PAGES} pages; "
+            "refusing to truncate the audit trail"
+        )
 
     def write_escalation(self, case_id: str, reason: str, question: str, deadline: str) -> None:
         """Record that this case is waiting for a human.
