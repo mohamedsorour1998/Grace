@@ -169,6 +169,16 @@ seven test modules could not import `grace.memory`. The image installs from `pyp
 from `uv.lock`, so a range would let a rebuild ship a container that dies at import.
 `tests/test_dependency_pins.py` guards both halves.
 
+**The `a2a` extra is the one dependency added after the hackathon**, for the A2A server alone
+(`a2a_app.py`, `Dockerfile.a2a`); the HTTP runtime's image does not install it. It is
+`bedrock-agentcore[a2a]==1.23.0` plus `a2a-sdk[http-server]==0.3.26`, the last 0.3.x (2026-04-09)
+and the range that extra accepts. Measured 2026-11-01, it adds **8** packages to the dev venv
+(64 → 72): `a2a-sdk`, `annotated-doc`, `fastapi`, `google-api-core`, `google-auth`, `proto-plus`,
+`pyasn1`, `pyasn1-modules`. Three of those had releases younger than two weeks, so
+`[tool.uv] constraint-dependencies` holds `fastapi<=0.143.3`, `google-api-core<=2.42.0` and
+`pyasn1<=0.6.4` (each the newest release on or before 2026-10-17), and the A2A image installs from
+`uv.lock` so the holds reach the container.
+
 ### Verify the SDK, do not trust its docs
 
 `strands-agents` moves fast and the published documentation is wrong in several places that
