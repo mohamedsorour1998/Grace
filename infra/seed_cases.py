@@ -5,6 +5,8 @@ complete the moment the store starts trusting it:
 
     .venv/bin/python -m infra.seed_cases            # write what is missing
     .venv/bin/python -m infra.seed_cases --verify   # read back and compare only
+    .venv/bin/python -m infra.seed_cases --file households.yaml --table NAME
+                                                    # your own households, same shape
 
 **Idempotent, and idempotent in the one way that matters: it never overwrites.**
 `DynamoDBCaseStore.create_case` puts the record under
@@ -31,12 +33,14 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import boto3
+import yaml
 
 from grace.cases.dynamo_store import CaseAlreadyExists, DynamoDBCaseStore
 from grace.cases.models import Case
-from grace.cases.store import load_fixture_cases
+from grace.cases.store import InvalidFixtureData, load_fixture_cases
 from infra import naming
 
 
@@ -118,10 +122,34 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="read the records back and compare; write nothing",
     )
-    parser.add_argument("--table", default=None, help="table name (default: grace-cases)")
+    parser.add_argument("--table", default=None, help="table name (default: GRACE_TABLE_NAME, else grace-cases)")
+    parser.add_argument(
+        "--file",
+        type=Path,
+        default=None,
+        help="households YAML in the shape of fixtures/households.yaml (default: the bundled fixtures)",
+    )
     args = parser.parse_args(argv)
 
-    cases = load_fixture_cases()
+    if args.file is not None and not args.file.is_file():
+        print(f"seed_cases: no such file: {args.file}", file=sys.stderr)
+        return 2
+    # Load and validate the WHOLE file before the first write, so one bad
+    # household cannot leave the ones before it half-seeded.
+    try:
+        cases = load_fixture_cases(args.file)
+    except InvalidFixtureData as exc:
+        # The loader's message ends ", got <value>", and the value can be a phone
+        # number or a name; a refusal printed to a terminal or a CI log must name
+        # the field, never echo it (hard rule 9).
+        reason = str(exc).split(", got ", 1)[0]
+        return _refuse(args.file, reason)
+    except yaml.YAMLError as exc:
+        # A YAML error's own message quotes the offending line; report its number.
+        mark = getattr(exc, "problem_mark", None)
+        return _refuse(args.file, "not valid YAML" + (f" (line {mark.line + 1})" if mark else ""))
+    except (KeyError, TypeError, ValueError) as exc:
+        return _refuse(args.file, f"not in the households shape ({type(exc).__name__})")
     store = _build_store(args.table)
 
     if not args.verify:
@@ -135,8 +163,14 @@ def main(argv: list[str] | None = None) -> int:
         for line in wrong:
             print(f"  {line}", file=sys.stderr)
         return 1
-    print(f"verified {len(cases)} record(s) against the fixtures: all match")
+    source = args.file.name if args.file is not None else "the fixtures"
+    print(f"verified {len(cases)} record(s) against {source}: all match")
     return 0
+
+
+def _refuse(path: Path | None, reason: str) -> int:
+    print(f"seed_cases: {path or 'the fixtures'}: {reason}; nothing was written", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI

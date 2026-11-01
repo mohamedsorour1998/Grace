@@ -184,3 +184,76 @@ def test_verify_notices_a_change_to_any_gate_relevant_field(attribute, replaceme
     client.items[(naming.case_pk("c-001"), naming.RECORD_SK)][attribute] = replacement
     wrong = seed_cases.verify(_store(client), cases)
     assert any("c-001" in line for line in wrong), attribute
+
+
+# --- `--file`: households from any file (deploy-anywhere) ---------------------
+
+_ONE = '''cases:
+  - case_id: "c-901"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-10-15"
+    household: {household_id: "h-901", display_name: "The Example Household", language: "en", phone: "+15550009901", monthly_income_cents: 150000, size: 2}
+    documents:
+      - {id: "proof_of_income", received: "2026-09-20"}
+'''
+
+# The second household's phone is an unquoted number, which YAML parses as an
+# int; the loader refuses it with InvalidFixtureData.
+_ONE_BAD = _ONE + '''  - case_id: "c-902"
+    program: "medicaid"
+    state: "NY"
+    cert_end: "2026-10-15"
+    household: {household_id: "h-902", display_name: "The Second Household", language: "en", phone: 15550009902, monthly_income_cents: 150000, size: 2}
+    documents: []
+'''
+
+
+def _patched(monkeypatch) -> FakeTable:
+    fake = FakeTable()
+    monkeypatch.setattr(seed_cases, "_build_store", lambda table, client=None: _store(fake))
+    return fake
+
+
+def test_cases_load_from_a_given_file(tmp_path, monkeypatch):
+    path = tmp_path / "households.yaml"
+    path.write_text(_ONE)
+    fake = _patched(monkeypatch)
+    assert seed_cases.main(["--file", str(path), "--table", "grace-cases-test"]) == 0
+    assert (naming.case_pk("c-901"), naming.RECORD_SK) in fake.items
+    assert (naming.CASE_DIRECTORY_PK, naming.directory_sk("c-901")) in fake.items
+    assert len(fake.items) == 2  # this file's household only, not the bundled twelve
+
+
+def test_a_malformed_file_writes_nothing(tmp_path, monkeypatch, capsys):
+    # The whole file is validated before the first write, so a bad household in
+    # position two cannot leave household one half-seeded.
+    path = tmp_path / "households.yaml"
+    path.write_text(_ONE_BAD)
+    fake = _patched(monkeypatch)
+    assert seed_cases.main(["--file", str(path), "--table", "grace-cases-test"]) == 1
+    assert fake.items == {}
+    err = capsys.readouterr().err
+    assert str(path) in err
+    assert "'phone'" in err                 # says which field
+    assert "15550009902" not in err         # and never echoes the value (hard rule 9)
+
+
+def test_a_missing_file_refuses(tmp_path, monkeypatch, capsys):
+    fake = _patched(monkeypatch)
+    missing = tmp_path / "absent.yaml"
+    assert seed_cases.main(["--file", str(missing)]) == 2
+    assert str(missing) in capsys.readouterr().err
+    assert fake.items == {}
+
+
+def test_the_output_names_case_ids_only(tmp_path, monkeypatch, capsys):
+    # Hard rule 9: a seeding run's output lands in terminals and CI logs.
+    path = tmp_path / "households.yaml"
+    path.write_text(_ONE)
+    _patched(monkeypatch)
+    assert seed_cases.main(["--file", str(path), "--table", "grace-cases-test"]) == 0
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert "c-901" in text
+    assert "Example" not in text and "+1555" not in text and "15550009901" not in text
